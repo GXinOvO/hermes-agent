@@ -811,9 +811,14 @@ def _is_stream_unavailable_error(exc: Exception) -> bool:
     return is_streaming_access_denied_error(exc)
 
 
-def _stream_final_message(stream_fn, api_kwargs, log_prefix, on_stream_event, on_response):
+def _stream_final_message(
+    stream_fn, api_kwargs, log_prefix, on_stream_event, on_response,
+    stream_wrapper=None, response_holder=None,
+):
     """``messages.stream()`` -> final Message, ticking the best-effort callbacks."""
-    with stream_fn(**{k: v for k, v in api_kwargs.items() if k != "stream"}) as stream:
+    filtered = {k: v for k, v in api_kwargs.items() if k != "stream"}
+    context = stream_wrapper(filtered, stream_fn) if callable(stream_wrapper) else stream_fn(**filtered)
+    with context as stream:
         stream = normalize_stream_usage(stream)  # MiniMax usage:null (#60683), same as the main turn
         if callable(on_response):
             try:
@@ -851,6 +856,8 @@ def _stream_final_message(stream_fn, api_kwargs, log_prefix, on_stream_event, on
                 "Anthropic Messages stream ended before message_stop (possible upstream stream drop)."
             )
         message = stream.get_final_message()
+        if isinstance(response_holder, dict):
+            response_holder["response"] = message
         if stop_details is not None:
             message.stop_details = stop_details
         return message
@@ -858,7 +865,8 @@ def _stream_final_message(stream_fn, api_kwargs, log_prefix, on_stream_event, on
 
 def create_anthropic_message(
     client: Any, api_kwargs: dict, *, log_prefix: str = "", prefer_stream: bool = True,
-    on_stream_event=None, on_response=None,
+    on_stream_event=None, on_response=None, stream_wrapper=None, call_wrapper=None,
+    stream_response_holder=None,
 ) -> Any:
     """Create an Anthropic message, aggregating via stream when available. Some Anthropic-compatible
     gateways are SSE-only and answer ``create()`` with ``text/event-stream``, which the SDK surfaces
@@ -873,7 +881,9 @@ def create_anthropic_message(
     stream_fn = getattr(messages_api, "stream", None)
     if prefer_stream and callable(stream_fn):
         try:
-            return _stream_final_message(stream_fn, api_kwargs, log_prefix, on_stream_event, on_response)
+            return _stream_final_message(
+                stream_fn, api_kwargs, log_prefix, on_stream_event, on_response,
+                stream_wrapper=stream_wrapper, response_holder=stream_response_holder)
         except TimeoutError:
             raise
         except Exception as exc:
@@ -882,4 +892,7 @@ def create_anthropic_message(
             logger.debug(
                 "%sAnthropic Messages stream unavailable; falling back to messages.create(): %s", log_prefix, exc
             )
-    return messages_api.create(**{k: v for k, v in api_kwargs.items() if k != "stream"})
+    filtered = {k: v for k, v in api_kwargs.items() if k != "stream"}
+    if callable(call_wrapper):
+        return call_wrapper(filtered, messages_api.create)
+    return messages_api.create(**filtered)

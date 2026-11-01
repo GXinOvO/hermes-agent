@@ -74,7 +74,7 @@ _FIELDS = (
     "token_count_method", "messages_before", "messages_after", "items_dropped", "context_limit", "threshold_tokens",
     "protected_head_tokens", "middle_window_tokens", "protected_tail_tokens", "duration_ms",
     "summary_generation_ms", "aux_call_duration_ms", "queue_wait_ms", "commit_ms", "summarizer_provider",
-    "summarizer_model", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
+    "summarizer_model", "aux_wire_receipt_ids", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
     "compression_count", "in_place", "session_rotated", "split_status", "cache_break", "has_focus_topic",
 )
 # Integer fields copied as-is from the attempt record (record key -> payload key).
@@ -134,7 +134,7 @@ def event_name(payload: dict[str, Any]) -> str:
 
 
 def _payload(**values: Any) -> dict[str, Any]:
-    payload = dict.fromkeys(_FIELDS)
+    payload: dict[str, Any] = dict.fromkeys(_FIELDS)
     payload.update(values, harness="hermes")
     payload["kind"] = _closed(payload["kind"], _KINDS)
     payload["scope"] = _closed(payload["scope"], _SCOPES)
@@ -188,6 +188,7 @@ def attempt_payload(record: dict[str, Any], *, compression_count: Any = None) ->
         attempt_id=record.get("attempt_id"), session_id=record.get("session_id"),
         token_count_method=record.get("token_count_method"),
         summarizer_provider=record.get("aux_provider") or None, summarizer_model=record.get("aux_model") or None,
+        aux_wire_receipt_ids=record.get("aux_wire_receipt_ids") or [],
         compression_count=_int(compression_count), split_status=split_status,
         # Commit mode is known only for a fully committed split; anything else leaves both null.
         in_place=split_status == "in_place_committed" if split_status in _COMMIT_MODES else None,

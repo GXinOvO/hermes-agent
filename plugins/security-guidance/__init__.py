@@ -1,9 +1,10 @@
 """security-guidance plugin — fast pattern-matched security warnings on file writes.
 
 Scans content written by ``write_file`` / ``patch`` / ``skill_manage`` for known dangerous patterns
-and appends a ``⚠️ Security guidance`` block to the tool result; the file is still written and the
-model self-corrects next turn. Warn (not block) by default because patterns have a real false-positive
-rate (``eval(`` in a tokenizer, ECB in a test fixture); ``SECURITY_GUIDANCE_BLOCK=1`` refuses the write
+and adds a ``security_guidance`` field to JSON-object results (a warning block for text results);
+the file is still written and the model self-corrects next turn. Warn (not block) by default because
+patterns have a real false-positive rate (``eval(`` in a tokenizer, ECB in a test fixture);
+``SECURITY_GUIDANCE_BLOCK=1`` refuses the write
 instead, ``SECURITY_GUIDANCE_DISABLE=1`` is a kill switch. Pattern data: ``patterns.py`` (Apache-2.0 fork).
 """
 
@@ -113,7 +114,7 @@ def _on_pre_tool_call(tool_name: str = "", args: Any = None, **_: Any) -> Option
 
 
 def _on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any = None, **_: Any) -> Optional[str]:
-    """Warn mode: append the warning block to the result string (None = unchanged)."""
+    """Warn without invalidating structured results used by programmatic callers."""
     # In block mode pre_tool_call already handled it — the tool didn't run, no result to wrap.
     findings = [] if _env_flag("SECURITY_GUIDANCE_BLOCK") or not isinstance(result, str) else _scan_args(tool_name, args)
     if not findings:
@@ -121,10 +122,14 @@ def _on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any
     # Don't decorate error results — the model already has bigger problems.
     try:
         parsed = json.loads(result)
-        if isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2:
-            return None
     except (ValueError, TypeError):
-        pass
+        parsed = None
+    if isinstance(parsed, dict):
+        if "error" in parsed and len(parsed) <= 2:
+            return None
+        # Appending text after JSON hides a completed write behind a decode error.
+        parsed["security_guidance"] = _format_warning_block(findings).strip()
+        return json.dumps(parsed, ensure_ascii=True)
     return result + "\n\n" + _format_warning_block(findings)
 
 

@@ -9,14 +9,15 @@ Covers ``plugins/security-guidance/``:
     (.md skips Python rules, ``model.eval()`` doesn't trip eval),
     path-only rules (``path_check``), content-only rules
     (``path_filter``).
-  * Hooks — ``transform_tool_result`` appends a warning block in warn
-    mode and stays out of error results; ``pre_tool_call`` blocks
+  * Hooks — ``transform_tool_result`` preserves JSON-object results with a warning field
+    (appends a block to plain text) and stays out of error results; ``pre_tool_call`` blocks
     writes when ``SECURITY_GUIDANCE_BLOCK=1`` and stays silent
     otherwise.
   * Bundled-plugin discovery via ``PluginManager.discover_and_load``.
 """
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -169,8 +170,11 @@ class TestTransformToolResultHook:
         assert isinstance(result, str)
         assert "Security guidance" in result
         assert "pickle_deserialization" in result
-        # The original JSON should still be there at the start of the string.
-        assert result.startswith('{"success": true')
+        # Programmatic callers must retain the successful write fields as well as the warning.
+        body = json.loads(result)
+        assert body["success"] is True
+        assert body["bytes_written"] == 30
+        assert "pickle_deserialization" in body["security_guidance"]
 
     def test_no_warn_on_clean_content(self):
         mod = _load_plugin_init()
@@ -193,7 +197,29 @@ class TestTransformToolResultHook:
             tool_name="patch", args=args, result='{"success": true}'
         )
         assert isinstance(result, str)
-        assert "eval_injection" in result
+        assert "eval_injection" in json.loads(result)["security_guidance"]
+
+    @pytest.mark.parametrize("result", ['{"error": "write refused"}', '{"error": "write refused", "success": false}'])
+    def test_error_result_is_not_decorated(self, result):
+        mod = _load_plugin_init()
+        args = {"path": "/tmp/foo.py", "content": "pickle.load(f)\n"}
+        assert mod._on_transform_tool_result(tool_name="write_file", args=args, result=result) is None
+
+    def test_warning_object_keeps_surrogate_metadata_encodable(self):
+        mod = _load_plugin_init()
+        original = {"success": True, "resolved_path": "file\udcff.py"}
+        args = {"path": "/tmp/foo.py", "content": "pickle.load(f)\n"}
+        result = mod._on_transform_tool_result(tool_name="write_file", args=args, result=json.dumps(original))
+        body = json.loads(result.encode("utf-8"))
+        assert body["resolved_path"] == original["resolved_path"]
+        assert "pickle_deserialization" in body["security_guidance"]
+
+    def test_plain_text_result_retains_warning(self):
+        mod = _load_plugin_init()
+        args = {"path": "/tmp/foo.py", "content": "pickle.load(f)\n"}
+        result = mod._on_transform_tool_result(tool_name="write_file", args=args, result="write complete")
+        assert result.startswith("write complete")
+        assert "pickle_deserialization" in result
 
     def test_untargeted_tool_skipped(self):
         mod = _load_plugin_init()

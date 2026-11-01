@@ -59,6 +59,11 @@ PARTIAL_FAILED_TURN_NOTICE = (
     "This turn did not complete. Some actions may already have run; verify their effects "
     "before resending."
 )
+INTERRUPTED_TURN_NOTICE = "This turn was interrupted."
+PARTIAL_INTERRUPTED_TURN_NOTICE = (
+    "This turn was interrupted. Some actions may already have run; verify their effects "
+    "before continuing."
+)
 # A turn no person sent (a cron run, a process completion, a webhook delivery) lost across a gateway
 # restart, or fenced inside the running owner (a lost managed worker): it settles interrupted and is
 # never re-run, so nobody is asked to resend it (#134889 GW-10). Neutral: not every path restarted.
@@ -79,19 +84,20 @@ def untyped_failed_turn_display_kind(role: Any, content: Any) -> Optional[str]:
     (exact notice text, so a real reply quoting it stays a reply); read-side only."""
     if role == "assistant" and isinstance(content, str) and content.strip() in (
         FAILED_TURN_NOTICE, PARTIAL_FAILED_TURN_NOTICE, AUTOMATION_INTERRUPTED_NOTICE,
+        INTERRUPTED_TURN_NOTICE, PARTIAL_INTERRUPTED_TURN_NOTICE,
     ):
         return FAILED_TURN_DISPLAY_KIND
     return None
 
 
-def failed_turn_notice(turn_messages: Any) -> str:
+def failed_turn_notice(turn_messages: Any, *, interrupted: bool = False) -> str:
     """Boundary copy for a failed turn: never claim "not processed" when a tool may have run."""
     for row in turn_messages or ():
         if isinstance(row, dict) and (
             row.get("role") == "tool" or (row.get("role") == "assistant" and row.get("tool_calls"))
         ):
-            return PARTIAL_FAILED_TURN_NOTICE
-    return FAILED_TURN_NOTICE
+            return PARTIAL_INTERRUPTED_TURN_NOTICE if interrupted else PARTIAL_FAILED_TURN_NOTICE
+    return INTERRUPTED_TURN_NOTICE if interrupted else FAILED_TURN_NOTICE
 
 
 def provider_label_for(provider: Any) -> str:

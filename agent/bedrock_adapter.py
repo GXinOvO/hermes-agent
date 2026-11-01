@@ -1357,6 +1357,7 @@ def call_converse(
     region: str, model: str, messages: list[dict], tools: Optional[list[dict]] = None,
     max_tokens: Optional[int] = 4096, temperature: Optional[float] = None, top_p: Optional[float] = None,
     stop_sequences: Optional[list[str]] = None, guardrail_config: Optional[dict] = None,
+    physical_call=None,
 ) -> SimpleNamespace:
     """Non-streaming Converse call → OpenAI-compatible response. Retries once without a rejected cachePoint
     placement; evicts the cached client on stale-connection errors."""
@@ -1365,15 +1366,16 @@ def call_converse(
     # Auxiliary-only entry point: a one-shot's cachePoint is a write no later call reads.
     kwargs = build_converse_kwargs(model, messages, tools, max_tokens, temperature, top_p, stop_sequences, guardrail_config,
                                    prompt_cache=not is_one_shot_request(messages, tools))
+    invoke = physical_call or (lambda request: client.converse(**request))
     try:
-        response = client.converse(**kwargs)
+        response = invoke(kwargs)
     except Exception as exc:
         retry_kwargs = recover_from_cache_point_rejection(exc, kwargs)
         if retry_kwargs is not None:
-            return normalize_converse_response(client.converse(**retry_kwargs))
+            return normalize_converse_response(invoke(retry_kwargs))
         redacted_retry_kwargs = recover_from_redacted_reasoning_rejection(exc, kwargs)
         if redacted_retry_kwargs is not None:
-            return normalize_converse_response(client.converse(**redacted_retry_kwargs))
+            return normalize_converse_response(invoke(redacted_retry_kwargs))
         if is_stale_connection_error(exc):
             logger.warning(
                 "bedrock: stale-connection error on converse(region=%s, model=%s): "

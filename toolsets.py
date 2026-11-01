@@ -102,6 +102,8 @@ TOOLSETS = {
         "instructions and knowledge",
         ["skills_list", "skill_view", "skill_manage"],
     ),
+    # A one-tool deny set lets delegation retain skill discovery and reading.
+    "skill_management": _ts("Create, edit, and delete shared skills", ["skill_manage"]),
     # web_search belongs to `web`/`search` only. Listing it here too let
     # `disabled_toolsets: [browser]` (headless/Docker deployments) strip
     # web_search from every session, because disabled toolsets are a strict

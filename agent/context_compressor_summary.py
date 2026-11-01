@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from agent.auxiliary_client import AuxiliaryExplicitCancellation
 
+_REASONING_SUMMARY_TRUNCATION_MARKER = "reasoning_fallback_char_limit"
+
 if TYPE_CHECKING:
     from agent.context_compressor import _HandoffScan
 
@@ -27,6 +29,48 @@ def _accepts_keyword_argument(callable_obj: Any, name: str) -> bool:
 
 
 class SummaryDispatchMixin:
+    @staticmethod
+    def _extract_summary_content(response: Any) -> str:
+        """Reject a locally clipped reasoning fallback rather than checkpointing its prefix."""
+        from agent.context_compressor import extract_content_or_reasoning
+        from agent.auxiliary_content import extract_visible_content
+
+        visible = extract_visible_content(response)
+        if visible:
+            return visible
+        content = extract_content_or_reasoning(response)
+        limit = 8_000
+        if len(content) > limit:
+            raise RuntimeError(
+                f"Context compression summary was truncated ({_REASONING_SUMMARY_TRUNCATION_MARKER}): "
+                f"reasoning fallback exceeds the {limit}-character safety limit; refusing a partial checkpoint"
+            )
+        return content
+
+    def _summary_route_differs_from_main(self) -> bool:
+        """Use the existing deployment identity; unknown route axes cannot prove a difference."""
+        from agent.backend_identity import BackendIdentity, should_skip_candidate
+        from hermes_cli.providers import normalize_provider
+
+        route = getattr(self, "_last_aux_resolved_route", None) or {}
+        if route.get("main_route_attempted") == "true":
+            return False
+        failed = BackendIdentity.build(
+            provider=normalize_provider(route.get("provider") or ""),
+            model=route.get("model") or self.summary_model or "",
+            base_url=route.get("base_url"),
+        )
+        main = BackendIdentity.build(
+            provider=normalize_provider(self.provider or ""), model=self.model, base_url=self.base_url,
+        )
+        if not failed.model:
+            return False
+        if failed.model != main.model:
+            return True
+        if not ((failed.provider and main.provider) or (failed.base_url and main.base_url)):
+            return False
+        return not should_skip_candidate(main, failed)
+
     def _apply_summary_route(self, call_kwargs: dict, pinned: Optional[dict[str, Any]] = None) -> None:
         """Pin the summary route onto ``call_kwargs`` for both compression entry points.
 

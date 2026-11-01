@@ -43,7 +43,8 @@ class CompressionTelemetryMixin:
             "current_estimated_tokens": _safe_int(current_tokens),
             "effective_threshold": _safe_int(self.threshold_tokens), "protected_head_tokens": None,
             "protected_tail_tokens": None, "middle_window_tokens": None, "prellm_skip_count": 0,
-            "aux_prompt_tokens": None, "aux_output_reservation": None, "aux_provider": "", "aux_model": "",
+            "aux_prompt_tokens": None, "aux_output_reservation": None,
+            "aux_provider": "", "aux_model": "", "aux_wire_receipt_ids": [],
             "effective_aux_context": None, "fit_margin": None, "chunking": False, "chunk_count": 0,
             "total_duration_ms": None, "aux_call_duration_ms": None, "queue_wait_ms": None, "prompt_build_ms": None,
             "time_to_first_progress_ms": None, "summary_generation_ms": None, "commit_ms": None,
@@ -75,32 +76,44 @@ class CompressionTelemetryMixin:
     def _record_aux_compression_call(
         self, *, prompt_messages: list[dict[str, Any]], max_tokens: int | None, duration_ms: int,
         aux_provider: str | None = None, aux_model: str | None = None,
+        wire_receipt_ids: list[str] | None = None,
+        attempt_id: str | None = None, telemetry: dict[str, Any] | None = None,
         effective_aux_context: int | None = None, phase_timings: dict[str, Any] | None = None,
     ) -> None:
-        telemetry = getattr(self, "_active_compression_telemetry", None)
-        if not isinstance(telemetry, dict):
+        target = telemetry if isinstance(telemetry, dict) else getattr(self, "_active_compression_telemetry", None)
+        if not isinstance(target, dict):
             return
-        telemetry["aux_prompt_tokens"] = estimate_messages_tokens_rough(prompt_messages)
+        if attempt_id is not None and target.get("attempt_id") != attempt_id:
+            return
+        target["aux_prompt_tokens"] = estimate_messages_tokens_rough(prompt_messages)
         # The summary prompt is built fresh per attempt and never estimated again; don't let the memo pin it.
         forget_message_token_memo(prompt_messages)
-        telemetry["aux_output_reservation"] = _safe_int(max_tokens)
+        target["aux_output_reservation"] = _safe_int(max_tokens)
         if aux_provider:
-            telemetry["aux_provider"] = aux_provider
+            target["aux_provider"] = aux_provider
         if aux_model:
-            telemetry["aux_model"] = aux_model
+            target["aux_model"] = aux_model
+        if wire_receipt_ids is not None:
+            existing = target.get("aux_wire_receipt_ids")
+            existing = existing if isinstance(existing, list) else []
+            for value in wire_receipt_ids:
+                value = str(value)
+                if value and value not in existing:
+                    existing.append(value)
+            target["aux_wire_receipt_ids"] = existing
         if effective_aux_context is not None:
-            telemetry["effective_aux_context"] = _safe_int(effective_aux_context)
-        if telemetry["effective_aux_context"] is not None and telemetry["aux_prompt_tokens"] is not None:
-            telemetry["fit_margin"] = (telemetry["effective_aux_context"] - telemetry["aux_prompt_tokens"]
-                                       - (telemetry["aux_output_reservation"] or 0))
-        telemetry["aux_call_duration_ms"] = (telemetry.get("aux_call_duration_ms") or 0) + max(0, int(duration_ms))
+            target["effective_aux_context"] = _safe_int(effective_aux_context)
+        if target["effective_aux_context"] is not None and target["aux_prompt_tokens"] is not None:
+            target["fit_margin"] = (target["effective_aux_context"] - target["aux_prompt_tokens"]
+                                     - (target["aux_output_reservation"] or 0))
+        target["aux_call_duration_ms"] = (target.get("aux_call_duration_ms") or 0) + max(0, int(duration_ms))
         for key in ("queue_wait_ms", "prompt_build_ms", "time_to_first_progress_ms", "summary_generation_ms", "commit_ms"):
             if not isinstance(phase_timings, dict) or key not in phase_timings:
                 continue
             value = _safe_int(phase_timings[key])
             # Wait and generation phases accumulate across retries; the rest are point readings.
             accumulate = key in {"queue_wait_ms", "summary_generation_ms"} and value is not None
-            telemetry[key] = (telemetry.get(key) or 0) + value if accumulate else value
+            target[key] = (target.get(key) or 0) + (value or 0) if accumulate else value
 
     def _note_aux_route_fallback(self, route: dict[str, str]) -> None:
         """``call_llm`` answered the summary from a fallback route after the configured one failed (dead
