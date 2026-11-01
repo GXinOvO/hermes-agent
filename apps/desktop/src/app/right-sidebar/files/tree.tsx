@@ -1,3 +1,5 @@
+import './file-icon.css'
+
 import { useStore } from '@nanostores/react'
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { useMemo } from 'react'
@@ -15,6 +17,7 @@ import { $revealInTreeRequest } from '@/store/layout'
 import { FileEntryContextMenu, InlineRenameInput, isRenameShortcut } from '../file-actions'
 
 import { getFileTreeDndManager } from './dnd-manager'
+import { FileTreeIcon } from './file-icon'
 import type { TreeNode } from './use-project-tree'
 
 const ROW_HEIGHT = 22
@@ -370,9 +373,13 @@ function ProjectTreeRow({
         ) : isErrorPlaceholder ? (
           <Codicon name="warning" size="0.75rem" />
         ) : isFolder ? (
-          <Codicon name={node.isOpen ? 'folder-opened' : 'folder'} size="0.875rem" />
+          <Codicon
+            className="text-(--file-icon-yellow)"
+            name={node.isOpen ? 'folder-opened' : 'folder'}
+            size="0.875rem"
+          />
         ) : (
-          <Codicon name="file" size="0.875rem" />
+          <FileTreeIcon name={node.data.name} />
         )}
       </span>
       {editing ? (

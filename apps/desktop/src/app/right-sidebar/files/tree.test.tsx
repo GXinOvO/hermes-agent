@@ -113,4 +113,62 @@ describe('ProjectTree context-menu clicks', () => {
 
     expect(onPreviewFile).toHaveBeenCalledWith('/w/a.ts')
   })
+
+  it('shows a colored language glyph without changing row selection or preview', async () => {
+    const { onPreviewFile } = renderTree({
+      data: [{ id: '/w/main.py', isDirectory: false, name: 'main.py' }]
+    })
+
+    const label = await screen.findByText('main.py')
+    const row = label.closest('[aria-selected]')!
+    const icon = row.querySelector('.tabler-icon-brand-python')
+
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('class')).toContain('text-(--file-icon-blue)')
+    fireEvent.click(label)
+    await waitFor(() => expect(row.getAttribute('aria-selected')).toBe('true'))
+    fireEvent.doubleClick(label)
+    expect(onPreviewFile).toHaveBeenCalledWith('/w/main.py')
+  })
+
+  it('keeps the folder open/closed glyph and tint across expansion', async () => {
+    renderTree({
+      data: [
+        {
+          children: [{ id: '/w/src/a.ts', isDirectory: false, name: 'a.ts' }],
+          id: '/w/src',
+          isDirectory: true,
+          name: 'src'
+        }
+      ]
+    })
+
+    const label = await screen.findByText('src')
+    const row = label.closest('[aria-selected]')!
+
+    expect(row.querySelector('.codicon-folder')?.getAttribute('class')).toContain('text-(--file-icon-yellow)')
+    fireEvent.click(label)
+    await waitFor(() => expect(row.getAttribute('aria-expanded')).toBe('true'))
+    expect(row.querySelector('.codicon-folder-opened')).not.toBeNull()
+    expect(await screen.findByText('a.ts')).toBeTruthy()
+    fireEvent.click(label)
+    await waitFor(() => expect(row.getAttribute('aria-expanded')).toBe('false'))
+  })
+
+  it('keeps loading and error placeholders separate from file-type glyphs', async () => {
+    renderTree({
+      data: [
+        { id: '/w/loading', isDirectory: false, name: 'Loading files', placeholder: 'loading' },
+        { id: '/w/error', isDirectory: false, name: 'Cannot read folder', placeholder: 'error' }
+      ]
+    })
+
+    const loading = (await screen.findByText('Loading files')).closest('[aria-selected]')!
+    const error = (await screen.findByText('Cannot read folder')).closest('[aria-selected]')!
+
+    expect(loading.querySelector('.codicon-loading.codicon-modifier-spin')).not.toBeNull()
+    expect(error.querySelector('.codicon-warning')).not.toBeNull()
+    expect(loading.querySelector('.codicon-file, svg')).toBeNull()
+    expect(error.querySelector('.codicon-file, svg')).toBeNull()
+  })
 })

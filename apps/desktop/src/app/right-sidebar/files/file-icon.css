@@ -1,0 +1,6 @@
+/* Keep type colors legible on both surfaces without changing the app palette. */
+[data-project-tree] {
+  --file-icon-blue: color-mix(in srgb, var(--ui-blue) 75%, var(--ui-text-primary));
+  --file-icon-purple: color-mix(in srgb, var(--ui-purple) 75%, var(--ui-text-primary));
+  --file-icon-yellow: color-mix(in srgb, var(--ui-yellow) 75%, var(--ui-text-primary));
+}
