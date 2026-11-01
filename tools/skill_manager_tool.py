@@ -787,6 +787,13 @@ def skill_manage(
     session_id: str | None = None, operations=None) -> str:
     """Dispatch to the action handler -> JSON string. ``operations`` (atomic batch shape,
     see _skill_manage_batch) overrides the flat fields."""
+    from agent.delegation_context import is_delegated_child_process_context
+
+    if is_delegated_child_process_context():
+        return json.dumps(_err(
+            "Delegated agents cannot modify shared skills. Return the proposed change "
+            "to the parent; do not retry through another file or terminal tool.",
+            error_code="delegated_skill_mutation_denied"), ensure_ascii=False)
     if operations is not None:
         return _skill_manage_batch(
             operations, default_name=name or None, task_id=task_id, session_id=session_id)

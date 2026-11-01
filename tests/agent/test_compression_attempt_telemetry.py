@@ -203,6 +203,32 @@ def test_aux_call_telemetry_records_content_free_phase_timings():
     assert "TOPSECRET_TRANSCRIPT_TEXT" not in json.dumps(payload)
 
 
+def test_late_aux_completion_updates_its_own_attempt_and_accumulates_receipts():
+    from agent.context_compressor_telemetry import CompressionTelemetryMixin
+
+    recorder = CompressionTelemetryMixin()
+    recorder.provider = "test-provider"
+    recorder.model = "test-model"
+    recorder.context_length = 1000
+    recorder.threshold_tokens = 500
+    old = recorder._begin_compression_telemetry(current_tokens=1, attempt_id="old-attempt")
+    recorder._begin_compression_telemetry(current_tokens=2, attempt_id="new-attempt")
+
+    recorder._record_aux_compression_call(
+        prompt_messages=[{"role": "user", "content": "old"}], max_tokens=None, duration_ms=1,
+        wire_receipt_ids=["wire-old-1"], attempt_id="old-attempt", telemetry=old,
+    )
+    recorder._record_aux_compression_call(
+        prompt_messages=[{"role": "user", "content": "old"}], max_tokens=None, duration_ms=1,
+        wire_receipt_ids=["wire-old-2", "wire-old-1"], attempt_id="old-attempt", telemetry=old,
+    )
+
+    assert old["attempt_id"] == "old-attempt"
+    assert old["aux_wire_receipt_ids"] == ["wire-old-1", "wire-old-2"]
+    assert recorder._active_compression_telemetry["attempt_id"] == "new-attempt"
+    assert recorder._active_compression_telemetry["aux_wire_receipt_ids"] == []
+
+
 def test_automatic_compaction_counts_once_in_shared_metrics(monkeypatch):
     from hermes_cli.observability import shared_metrics_events
     from hermes_cli.observability.shared_metrics_fields import compression_fields

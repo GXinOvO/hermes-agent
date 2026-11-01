@@ -166,7 +166,6 @@ def _response_finish_reason(response: Any) -> str:
 # compaction checkpoint would silently truncate the conversation's memory and feed the cut-off text back
 # into every subsequent iterative-update prompt. (Ported from earendil-works/pi#7048 / commit 97fa14e39.)
 _TRUNCATED_SUMMARY_MARKER = "finish_reason=length"
-
 # A provider can return a natural-language refusal with finish_reason="stop". It is
 # non-empty, so the usual response validation accepts it, but it contains none of
 # the checkpoint needed to safely replace the compacted turns. Keep this narrow:
@@ -707,7 +706,7 @@ class _SummaryFailureKind:
     def fallback_reason(self) -> str:
         """Reason string for the one-shot main-model retry log line, most specific first."""
         reasons = (
-            (self.json_decode, "returned invalid JSON"), (self.truncated, "returned a truncated summary (output token cap)"),
+            (self.json_decode, "returned invalid JSON"), (self.truncated, "returned an incomplete summary"),
             (self.empty_content, "returned empty content"), (self.overloaded, "was overloaded"),
             (self.model_not_found, "unavailable"),
             (self.streaming_closed, "closed stream prematurely"), (self.timeout, "timed out"),
@@ -746,7 +745,9 @@ def _classify_summary_failure(e: Exception) -> _SummaryFailureKind:
             )
         ),
         # Truncated summary: one main-model retry, then ABORT preserving the session.
-        truncated=isinstance(e, RuntimeError) and _TRUNCATED_SUMMARY_MARKER in err,
+        truncated=isinstance(e, RuntimeError) and any(
+            marker in err for marker in (_TRUNCATED_SUMMARY_MARKER, "reasoning_fallback_char_limit")
+        ),
         overloaded=classify_api_error(e).reason is FailoverReason.overloaded
         or any(marker in err for marker in ("overloaded", "at capacity", "over capacity")),
     )
@@ -772,9 +773,9 @@ _TERMINAL_SUMMARY_FAILURES = (
     (
         "_last_summary_truncated_failure",
         "summary_truncated_failure",
-        "Summary generation failed (output hit the token cap; summary is incomplete) — aborting compression. "
+        "Summary generation failed (summary is incomplete or exceeds the safe reasoning limit) — aborting compression. "
         "%d message(s) preserved unchanged; the session was NOT rotated. A truncated summary would silently "
-        "lose context: retry with /compress, or raise the summarizer's output budget.",
+        "lose context: retry with /compress or use a summarizer that returns a complete summary.",
     ),
     (
         "_last_summary_empty_content_failure",
@@ -2288,6 +2289,7 @@ class ContextCompressor(
         # may differ from ``summary_model``/``model``). Recorded so a failed auto-resolved model is
         # named in the user-visible warning and falls back to the main model (#116472).
         self._last_aux_resolved_model = None
+        self._last_aux_resolved_route = None
         self._consecutive_timeout_failures = self._consecutive_truncation_failures = 0
         # Sustained-overload escalation bookkeeping (#123167): per-session, reset by success.
         self._consecutive_overload_aborts = 0
@@ -3826,15 +3828,22 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             "Compression summary call dispatched: model=%s prompt_chars=%s prompt_build_ms=%s",
             self.summary_model or self.model, f"{len(prompt):,}", _latency_info["prompt_build_ms"],
         )
+        attempt_telemetry = getattr(self, "_active_compression_telemetry", None)
+        compression_attempt_id = attempt_telemetry.get("attempt_id") if isinstance(attempt_telemetry, dict) else None
+        from agent.auxiliary_wire_receipt import compression_attempt_scope, compression_receipt_ids
         try:
-            with aux_interrupt_protection():
+            # Compression is atomic: shield the summary call from gateway interrupts. Re-entrant.
+            with aux_interrupt_protection(), compression_attempt_scope(compression_attempt_id):
                 response = call_llm(**call_kwargs)
         finally:
+            wire_receipt_ids = compression_receipt_ids(_aux_route, None)
             route_known = bool(_aux_route.get("provider") and _aux_route.get("model"))
             _aux_model = _aux_route.get("model") or self.summary_model or self.model or ""
             # Remember the resolved model for the failure path: an ``auto`` route picks one per call
             # without setting ``summary_model``, so only this names it in the user warning (#116472).
             self._last_aux_resolved_model = _aux_model or None
+            # Per-call, including unresolved failures: never retry from a stale prior destination.
+            self._last_aux_resolved_route = dict(_aux_route)
             self._record_aux_compression_call(
                 prompt_messages=call_kwargs["messages"],
                 # max_tokens is intentionally absent; .get() keeps the telemetry hook from breaking the call.
@@ -3842,17 +3851,23 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 duration_ms=int((time.monotonic() - _aux_call_start) * 1000),
                 aux_provider=_aux_route.get("provider") or self.provider or "",
                 aux_model=_aux_model,
+                wire_receipt_ids=wire_receipt_ids, attempt_id=compression_attempt_id,
+                telemetry=attempt_telemetry if isinstance(attempt_telemetry, dict) else None,
                 effective_aux_context=self.context_length if route_known and _aux_model == self.model else None,
                 phase_timings=_latency_info,
             )
         if self._compression_cancelled():
             raise AuxiliaryExplicitCancellation()
         self._note_aux_route_fallback(_aux_route)
-        # Reasoning-field fallback (DeepSeek/Qwen/Kimi put the summary in reasoning_content); capped.
-        content = extract_content_or_reasoning(response, max_reasoning_chars=8000)
         where = f"(provider={self.provider or 'auto'} model={self.summary_model or self.model})"
-        # Some OpenAI-compatible proxies (e.g. cmkey.cn, one-api channels) return a well-formed HTTP 200
-        # with an empty or whitespace-only ``content`` instead of an error or empty ``choices``. That
+        if _response_finish_reason(response) == "length":
+            raise RuntimeError(
+                f"Context compression summary was truncated ({_TRUNCATED_SUMMARY_MARKER}): generation hit the output "
+                f"token cap and the summary is incomplete {where}"
+            )
+        with compression_attempt_scope(compression_attempt_id):
+            content = self._extract_summary_content(response)
+        # Some proxies return HTTP 200 with empty content instead of an error or empty ``choices``. That
         # payload passes ``_validate_llm_response`` (a ``message`` exists), so it reaches here and would
         # otherwise be stored as a prefix-only summary with no body — silently wiping the compacted turns
         # and making the model forget the in-progress task (#11978, #11914). Treat empty content as a
@@ -3865,21 +3880,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             # established fallback/cooldown/abort path for an empty body, so it
             # can never be committed as `_previous_summary`.
             raise RuntimeError(f"Context compression LLM returned refusal content {where}")
-        # A finish_reason of "length" means the summarizer hit its output token cap mid-generation: the text
-        # present is PARTIAL. Persisting a partial summary as the compaction checkpoint silently truncates
-        # the conversation's memory — the cut-off text replaces the real middle turns AND is fed back into
-        # every subsequent iterative update prompt, compounding the loss across compactions. Treat it as a
-        # failure so it routes through the same main-model fallback + abort machinery as other degraded
-        # responses instead of becoming a checkpoint. (Ported from earendil-works/pi#7048.)
-        # A length stop means the merged rolling summary is partial — persisting it would silently drop the
-        # tail of the merge and feed the cut-off text into every later micro-compact pass. Leave the
-        # exchange unabsorbed instead; a later pass retries it. (Same class as _generate_summary's guard;
-        # pi#7048.)
-        if _response_finish_reason(response) == "length":
-            raise RuntimeError(
-                f"Context compression summary was truncated ({_TRUNCATED_SUMMARY_MARKER}): generation hit the output "
-                f"token cap and the summary is incomplete {where}"
-            )
         return content
 
     def _generate_summary(
@@ -3898,7 +3898,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 self._summary_failure_cooldown_until - prompt_started_at,
             )
             return None
-        # Strict-redact inputs that bypass _serialize_for_summary (focus string, prior summary).
+        # Strict-redact inputs bypassing _serialize_for_summary (focus string, prior summary).
         if focus_topic:
             focus_topic = _redact_compaction_text(focus_topic)
         if self._previous_summary:
@@ -4136,7 +4136,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         _route_model = str(
             self.summary_model or getattr(self, "_last_aux_resolved_model", "") or ""
         ).strip()
-        if _route_model and _route_model != self.model and not getattr(self, "_summary_model_fallen_back", False):
+        if self._summary_route_differs_from_main() and not getattr(self, "_summary_model_fallen_back", False):
             self._fallback_to_main_for_compression(e, kind.fallback_reason(), failed_model=_route_model)
             # Retry immediately on the main model.
             return self._generate_summary(turns_to_summarize, focus_topic=focus_topic, memory_context=memory_context)

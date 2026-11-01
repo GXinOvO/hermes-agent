@@ -5,7 +5,10 @@ calls `write_file`, `patch`, or `skill_manage` with content that matches a
 known-dangerous code pattern (eval, pickle.load, yaml.load, os.system,
 subprocess with `shell=True`, `dangerouslySetInnerHTML`, `verify=False`, ECB
 mode, GitHub Actions `${{ github.event.* }}` injection, `torch.load` without
-`weights_only=True`, ...), the plugin appends a warning to the tool's result.
+`weights_only=True`, ...), the plugin adds a warning to the tool's result.
+JSON-object results keep their original fields and include a `security_guidance`
+string, so programmatic callers can still inspect success and error fields.
+Plain-text results keep the appended warning block.
 The file is still written; the model sees the warning in the next turn and
 can fix the code or briefly document why the construct is safe.
 
@@ -53,7 +56,7 @@ plugins:
 
 | Env var | Default | Effect |
 |---|---|---|
-| (none) | warn | Appends a `⚠️ Security guidance` block to the tool result. The file is written. |
+| (none) | warn | Adds `security_guidance` to JSON-object results, or appends a warning block to text. The file is written. |
 | `SECURITY_GUIDANCE_BLOCK=1` | unset | Refuses the write entirely with the warning as the block reason. Use for stricter environments. |
 | `SECURITY_GUIDANCE_DISABLE=1` | unset | Kill switch — plugin loads but does nothing. |
 

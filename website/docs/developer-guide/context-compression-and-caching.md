@@ -180,7 +180,33 @@ counter; a summary that ends in `finish_reason=length` (output cap hit, the
 transcript is preserved) escalates on its own counter along the same
 60s → 300s → 900s rungs, so a later turn — such as an async delegation
 completion arriving after the cooldown lapsed — cannot re-issue the same
-capped request every 30 seconds (#69637). JSON-decode, closed-stream and
+capped request every 30 seconds (#69637). A reasoning-field fallback that
+would be locally clipped at 8,000 characters is also rejected as an incomplete
+checkpoint (`reasoning_fallback_char_limit`), even when the provider returns
+`finish_reason=stop`. When both limits apply, `finish_reason=length` is checked
+first so the provider's truncation cause remains visible. It uses the same
+one-shot main-model retry and terminal abort/cooldown path. The retry compares
+the actual auxiliary backend (provider, model, and endpoint), so an identical
+model name on a different backend still gets that one main-route attempt;
+equivalent URLs and aliases for the same deployment do not add a retry.
+Complete reasoning fallbacks within that limit and visible summary content
+(including content longer than 8,000 characters) remain accepted;
+the local character guard does not change the provider's output-token budget.
+Checkpoint validation checks the content source before applying the limit, so
+rejecting an oversized reasoning response does not log that a clipped prefix was accepted;
+other consumers of the bounded auxiliary extractor still receive
+their existing prefix and truncation warning.
+
+Each physical auxiliary Chat Completions request now emits a content-free wire
+receipt. It links the compression attempt to the logical auxiliary request and
+physical retry, records the route fingerprint (provider/model/API mode and a
+hash of the endpoint), records whether `max_tokens`, `max_completion_tokens`,
+or `max_output_tokens` reached the SDK boundary, and records the provider
+response ID, raw/normalized finish reason, usage presence, visible/reasoning
+character counts, and local reasoning clipping. Prompts, response text,
+credentials, and endpoint text are excluded. This observes later requests; it
+does not reconstruct historical receipts that were never stored.
+JSON-decode, closed-stream and
 empty-content failures stay on a flat 30 s cooldown. Three paths run a real
 attempt anyway:
 

@@ -47,6 +47,9 @@ from agent.codex_headers import (
 )
 from agent.codex_runtime import _codex_event_has_content
 from agent.sdk_transform_bypass import bypass_chat_sdk_request_transform
+from agent.auxiliary_bedrock_client import (
+    AsyncBedrockAuxiliaryClient, BedrockAuxiliaryClient, _BedrockCompletionsAdapter,
+)
 
 # `openai.OpenAI` is imported lazily (~240 ms cold); `OpenAI` below is a proxy
 # so in-module calls, `auxiliary_client.OpenAI` reads and
@@ -1391,9 +1394,10 @@ class _CodexStreamGuard:
 class _CodexCompletionsAdapter:
     """Drop-in shim routing chat.completions.create() kwargs through Codex Responses streaming."""
 
-    def __init__(self, real_client: OpenAI, model: str):
+    def __init__(self, real_client: OpenAI, model: str, logical_context: dict[str, Any] | None = None):
         self._client = real_client
         self._model = model
+        self._logical_context = logical_context
 
     def _build_responses_kwargs(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], str, Any]:
         """chat.completions kwargs → Responses API kwargs, ``(resp_kwargs, model, timeout)``; mirrors codex.py::build_kwargs."""
@@ -1569,12 +1573,15 @@ class _CodexCompletionsAdapter:
         issuer_model = str(resp_kwargs.get("model") or model)
         total_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else None
         guard = _CodexStreamGuard(self._client, total_timeout, no_progress_timeout=kwargs.get("no_progress_timeout"))
+        from agent.auxiliary_wire_receipt import finish_wire_receipt, start_wire_receipt
+        from agent.sdk_transform_bypass import bypass_sdk_request_transform
+        # Keep bulk wire payload out of the SDK's GIL-holding request transform.
+        stream_kwargs = bypass_sdk_request_transform({**resp_kwargs, "stream": True})
+        logical_context = _RELAY_AUX_CALL_CONTEXT.get() or self._logical_context
+        receipt = start_wire_receipt(self._client, stream_kwargs, logical_context=logical_context)
         try:
             guard.start()
             from agent.codex_runtime import _consume_codex_event_stream
-            from agent.sdk_transform_bypass import bypass_sdk_request_transform
-            # Keep bulk wire payload out of the SDK's GIL-holding request transform.
-            stream_kwargs = bypass_sdk_request_transform({**resp_kwargs, "stream": True})
             event_stream = self._client.responses.create(**stream_kwargs)
             guard.adopt_stream(event_stream)
             # The timer may fire while responses.create() is blocked; if the cancelled attempt
@@ -1603,7 +1610,8 @@ class _CodexCompletionsAdapter:
             for tc in tool_calls_raw or ():
                 if tc.function.name in wire_aliases:
                     tc.function.name = wire_aliases[tc.function.name]
-        except Exception as exc:
+        except BaseException as exc:
+            finish_wire_receipt(receipt, error=exc)
             if guard.timed_out.is_set():
                 raise TimeoutError(guard.timeout_message()) from exc
             logger.debug("Codex auxiliary Responses API call failed: %s", exc)
@@ -1616,7 +1624,15 @@ class _CodexCompletionsAdapter:
             tool_calls=tool_calls_raw or None,
         )
         choice = SimpleNamespace(index=0, message=message, finish_reason=finish_reason)
-        return SimpleNamespace(choices=[choice], model=model, usage=usage)
+        result = SimpleNamespace(choices=[choice], model=model, usage=usage)
+        finish_wire_receipt(
+            receipt,
+            response=SimpleNamespace(
+                id=getattr(final, "id", None), model=issuer_model, usage=usage,
+                choices=[SimpleNamespace(message=message, finish_reason=finish_reason)],
+            ),
+        )
+        return result
 
 
 class _ChatShim:
@@ -1663,9 +1679,9 @@ _AsyncAnthropicCompletionsAdapter = _AsyncCompletionsAdapter  # imported by test
 class CodexAuxiliaryClient:
     """OpenAI-client-compatible wrapper routing through the Codex Responses API (.api_key/.base_url for introspection)."""
 
-    def __init__(self, real_client: OpenAI, model: str):
+    def __init__(self, real_client: OpenAI, model: str, logical_context: dict[str, Any] | None = None):
         self._real_client = real_client
-        self.chat = _ChatShim(_CodexCompletionsAdapter(real_client, model))
+        self.chat = _ChatShim(_CodexCompletionsAdapter(real_client, model, logical_context=logical_context))
         self.api_key = real_client.api_key
         self.base_url = real_client.base_url
 
@@ -1702,13 +1718,15 @@ def _translate_anthropic_response_format(anthropic_kwargs: dict[str, Any], respo
 class _AnthropicCompletionsAdapter:
     """OpenAI-client-compatible adapter for Anthropic Messages API."""
 
-    def __init__(self, real_client: Any, model: str, is_oauth: bool = False, base_url: str | None = None):
+    def __init__(self, real_client: Any, model: str, is_oauth: bool = False, base_url: str | None = None,
+                 logical_context: dict[str, Any] | None = None):
         self._client = real_client
         self._model = model
         self._is_oauth = is_oauth
         # Caller URL first; fall back to the SDK client's host only for Nous Portal — a blanket
         # fallback would flip MiniMax/Zhipu aux adapters to third-party handling (strips thinking sigs).
         self._base_url = base_url or None
+        self._logical_context = logical_context
         if not self._base_url:
             candidate = str(getattr(real_client, "base_url", "") or "") or None
             if candidate:
@@ -1788,13 +1806,35 @@ class _AnthropicCompletionsAdapter:
                 if not isinstance(existing, dict):
                     existing = {}
                 anthropic_kwargs["extra_body"] = {**existing, **passthrough}
+        from agent.auxiliary_wire_receipt import (
+            native_stream_with_wire_receipt, native_response_view, run_with_wire_receipt,
+        )
+        logical_context = _RELAY_AUX_CALL_CONTEXT.get() or self._logical_context
+        stream_response_holder: dict[str, Any] = {}
+
+        def _stream_wrapper(request, stream_fn):
+            return native_stream_with_wire_receipt(
+                self._client, {**request, "stream": True},
+                lambda: stream_fn(**request), logical_context=logical_context,
+                response_holder=stream_response_holder,
+            )
+
+        def _call_wrapper(request, create_fn):
+            return run_with_wire_receipt(
+                self._client, {**request, "stream": False},
+                lambda: create_fn(**request), logical_context=logical_context,
+                response_view=native_response_view,
+            )
+
         response = create_anthropic_message(
-            self._client,
-            anthropic_kwargs,
+            self._client, anthropic_kwargs,
             # Record provider-response timing every event, but tick forward progress only for
             # substantive payloads so keepalives can't hold a stalled summary open. None keeps
             # the fast get_final_message path.
             on_stream_event=(_anthropic_aux_stream_event_hook() if _aux_progress_active() else None),
+            stream_wrapper=_stream_wrapper,
+            call_wrapper=_call_wrapper,
+            stream_response_holder=stream_response_holder,
         )
         _nr = get_transport("anthropic_messages").normalize_response(response, strip_tool_prefix=self._is_oauth)
         usage = None
@@ -1817,9 +1857,11 @@ class _AnthropicCompletionsAdapter:
 class AnthropicAuxiliaryClient:
     """OpenAI-client-compatible wrapper over a native Anthropic client."""
 
-    def __init__(self, real_client: Any, model: str, api_key: str, base_url: str, is_oauth: bool = False):
+    def __init__(self, real_client: Any, model: str, api_key: str, base_url: str, is_oauth: bool = False,
+                 logical_context: dict[str, Any] | None = None):
         self._real_client = real_client
-        self.chat = _ChatShim(_AnthropicCompletionsAdapter(real_client, model, is_oauth=is_oauth, base_url=base_url))
+        self.chat = _ChatShim(_AnthropicCompletionsAdapter(
+            real_client, model, is_oauth=is_oauth, base_url=base_url, logical_context=logical_context))
         self.api_key = api_key
         self.base_url = base_url
 
@@ -1830,65 +1872,6 @@ class AnthropicAuxiliaryClient:
 
 
 class AsyncAnthropicAuxiliaryClient(_AsyncAuxiliaryClientBase):
-    pass
-
-
-class _BedrockCompletionsAdapter:
-    """Translates ``chat.completions.create(**kwargs)`` into Bedrock Converse."""
-
-    def __init__(self, region: str, model: str):
-        self._region = region
-        self._model = model
-
-    def create(self, **kwargs) -> Any:
-        from agent.bedrock_adapter import call_converse
-        model = kwargs.get("model", self._model)
-        max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
-        # OpenAI accepts ``stop`` as str or list; Converse requires a list.
-        stop = kwargs.get("stop")
-        if isinstance(stop, str):
-            stop = [stop]
-        if kwargs.get("tool_choice") is not None:
-            # Converse toolChoice isn't wired through call_converse(); surface the drop.
-            logger.debug(
-                "BedrockAuxiliaryClient: tool_choice=%r not supported by the "
-                "Converse shim — ignored.", kwargs.get("tool_choice"),
-            )
-        if kwargs.get("stream"):
-            # Converse streaming isn't wired here; call_llm's streaming consumer
-            # detects a final object and downgrades to non-live output.
-            logger.debug(
-                "BedrockAuxiliaryClient: stream=True requested for %s — returning a complete response "
-                "(Converse shim does not stream); caller downgrades to non-streaming.", model,
-            )
-        response = call_converse(
-            region=self._region, model=model, messages=kwargs.get("messages", []), tools=kwargs.get("tools"),
-            # Converse specifically defaults to the model maximum when omitted.
-            # Truthiness mirrors the Anthropic shim: explicit 0 means omit.
-            max_tokens=int(max_tokens) if max_tokens else None, temperature=kwargs.get("temperature"),
-            top_p=kwargs.get("top_p"), stop_sequences=stop,
-        )
-        # Converse is complete-response here: mark provider progress only after
-        # return so TTFP reflects real Bedrock latency, not dispatch/setup.
-        _notify_aux_provider_response()
-        return response
-
-
-class BedrockAuxiliaryClient:
-    """OpenAI-client-compatible wrapper over AWS Bedrock Converse API."""
-
-    def __init__(self, region: str, model: str):
-        self._region = region
-        self._model = model
-        self.chat = _ChatShim(_BedrockCompletionsAdapter(region, model))
-        self.api_key = "aws-sdk"
-        self.base_url = f"https://bedrock-runtime.{region}.amazonaws.com"
-
-    def close(self):
-        pass
-
-
-class AsyncBedrockAuxiliaryClient(_AsyncAuxiliaryClientBase):
     pass
 
 
@@ -2553,7 +2536,7 @@ _RELAY_AUX_CALL_CONTEXT: contextvars.ContextVar[Optional[dict[str, Any]]] = (
 def _relay_aux_call_scope(args: tuple, kwargs: dict):
     """Bind a fresh relay call context for one auxiliary call; mark it failed on any exception."""
     task = args[0] if args else kwargs.get("task")
-    token = _RELAY_AUX_CALL_CONTEXT.set({
+    context = {
         "task": str(task or "unknown"),
         "request_id": f"aux-{uuid.uuid4().hex}",
         "attempt_count": 0,
@@ -2561,13 +2544,22 @@ def _relay_aux_call_scope(args: tuple, kwargs: dict):
         "model": "",
         "response_model": None,
         "api_mode": "chat_completions",
-    })
+        "wire_receipt_ids": [],
+        "route_info": kwargs.get("route_info") if isinstance(kwargs.get("route_info"), dict) else None,
+    }
+    token = _RELAY_AUX_CALL_CONTEXT.set(context)
+    if isinstance(context.get("route_info"), dict):
+        context["route_info"].pop("wire_receipt_ids", None)
     try:
         yield
     except BaseException as exc:
         _fail_relay_auxiliary_call(exc)
         raise
     finally:
+        route_info = context.get("route_info")
+        receipt_ids = context.get("wire_receipt_ids")
+        if isinstance(route_info, dict) and isinstance(receipt_ids, list) and receipt_ids:
+            route_info["wire_receipt_ids"] = ",".join(str(value) for value in receipt_ids if value)
         _RELAY_AUX_CALL_CONTEXT.reset(token)
 
 
@@ -2595,17 +2587,11 @@ def _set_relay_auxiliary_route(provider: str | None, model: str | None, api_mode
         return
     context["provider"] = str(provider or "auxiliary")
     context["model"] = str(model or "unknown")
+    context["physical_provider"] = context["provider"]
+    context["physical_model"] = context["model"]
+    context["physical_api_mode"] = str(api_mode or "chat_completions")
     context["response_model"] = None
     context["api_mode"] = str(api_mode or "chat_completions")
-
-
-def _record_route_info(
-    route_info: Optional[dict[str, str]], provider: Optional[str], model: Optional[str]
-) -> None:
-    """Expose the concrete route selected for one auxiliary call."""
-    if route_info is not None:
-        route_info["provider"] = provider or "auto"
-        route_info["model"] = model or "default"
 
 
 def _relay_auxiliary_metadata(
@@ -2618,6 +2604,9 @@ def _relay_auxiliary_metadata(
     context["attempt_count"] = attempt_count + 1
     provider_name = str(provider or context.get("provider") or "auxiliary")
     model_name = str(context.get("model") or "unknown")
+    context["physical_provider"] = provider_name
+    context["physical_model"] = model_name
+    context["physical_api_mode"] = str(api_mode or context.get("api_mode") or "chat_completions")
     return provider_name, model_name, {
         "api_mode": str(api_mode or context.get("api_mode") or "chat_completions"),
         "api_request_id": str(context["request_id"]),
@@ -2702,9 +2691,17 @@ def _relay_sync_stream(
     from agent.auxiliary_wire import prepare_chat_messages, relay_chat_metadata
 
     kwargs = prepare_chat_messages(client, kwargs)
-    # The bypass runs inside the provider callback, AFTER Relay has seen (and possibly
-    # rewritten) the real conversation; applying it to `kwargs` would hand Relay an empty one.
-    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))
+    # The bypass and receipt run inside the provider callback, AFTER Relay has seen (and possibly
+    # rewritten) the real conversation; applying either to `kwargs` would observe the wrong payload.
+    from agent.auxiliary_wire_receipt import observe_stream_with_wire_receipt
+    logical_context = _RELAY_AUX_CALL_CONTEXT.get()
+    def create(request):
+        request = bypass_chat_sdk_request_transform(request, client)
+        if _client_streams_internally(client):
+            return client.chat.completions.create(**request)
+        return observe_stream_with_wire_receipt(
+            client, request, lambda: client.chat.completions.create(**request), logical_context=logical_context,
+        )
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
         return create(kwargs)
@@ -7049,57 +7046,9 @@ def _stream_request_plan(kwargs: dict[str, Any], client: Any = None) -> tuple[di
 def _create_with_progress_once(
     client: Any, kwargs: dict[str, Any], task: Optional[str] = None, *, force_stream: bool = False
 ) -> Any:
-    """create() that streams (and re-aggregates, ticking the hook per substantive chunk) when a
-    progress hook is active or the provider is stream-only; plain ``create(**kwargs)`` otherwise
-    or when the adapter streams internally. Streaming rejections fall back to a plain call —
-    except under ``force_stream``.
+    from agent.auxiliary_progress_receipt import create_with_progress_once
 
-    Behavior is byte-for-byte identical to a plain ``create(**kwargs)`` when neither trigger applies (every
-    existing caller/task) or when the client's wire adapter streams internally. With a hook + a
-    chunk-capable client, the request is sent with ``stream=True`` and aggregated, ticking the hook only for
-    substantive chunks. The configured ``timeout`` acts per stream read (idle) rather than as a total
-    budget, and outer liveness watchdogs see tokens moving. ``force_stream=True`` (stream-only providers
-    such as Tencent Copilot — credit @kudi88, PR #60686) takes the same streamed path even without a hook.
-    Providers that reject the streamed request fall back to the plain non-streaming call — except under
-    ``force_stream``, where a stream-only provider rejects the plain call by definition, so the original
-    error is surfaced to the normal recovery chains instead.
-    """
-    kwargs = bypass_chat_sdk_request_transform(kwargs, client)
-    _notify_aux_dispatch()
-    # Dispatch alone is not forward progress: a 401/retry/fallback dispatch must not
-    # reset the compression inactivity fence, or a zero-output attempt runs to the
-    # total ceiling instead of idling out (#114938). Progress ticks only for
-    # substantive stream payloads or a completed usable response.
-    if (not _aux_progress_active() and not force_stream) or _client_streams_internally(client):
-        response = client.chat.completions.create(**kwargs)
-        if not _client_streams_internally(client):
-            _notify_aux_provider_response()
-        return response
-    stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
-    try:
-        chunks = client.chat.completions.create(**stream_kwargs)
-    except Exception as exc:
-        # Genuine provider failures aren't streaming's fault — surface unchanged so the
-        # recovery chains see the same error as a plain call.
-        if (force_stream or _is_transient_transport_error(exc) or _is_auth_error(exc)
-                or _is_payment_error(exc) or _is_rate_limit_error(exc)):
-            raise
-        # Possibly a streaming-specific rejection: retry non-streaming once; a genuinely bad
-        # request reproduces the real error for the except-chains.
-        logger.debug("Auxiliary %s: streamed request failed (%s); retrying non-streaming",
-                     task or "call", exc)
-        _notify_aux_dispatch()
-        response = client.chat.completions.create(**kwargs)
-        _notify_aux_provider_response()
-        return response
-    # Some shims (MoA quiet mode, defensive adapters) return a complete response despite
-    # stream=True; it counts as provider response + forward progress.
-    if hasattr(chunks, "choices"):
-        _notify_aux_provider_response()
-        return chunks
-    from agent.auxiliary_stream_watchdog import chat_stream_windows
-    return _aggregate_chat_stream(
-        chunks, model=model, total_ceiling=total_ceiling, no_progress=chat_stream_windows(client, kwargs, task))
+    return create_with_progress_once(client, kwargs, task, force_stream=force_stream)
 
 
 def _aggregate_chat_stream(
@@ -7282,10 +7231,25 @@ async def _aggregate_chat_stream_async(
 async def _acreate_with_stream(client: Any, kwargs: dict[str, Any], task: Optional[str] = None) -> Any:
     """Async create() for stream-only providers: ``stream=True`` + aggregate the async chunks."""
     stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
-    chunks = await client.chat.completions.create(**stream_kwargs)
+    from agent.auxiliary_wire_receipt import (
+        finish_wire_receipt, start_wire_receipt,
+    )
+    receipt = start_wire_receipt(client, stream_kwargs, logical_context=_RELAY_AUX_CALL_CONTEXT.get())
+    try:
+        chunks = await client.chat.completions.create(**stream_kwargs)
+    except BaseException as exc:
+        finish_wire_receipt(receipt, error=exc)
+        raise
     if hasattr(chunks, "choices"):  # shims may hand back a complete response despite stream=True
+        finish_wire_receipt(receipt, response=chunks)
         return chunks
-    return await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
+    try:
+        response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
+    except BaseException as exc:
+        finish_wire_receipt(receipt, error=exc)
+        raise
+    finish_wire_receipt(receipt, response=response)
+    return response
 
 
 def _async_client_streams_internally(client: Any) -> bool:
@@ -7302,14 +7266,26 @@ async def _acreate_with_progress(
     _notify_aux_dispatch()
     # Same contract as the sync twin (#114938): dispatch alone is not progress.
     if (not _aux_progress_active() and not force_stream) or _async_client_streams_internally(client):
-        response = await client.chat.completions.create(**kwargs)
+        if _async_client_streams_internally(client):
+            response = await client.chat.completions.create(**kwargs)
+        else:
+            from agent.auxiliary_wire_receipt import run_async_with_wire_receipt
+            response = await run_async_with_wire_receipt(
+                client, kwargs, lambda: client.chat.completions.create(**kwargs),
+                logical_context=_RELAY_AUX_CALL_CONTEXT.get(),
+            )
         if not _async_client_streams_internally(client):
             _notify_aux_provider_response()
         return response
     stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
+    from agent.auxiliary_wire_receipt import finish_wire_receipt, start_wire_receipt
+    receipt = start_wire_receipt(client, stream_kwargs, logical_context=_RELAY_AUX_CALL_CONTEXT.get())
     try:
         chunks = await client.chat.completions.create(**stream_kwargs)
-    except Exception as exc:
+    except BaseException as exc:
+        finish_wire_receipt(receipt, error=exc)
+        if not isinstance(exc, Exception):
+            raise
         # Only a rejected stream NEGOTIATION falls back to a plain call (mirrors the sync wrapper); a
         # failure mid-consumption below reaches the classified recovery ladder instead of silently
         # re-sending the whole prompt non-streaming.
@@ -7319,13 +7295,24 @@ async def _acreate_with_progress(
         logger.debug("Auxiliary %s: streamed async request failed (%s); retrying non-streaming",
                      task or "call", exc)
         _notify_aux_dispatch()
-        response = await client.chat.completions.create(**kwargs)
+        from agent.auxiliary_wire_receipt import run_async_with_wire_receipt
+        response = await run_async_with_wire_receipt(
+            client, kwargs, lambda: client.chat.completions.create(**kwargs),
+            logical_context=_RELAY_AUX_CALL_CONTEXT.get(),
+        )
         _notify_aux_provider_response()
         return response
     if hasattr(chunks, "choices"):  # shims may hand back a complete response despite stream=True
         _notify_aux_provider_response()
+        finish_wire_receipt(receipt, response=chunks)
         return chunks
-    return await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
+    try:
+        response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
+    except BaseException as exc:
+        finish_wire_receipt(receipt, error=exc)
+        raise
+    finish_wire_receipt(receipt, response=response)
+    return response
 
 
 # Shared request head + recovery ladder for call_llm / async_call_llm: the entry points differ
@@ -7454,7 +7441,6 @@ def _prepare_aux_request(
             extra_body=effective_extra_body,
         )
     _set_relay_auxiliary_route(request_provider, final_model, resolved_api_mode)
-    _record_route_info(route_info, _fallback_provider_from_label(request_provider), final_model)
     if async_mode:
         base_info = str(getattr(client, "base_url", "") or "")
     else:
@@ -7463,6 +7449,11 @@ def _prepare_aux_request(
             logger.info("Auxiliary %s: using %s (%s)%s",
                          task, request_provider or "auto", final_model or "default",
                          f" at {base_info}" if base_info and "openrouter" not in base_info else "")
+    from agent.auxiliary_route_info import record_route_info
+    if route_info is not None:
+        route_info.pop("main_route_attempted", None)
+    record_route_info(route_info, _fallback_provider_from_label(request_provider), final_model,
+                      base_url=base_info, main_runtime=main_runtime)
     # Client's actual base_url so endpoint-specific temperature overrides work on
     # auto-detected routes (api.moonshot.ai vs api.kimi.com/coding).
     kwargs = _build_call_kwargs(
@@ -7857,7 +7848,11 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
         if lane in tried_lanes:
             break
         tried_lanes.add(lane)
-        _record_route_info(route.route_info, _fallback_provider_from_label(fb_label), fb_model)
+        from agent.auxiliary_route_info import record_route_info
+        record_route_info(
+            route.route_info, _fallback_provider_from_label(fb_label), fb_model,
+            base_url=str(getattr(fb_client, "base_url", "") or ""), main_runtime=route.main_runtime,
+        )
         fb_resp = yield _LadderStep("fallback", (fb_client, fb_model, fb_label))
         if fb_resp is not None:
             if route.route_info is not None:  # tell the caller its own route failed, not only where it landed
@@ -7872,6 +7867,9 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
                    "(fallback_chain + main agent model). Raising the primary error.",
                    task or "call", tag, reason, resolved_provider)
     if primary_route is not None and route.route_info is not None:
+        if route.route_info.get("main_route_attempted") == "true":
+            primary_route["main_route_attempted"] = "true"
+        route.route_info.clear()
         route.route_info.update(primary_route)
     return None
 
@@ -8217,29 +8215,15 @@ def _message_field(msg, name):
 
 
 def extract_content_or_reasoning(response, *, max_reasoning_chars: int | None = None) -> str:
-    """Extract content from an LLM response, falling back to reasoning fields.
-    Order: ``content`` (inline think blocks stripped) → ``reasoning``/``reasoning_content`` →
-    ``reasoning_details`` (OpenRouter array). Accepts a response or bare message;
-    ``max_reasoning_chars`` bounds a reasoning fallback so unbounded chain-of-thought can't
-    become the compaction summary. Returns ``""`` if nothing found."""
-    msg = _coerce_llm_message(response)
-    if msg is None:
-        return ""
-    if isinstance(msg, str):
-        return msg.strip()
-    raw = _message_field(msg, "content")
-    if not isinstance(raw, str):
-        raw = str(raw) if raw else ""
-    content = raw.strip()
+    """Extract visible content, falling back to structured reasoning and its optional character limit."""
+    from agent.auxiliary_content import extract_visible_content
+
+    content = extract_visible_content(response)
     if content:
-        # Same precompiled closed-pair patterns as strip_think_blocks.
-        from agent.agent_runtime_helpers import _REASONING_BLOCK_PATTERNS
-        cleaned = content
-        for pattern in _REASONING_BLOCK_PATTERNS:
-            cleaned = pattern.sub("", cleaned)
-        cleaned = cleaned.strip()
-        if cleaned:
-            return cleaned
+        return content
+    msg = _coerce_llm_message(response)
+    if msg is None or isinstance(msg, str):
+        return ""
     # Content is empty or reasoning-only — try structured reasoning fields
     reasoning_parts: list[str] = []
     for field in ("reasoning", "reasoning_content"):
@@ -8257,6 +8241,8 @@ def extract_content_or_reasoning(response, *, max_reasoning_chars: int | None = 
         return ""
     text = "\n\n".join(reasoning_parts)
     if max_reasoning_chars is not None and len(text) > max_reasoning_chars:
+        from agent.auxiliary_wire_receipt import mark_local_reasoning_clipped
+        mark_local_reasoning_clipped()
         logger.warning("fell back to reasoning fields (%d chars); truncating to %d",
                        len(text), max_reasoning_chars)
         return text[:max_reasoning_chars]

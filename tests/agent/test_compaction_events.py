@@ -28,7 +28,7 @@ V1_FIELDS = {
     "token_count_method", "messages_before", "messages_after", "items_dropped", "context_limit", "threshold_tokens",
     "protected_head_tokens", "middle_window_tokens", "protected_tail_tokens", "duration_ms",
     "summary_generation_ms", "aux_call_duration_ms", "queue_wait_ms", "commit_ms", "summarizer_provider",
-    "summarizer_model", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
+    "summarizer_model", "aux_wire_receipt_ids", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
     "compression_count", "in_place", "session_rotated", "split_status", "cache_break", "has_focus_topic",
 }
 

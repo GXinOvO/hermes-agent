@@ -441,13 +441,13 @@ def _core_closed_turn(tmp_path, monkeypatch, *, principal='person', earlier_fail
 @pytest.mark.parametrize('principal', ['person', 'cron-owner'])
 def test_restart_notice_replaces_the_core_failed_turn_boundary_of_the_same_turn(tmp_path, monkeypatch, principal):
     """#134889 GW-21 review (GW-A): the agent's own closer already ended this turn with
-    "Send it again"; settlement replaces that boundary with the restart notice in its own write,
+    a generic interruption; settlement replaces it with the restart notice in its own write,
     so the transcript holds one Hermes boundary, and an automation row never keeps resend advice."""
-    from agent.turn_failure_copy import AUTOMATION_INTERRUPTED_NOTICE, FAILED_TURN_NOTICE
+    from agent.turn_failure_copy import AUTOMATION_INTERRUPTED_NOTICE, INTERRUPTED_TURN_NOTICE
     from gateway.session_settlement_recovery import commit_and_publish
     db, authority, live, ref, row, result = _core_closed_turn(tmp_path, monkeypatch, principal=principal)
     with db:
-        assert _notices(db) == [FAILED_TURN_NOTICE]  # the real core closer wrote it
+        assert _notices(db) == [INTERRUPTED_TURN_NOTICE]  # the real core closer wrote it
         commit_and_publish(authority, live, ref, row, '', 'interrupted', {'result': result}, {})
         expected = RESTART_INTERRUPT_NOTICE if principal == 'person' else AUTOMATION_INTERRUPTED_NOTICE
         assert _notices(db) == [expected]

@@ -114,7 +114,18 @@ def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_co
     if error:
         entry["error"] = error
     tool_call_log.append(entry)
-    return result
+    return _serialize_rpc_result(result)
+
+
+def _serialize_rpc_result(result) -> str:
+    """Keep one JSON wire value even when a result hook returns multiline text."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            pass  # A transform hook may return text rather than a JSON document.
+    # JSON escapes preserve surrogate-containing paths/text through UTF-8 transports.
+    return json.dumps(result, ensure_ascii=True)
 
 
 def _result_error(result) -> str:
