@@ -1184,8 +1184,8 @@ def _rebuild_primary_client(agent, rt: dict[str, Any], *, reason: str) -> None:
 def try_recover_primary_transport(
     agent, api_error: Exception, *, retry_count: int, max_retries: int,
 ) -> bool:
-    """Rebuild the primary client once and retry after ``max_retries`` exhaust on a transient
-    transport error. Skipped for aggregators (OpenRouter, Nous) that manage retries server-side."""
+    """Rebuild the primary client after transient transport exhaustion; the caller owns the
+    interruptible retry wait. Aggregators (OpenRouter, Nous) manage retries server-side."""
     error_type = type(api_error).__name__
     if agent._fallback_activated or error_type not in _TRANSIENT_TRANSPORT_ERRORS or agent._is_openrouter_url():
         return False
@@ -1210,12 +1210,6 @@ def try_recover_primary_transport(
         rt = agent._primary_runtime
         _apply_primary_runtime_fields(agent, rt)
         _rebuild_primary_client(agent, rt, reason="primary_recovery")
-        wait_time = min(3 + retry_count, 8)
-        agent._vprint(
-            f"{agent.log_prefix}🔁 Transient {error_type} on {agent.provider} — "
-            f"rebuilt client, waiting {wait_time}s before one last primary attempt.", force=True, diagnostic=True,
-        )
-        time.sleep(wait_time)
         return True
     except Exception as e:
         logger.warning("Primary transport recovery failed: %s", e)

@@ -263,6 +263,38 @@ class UnrecoveredErrorVerdict:
     result: Optional[dict[str, Any]] = None
 
 
+def _wait_after_primary_recovery(
+    agent: Any, api_error: Any, _retry: Any, *, retry_count: int, messages: Any,
+    conversation_history: Any, api_call_count: int, active_system_prompt: Any,
+    compression_attempts: int,
+) -> UnrecoveredErrorVerdict:
+    """Keep primary retry backoff with its stop/steer and retry-state owner."""
+    _retry.primary_recovery_attempted = True
+    wait_time = min(3 + retry_count, 8)
+    agent._vprint(
+        f"{agent.log_prefix}🔁 Transient {type(api_error).__name__} on {agent.provider} — "
+        f"rebuilt client, waiting {wait_time}s before one last primary attempt.", force=True, diagnostic=True,
+    )
+    interrupted = interruptible_backoff_sleep(
+        agent, wait_time, _retry, messages=messages, conversation_history=conversation_history,
+        api_call_count=api_call_count,
+        abort_message="Interrupt detected during primary recovery wait, aborting.",
+        interrupt_text="Operation interrupted: waiting to retry the primary provider.",
+        activity_label="primary recovery backoff",
+    )
+    if interrupted is not None:
+        return UnrecoveredErrorVerdict(
+            "return", active_system_prompt, retry_count, compression_attempts, interrupted,
+        )
+    if _retry.restart_with_redirected_messages:
+        return UnrecoveredErrorVerdict("break", active_system_prompt, retry_count, compression_attempts)
+    # Fresh attempt cycle: let a follow-on 429 still activate fallback_providers.
+    _retry.has_retried_429 = False
+    agent._fallback_index = 0
+    agent._fallback_activated = False
+    return UnrecoveredErrorVerdict("continue", active_system_prompt, 0, compression_attempts)
+
+
 def settle_unrecovered_error(
     agent: Any, *, api_error: Any, classified: Any, _retry: Any, status_code: Any, error_msg: Any,
     is_context_length_error: Any, is_rate_limited: Any, _is_zai_coding_overload: Any,
@@ -378,14 +410,11 @@ def settle_unrecovered_error(
         if not _retry.primary_recovery_attempted and agent._try_recover_primary_transport(
             api_error, retry_count=retry_count, max_retries=max_retries,
         ):
-            _retry.primary_recovery_attempted = True
-            retry_count = 0
-            # Fresh attempt cycle: re-open fallback state so a follow-on 429 can still
-            # activate fallback_providers.
-            _retry.has_retried_429 = False
-            agent._fallback_index = 0
-            agent._fallback_activated = False
-            return _verdict("continue")
+            return _wait_after_primary_recovery(
+                agent, api_error, _retry, retry_count=retry_count, messages=messages,
+                conversation_history=conversation_history, api_call_count=api_call_count,
+                active_system_prompt=active_system_prompt, compression_attempts=compression_attempts,
+            )
         if agent._has_pending_fallback():
             agent._buffer_diagnostic_status(f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...")
         reset_at = error_context.get("reset_at") if isinstance(error_context, dict) else None
