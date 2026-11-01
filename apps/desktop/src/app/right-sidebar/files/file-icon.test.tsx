@@ -1,73 +1,89 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FileTreeIcon } from './file-icon'
+import { fileKindForName, FileTreeIcon } from './file-icon'
 
 afterEach(cleanup)
 
+function iconOf(name: string) {
+  const { container } = render(<FileTreeIcon name={name} />)
+  const glyph = container.querySelector('svg, i')
+
+  return { glyph, color: (glyph as HTMLElement | null)?.style.color ?? '' }
+}
+
 describe('FileTreeIcon', () => {
   it.each([
-    ['C:\\project\\Main.PYI', 'svg.tabler-icon-brand-python'],
-    ['src/app.ts', 'svg.tabler-icon-brand-typescript'],
-    ['src/app.mjs', 'svg.tabler-icon-brand-javascript'],
-    ['src/view.tsx', 'svg.tabler-icon-brand-react'],
-    ['native/kernel.cpp', 'svg.tabler-icon-brand-cpp'],
-    ['native/runtime.h', 'svg.tabler-icon-letter-c'],
-    ['README.md', '.codicon-markdown'],
-    ['settings.json', '.codicon-json'],
-    ['config.yaml', '.codicon-settings-gear'],
-    ['launch.sh', '.codicon-terminal'],
-    ['Dockerfile', 'svg.tabler-icon-brand-docker']
-  ])('renders a recognizable type glyph for %s', (name, selector) => {
-    const { container } = render(<FileTreeIcon name={name} />)
-    const icon = container.querySelector(selector)
+    ['C:\\project\\Main.PYI', 'python', 'tabler-icon-brand-python'],
+    ['src/app.ts', 'typescript', 'tabler-icon-file-type-ts'],
+    ['src/app.mjs', 'javascript', 'tabler-icon-brand-javascript'],
+    ['src/view.tsx', 'react', 'tabler-icon-brand-react'],
+    ['native/kernel.cpp', 'cpp', 'tabler-icon-brand-cpp'],
+    ['native/runtime.h', 'c', 'tabler-icon-letter-c'],
+    ['web/page.html', 'html', 'tabler-icon-file-type-html'],
+    ['web/theme.scss', 'scss', 'tabler-icon-brand-sass'],
+    ['server/main.go', 'go', 'tabler-icon-brand-golang'],
+    ['server/lib.rs', 'rust', 'tabler-icon-file-type-rs'],
+    ['README.md', 'markdown', 'codicon-markdown'],
+    ['settings.json', 'json', 'codicon-json'],
+    ['config.yaml', 'yaml', 'codicon-settings-gear'],
+    ['launch.sh', 'shell', 'codicon-terminal'],
+    ['scripts/run.ps1', 'powershell', 'codicon-terminal-powershell'],
+    ['Dockerfile', 'docker', 'tabler-icon-brand-docker'],
+    ['data/report.csv', 'csv', 'tabler-icon-file-type-csv'],
+    ['docs/spec.pdf', 'pdf', 'tabler-icon-file-type-pdf'],
+    ['assets/logo.svg', 'svg', 'tabler-icon-file-type-svg'],
+    ['archive.tar.gz', 'archive', 'codicon-file-zip']
+  ])('marks %s as %s', (name, kind, glyphClass) => {
+    const { glyph, color } = iconOf(name)
 
-    expect(icon).not.toBeNull()
-    expect(icon?.getAttribute('aria-hidden')).toBe('true')
-    expect(icon?.getAttribute('class')).toMatch(
-      /text-\(--(?:ui|file-icon)-(blue|cyan|yellow|green|orange|red|purple)\)/
-    )
-  })
-
-  it('gives package.json a package glyph instead of the generic JSON glyph', () => {
-    const { container } = render(<FileTreeIcon name="C:\\work\\PACKAGE.JSON" />)
-
-    expect(container.querySelector('svg.tabler-icon-brand-npm')).not.toBeNull()
-    expect(container.querySelector('.codicon-json')).toBeNull()
+    expect(fileKindForName(name)).toBe(kind)
+    expect(glyph).not.toBeNull()
+    expect(glyph?.getAttribute('class')).toContain(glyphClass)
+    expect(color).toBe(`var(--fi-${kind})`)
+    expect(glyph?.getAttribute('aria-hidden')).toBe('true')
   })
 
   it.each([
-    ['Dockerfile.dev', 'svg.tabler-icon-brand-docker'],
-    ['package-lock.json', 'svg.tabler-icon-brand-npm'],
-    ['.env.local', '.codicon-settings-gear'],
-    ['Makefile', '.codicon-settings-gear'],
-    ['CMakeLists.txt', '.codicon-settings-gear'],
-    ['.gitignore', '.codicon-settings-gear'],
-    ['.zshrc', '.codicon-terminal']
-  ])('recognizes the configuration filename %s', (name, selector) => {
-    const { container } = render(<FileTreeIcon name={name} />)
+    ['package.json', 'npm', 'tabler-icon-brand-npm'],
+    ['package-lock.json', 'npm', 'tabler-icon-brand-npm'],
+    ['yarn.lock', 'npm', 'tabler-icon-brand-npm'],
+    ['tsconfig.json', 'typescript', 'tabler-icon-file-type-ts'],
+    ['vite.config.ts', 'vite', 'tabler-icon-brand-vite'],
+    ['Dockerfile.dev', 'docker', 'tabler-icon-brand-docker'],
+    ['.env.local', 'env', 'codicon-key'],
+    ['.gitignore', 'git', 'tabler-icon-brand-git'],
+    ['Makefile', 'make', 'codicon-tools'],
+    ['CMakeLists.txt', 'make', 'codicon-tools'],
+    ['LICENSE', 'license', 'codicon-law'],
+    ['pyproject.toml', 'python', 'tabler-icon-brand-python'],
+    ['requirements.txt', 'python', 'tabler-icon-brand-python']
+  ])('prefers the exact filename rule for %s', (name, kind, glyphClass) => {
+    const { glyph, color } = iconOf(name)
 
-    expect(container.querySelector(selector)).not.toBeNull()
+    expect(fileKindForName(name)).toBe(kind)
+    expect(glyph?.getAttribute('class')).toContain(glyphClass)
+    expect(color).toBe(`var(--fi-${kind})`)
   })
 
-  it('changes the glyph after a file is renamed to a different type', () => {
+  it('changes the mark when a file is renamed to another type', () => {
     const { container, rerender } = render(<FileTreeIcon name="main.py" />)
 
-    expect(container.querySelector('svg.tabler-icon-brand-python')).not.toBeNull()
+    expect(container.querySelector('.tabler-icon-brand-python')).not.toBeNull()
     rerender(<FileTreeIcon name="main.ts" />)
-    expect(container.querySelector('svg.tabler-icon-brand-python')).toBeNull()
-    expect(container.querySelector('svg.tabler-icon-brand-typescript')).not.toBeNull()
+    expect(container.querySelector('.tabler-icon-brand-python')).toBeNull()
+    expect(container.querySelector('.tabler-icon-file-type-ts')).not.toBeNull()
   })
 
-  it.each(['notes.unknown', 'LICENSE', 'py', 'json', '__proto__', 'constructor', 'file.toString'])(
-    'keeps the generic glyph for %s',
+  it.each(['notes.unknown', 'py', 'json', '__proto__', 'constructor', 'file.toString', ''])(
+    'keeps the neutral glyph for %s',
     name => {
       const { container } = render(<FileTreeIcon name={name} />)
+      const glyph = container.querySelector('.codicon-file')
 
-      expect(container.querySelector('.codicon-file')).not.toBeNull()
-      expect(container.firstElementChild?.getAttribute('class')).not.toMatch(
-        /text-\(--(?:ui|file-icon)-(blue|cyan|yellow|green|orange|red|purple)\)/
-      )
+      expect(fileKindForName(name)).toBeUndefined()
+      expect(glyph).not.toBeNull()
+      expect((glyph as HTMLElement).style.color).toBe('')
     }
   )
 })
