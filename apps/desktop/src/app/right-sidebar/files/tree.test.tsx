@@ -121,10 +121,10 @@ describe('ProjectTree context-menu clicks', () => {
 
     const label = await screen.findByText('main.py')
     const row = label.closest('[aria-selected]')!
-    const icon = row.querySelector('.tabler-icon-brand-python')
+    const icon = row.querySelector('.tabler-icon-brand-python') as HTMLElement | null
 
     expect(icon).not.toBeNull()
-    expect(icon?.getAttribute('class')).toContain('text-(--file-icon-blue)')
+    expect(icon?.style.color).toBe('var(--fi-python)')
     fireEvent.click(label)
     await waitFor(() => expect(row.getAttribute('aria-selected')).toBe('true'))
     fireEvent.doubleClick(label)
@@ -146,10 +146,11 @@ describe('ProjectTree context-menu clicks', () => {
     const label = await screen.findByText('src')
     const row = label.closest('[aria-selected]')!
 
-    expect(row.querySelector('.codicon-folder')?.getAttribute('class')).toContain('text-(--file-icon-yellow)')
+    expect((row.querySelector('.codicon-folder') as HTMLElement).style.color).toBe('var(--fi-folder)')
     fireEvent.click(label)
     await waitFor(() => expect(row.getAttribute('aria-expanded')).toBe('true'))
     expect(row.querySelector('.codicon-folder-opened')).not.toBeNull()
+    expect((row.querySelector('.codicon-folder-opened') as HTMLElement).style.color).toBe('var(--fi-folder-open)')
     expect(await screen.findByText('a.ts')).toBeTruthy()
     fireEvent.click(label)
     await waitFor(() => expect(row.getAttribute('aria-expanded')).toBe('false'))
