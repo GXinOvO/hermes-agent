@@ -374,9 +374,9 @@ function ProjectTreeRow({
           <Codicon name="warning" size="0.75rem" />
         ) : isFolder ? (
           <Codicon
-            className="text-(--file-icon-yellow)"
             name={node.isOpen ? 'folder-opened' : 'folder'}
             size="0.875rem"
+            style={{ color: node.isOpen ? 'var(--fi-folder-open)' : 'var(--fi-folder)' }}
           />
         ) : (
           <FileTreeIcon name={node.data.name} />

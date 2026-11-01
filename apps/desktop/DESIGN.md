@@ -465,13 +465,15 @@ from their root base tokens; do not multiply the global tokens or nest CSS zoom.
   action. Do not introduce a third icon set or mix styles within one control
   group.
 - The Files tree uses `files/file-icon.tsx` for filename/extension glyphs:
-  language marks come from the existing Tabler aliases, document/configuration
-  marks use Codicon, and colors use the existing `--ui-*` palette. Blue, purple
-  and amber mix toward the text token inside the tree to keep them legible
-  in both appearances, without changing the global palette. Exact
-  filenames take priority over extensions; unknown types keep the neutral file
-  glyph. Folder open/closed glyphs stay amber. Keep Git-status color on the
-  filename so type colors cannot be mistaken for repository state.
+  Tabler `IconFileType*`/`IconBrand*` marks for languages, Codicon for
+  documents, configs and media. Colors follow Material Icon Theme's
+  per-language hue assignments at Bearded Icons' saturation, and live in
+  `files/file-icon.css` as `--fi-*` variables with a light block plus a
+  `:root.dark` override tuned for dark surfaces — never as literals in
+  components. Exact filenames and config families take priority over
+  extensions; unknown types keep the neutral file glyph. Folders use
+  `--fi-folder` / `--fi-folder-open`. Keep Git-status color on the filename so
+  type colors cannot be mistaken for repository state.
 - **`BrandMark`** (`src/components/brand-mark.tsx`) is the brand glyph — the
   `nous-girl` mark on a fixed tile, theme-aware: black girl on white in light
   mode, white girl on the `#0d1117` dark tile in dark mode (keyed off
