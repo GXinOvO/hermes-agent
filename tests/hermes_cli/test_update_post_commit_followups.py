@@ -161,7 +161,9 @@ def test_failed_config_migration_is_owed_and_later_maintenance_runs(tmp_path, mo
     assert [step for step, _ in owed] == ["config_migration"]
     assert calls[0] == "repair_windows_home_acl"
     assert ("commit_graph", update_cmd._m().PROJECT_ROOT) in calls
-    assert calls[-2:] == ["verdict", "notices"]
+    # The maintenance completion banner must not precede slow post-update
+    # repairs such as acquiring cua-driver.
+    assert calls[-2:] == ["notices", "verdict"]
     assert "⚠ Update follow-up 'config_migration'" in capsys.readouterr().out
     update_receipt.finalize_update_receipt("success")
     assert [f["step"] for f in _latest(tmp_path)["followups"]] == ["config_migration"]

@@ -125,7 +125,8 @@ def _complete_locked(
         before_build()  # never raises: a failed restart stays owed and is retried after the build
     step("build", lambda: build_update_products(root, desktop=desktop))
     if announce:
-        print(announce)
+        print(announce, flush=True)
+        print("→ Code update applied; post-update maintenance is still pending.", flush=True)
     verdict: list[bool] = []
     step("maintenance", lambda: verdict.append(_run_post_update_maintenance(
         assume_yes=assume_yes,

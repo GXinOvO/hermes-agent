@@ -43,6 +43,19 @@ def _add_refresh_prompts(sessions_subparsers) -> None:
     _flag(refresh, "--json", help="Machine-readable output")
 
 
+def _add_verification_and_repair(subparsers) -> None:
+    from hermes_cli.sessions_verify import add_verify_parser
+    add_verify_parser(subparsers)
+    repair = subparsers.add_parser(
+        "repair", help="Repair a malformed state.db schema so hidden sessions reappear",
+        description="Recover a state.db whose schema is malformed (e.g. 'table "
+            "messages_fts already exists'), which makes Desktop/Dashboard show "
+            "no sessions. A backup is made first; sessions and messages are "
+            "preserved and the FTS search index is rebuilt if needed.")
+    _flag(repair, "--check-only", help="Only report whether the database opens cleanly; do not modify it")
+    _flag(repair, "--no-backup", help="Skip the timestamped backup copy (not recommended)")
+
+
 def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     """Attach the ``sessions`` subcommand to ``subparsers``."""
     sessions_parser = subparsers.add_parser(
@@ -195,15 +208,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     _flag(sessions_optimize_storage, "--force",
         help="Run even while another Hermes process (gateway, Desktop, dashboard, cron) holds state.db — rewriting the store under a live writer can leave every agent refusing turns until all writers are stopped; the rebuild then paces itself so that process stays responsive (much slower)")
 
-    sessions_repair = sessions_subparsers.add_parser(
-        "repair", help="Repair a malformed state.db schema so hidden sessions reappear",
-        description="Recover a state.db whose schema is malformed (e.g. 'table "
-            "messages_fts already exists'), which makes Desktop/Dashboard show "
-            "no sessions. A backup is made first; sessions and messages are "
-            "preserved and the FTS search index is rebuilt if needed.")
-    _flag(sessions_repair, "--check-only",
-        help="Only report whether the database opens cleanly; do not modify it")
-    _flag(sessions_repair, "--no-backup", help="Skip the timestamped backup copy (not recommended)")
+    _add_verification_and_repair(sessions_subparsers)
 
     sessions_set_journal_mode = sessions_subparsers.add_parser(
         "set-journal-mode", help="Convert state.db between journal_mode=WAL and DELETE offline (every holder stopped)",

@@ -134,6 +134,45 @@ For an admitted source checkout, `hermes update` runs these phases:
 7. **Gateway auto-restart**: on Linux and macOS, gateways paused for the update are started again as soon as the dependencies are prepared and the launchers refreshed, before the product builds; on Windows they restart after the builds. Any other running gateway is refreshed after the update completes. Service-managed gateways (systemd on Linux, launchd on macOS) restart through the service manager. Manual gateways are relaunched when Hermes can map their PID to a profile. Manually launched `hermes serve` / `hermes dashboard` backends are different: the updater leaves them running and asks their owner to restart them. See [Manual backend restart reminders](#manual-backend-restart-reminders). Backends owned by a running Desktop app remain the app's responsibility.
 8. **Multiplex migration (multi-profile installs)** — once the fleet is verified on the new code, an install with two or more profiles that still run **one gateway per profile** is folded into a single multiplexed default gateway when nothing blocks it (same as `hermes gateway migrate --multiplex --yes`); if a blocker exists (a bot token shared by two profiles, a secondary profile binding a port with no `/p/<profile>/` ingress) the update prints the blockers with their fixes and changes nothing. Single-profile installs are never touched. See [Migrating from per-profile gateways](../user-guide/multi-profile-gateways.md#migrating-from-per-profile-gateways).
 
+### Database checks during maintenance
+
+After builds, the updater displays the maintenance phase and elapsed time, with
+activity messages every ten seconds while a phase is running. These are activity
+indicators, not percentages or a completion estimate. `Code updated!` is followed
+by an explicit reminder that maintenance is still pending.
+
+The live session database receives a read-only **structural** check: header,
+schema, and a limited first-table path read of the canonical session/message tables.
+This avoids traversing the complete history and every index during each update,
+particularly on network storage. A readable result is **not** a full integrity
+pass: the receipt records `level: structural`, `status: readable`, and
+`full_check: deferred`, with an explicit follow-up. Lock contention, storage
+errors, and a cooperative time budget expiring mean **incomplete**, not corrupt;
+only positive corruption evidence can enter the existing safe restore path.
+The corruption result is bound to the inspected file's metadata generation. Automatic
+recovery checks that generation again under the maintenance reservation, after epoch
+preparation, so evidence from an obsolete file cannot authorize restoring its replacement.
+Backup and restore validation retain their previous integrity policy. Missing or
+unavailable stores have explicit incomplete follow-ups; a failed profile does not
+prevent checks on its siblings. The activity indicator starts before metadata access
+and continues through any snapshot validation and recovery.
+
+Run full verification separately on a consistent, offline backup copy:
+
+```bash
+hermes sessions verify --source /path/to/offline-backup.db
+hermes sessions verify --source /path/to/offline-backup.db --budget-seconds 300 --json
+```
+
+This does not make a backup, queue a job, repair, or restore anything. Use a
+SQLite-consistent backup, not `cp` of a live database. Active profile paths (and
+their aliases), open holders, WAL-mode files and journal sidecars are refused.
+The source should be an unused copy in DELETE journal mode. Full verification
+has no size-based skip: it returns zero only for a completed `integrity_check`
+pass. Corruption or an incomplete check returns nonzero. The SQL time budget
+is cooperative; an NFS/kernel I/O wait can exceed it, so it is not a strict
+wall-clock deadline. Progress is printed unless `--json` is requested.
+
 ### Gateway downtime during an update
 
 On Linux and macOS, `hermes update` stops every gateway running from this install right before it first changes the checkout, and starts exactly that set again on the new code once the dependencies are prepared (before the web UI, TUI and Desktop builds, which can take minutes). Your bots are offline for that window: typically the git update plus the dependency sync. Before this, a gateway kept running old code while git rewrote the files under it, and any module it imported lazily in that window came from the new code.

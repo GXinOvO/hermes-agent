@@ -157,12 +157,14 @@ def _restore_auth_json(src: Path, dst: Path) -> bool:
         return False
 
 
-def _safe_restore_db(src: Path, dst: Path) -> bool:
+def _safe_restore_db(src: Path, dst: Path, *, expected_generation: list[int] | None = None) -> bool:
     """Restore only while holding the destination authority's maintenance reservation.
 
     Returns ``False``, without touching *dst*, when *src* fails the SQLite
     integrity check, when the runtime owns the profile, or when a canonical
-    ``state.db`` epoch floor cannot be proven.
+    ``state.db`` epoch floor cannot be proven. Automatic update recovery may also
+    require the checked destination generation, rechecked under the reservation
+    after epoch preparation and before publishing any snapshot pages.
     """
     from gateway.runtime_ownership import OwnershipConflict, exclusive_maintenance
     from hermes_cli.backup import verify_sqlite_integrity
@@ -177,6 +179,10 @@ def _safe_restore_db(src: Path, dst: Path) -> bool:
     try:
         with exclusive_maintenance([dst.absolute().parent, dst.resolve().parent]):
             with _restore_epoch_source(src, dst) as prepared:
+                if expected_generation is not None:
+                    from hermes_cli.state_integrity import database_generation
+                    if database_generation(dst) != expected_generation:
+                        raise OSError("Destination changed since corruption check; refusing obsolete auto-restore")
                 return _restore_db_pages(prepared, dst)
     except (OwnershipConflict, OSError, sqlite3.Error) as exc:
         logger.error("%s", exc)
