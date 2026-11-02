@@ -404,14 +404,16 @@ def _endpoint_identity(base_url: str) -> Optional[str]:
 
 def canonical_custom_identity(*, base_url: Optional[str] = None, config_provider: Optional[str] = None,
                               model: Optional[str] = None, requested: Optional[str] = None) -> Optional[str]:
-    """Recover the durable menu identity for a bare custom provider. Match a configured
-    endpoint first, then the ownership-checked managed server, then a configured model or
-    provider. Every session persistence/restore path shares this lookup."""
+    """Recover a bare custom route: keep its requested entry while it owns the endpoint;
+    otherwise prefer the entry serving the stored model on that endpoint, then its owner.
+    Every session persistence/restore path shares this lookup."""
     rp = _rp()
-    # The entry the live agent resolved (*requested*) while it still serves base_url, else its owner.
     identity = session_provider_identity("custom", requested, base_url) if base_url else "custom"
     if identity != "custom":
-        return identity
+        # An explicit group owns its credential even when siblings list the same model.
+        if identity == _clean(requested):
+            return identity
+        return routed_custom_identity(base_url, model) or identity
     identity = find_custom_provider_identity_by_model(model) if model else None
     if identity:
         return identity
