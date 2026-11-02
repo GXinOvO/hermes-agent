@@ -1369,7 +1369,13 @@ def _cmd_adopt(args):
     return cmd_adopt(args)
 
 
+def _cmd_verify(args):
+    from hermes_cli.sessions_verify import cmd_verify
+    return cmd_verify(args)
+
+
 _PRE_DB_HANDLERS = {
+    "verify": _cmd_verify,  # reads an explicit offline copy without opening the active store
     "repair": _cmd_repair, "recover": _cmd_recover, "import": _cmd_import,
     "repair-profiles": _cmd_repair_profiles,  # opens every profile's store itself
     "set-journal-mode": _cmd_set_journal_mode,  # offline: must not open the store it converts

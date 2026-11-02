@@ -65,6 +65,21 @@ it guards. `plan → snapshot → apply → restart-per-kind → verify → repo
   committed run that exits 1 is an autostash whose restore conflicted and stays parked: the
   receipt is `partial` with a `user_action`, since nothing retries what only the user can re-apply
   (#122557).
+- **Database maintenance** (`state_integrity.py`, `update_cmd_maint.py`): update-time checks
+  read the header, schema and a bounded canonical-table root path. Receipt `state_db_checks`
+  records structural/readable separately from deferred full integrity. SQLITE_BUSY, I/O
+  failures and interruption are incomplete, not evidence for an automatic restore. The
+  backup/restore validator is unchanged. `hermes sessions verify --source PATH` checks an
+  unused consistent offline copy with the full pragma and explicit nonzero incomplete
+  outcomes; it never replaces the active store. Cooperative budgets cannot preempt blocked
+  kernel I/O. `update_progress.maintenance_stage` mirrors elapsed-time activity to CLI and
+  the existing Desktop stage publisher and stops its heartbeat on normal/exceptional exit.
+  Publish before metadata access, retain the activity owner through recovery, and record
+  missing/unavailable stores with incomplete follow-ups. Profile boundaries isolate snapshot
+  exceptions without weakening epoch checks. Corrupt outcomes carry a metadata generation;
+  automatic recovery passes it to `backup_restore._safe_restore_db` for a final check inside
+  `exclusive_maintenance` after epoch preparation, before publication. The optional guard
+  leaves other restore callers' validator and authority behavior unchanged.
 - **Report**: every run writes a machine-readable receipt to the ROOT home's
   `logs/update_receipts/` (never a sticky profile's; `update.log` likewise) — `latest.json` pointer;
   steps, skips WITH reasons, restart outcome, plan, fleet snapshot, `followups`. The receipt is on

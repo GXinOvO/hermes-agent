@@ -413,7 +413,8 @@ def _print_update_summary(*, node_failures: list, desktop_build_ok: bool, pre_up
     stop_for_relaunch()
 
 
-def _restore_state_db_from_snapshot(state_path: Path, snap_state: Path) -> bool:
+def _restore_state_db_from_snapshot(state_path: Path, snap_state: Path, *,
+                                    expected_generation: list[int] | None = None) -> bool:
     """Restore through backup's authority reservation and pre-publication epoch floor.
 
     Use the single-database primitive, not whole-profile restore: post-update config
@@ -425,7 +426,8 @@ def _restore_state_db_from_snapshot(state_path: Path, snap_state: Path) -> bool:
     snap_state.stat()  # Preserve the caller's OSError reporting for missing snapshots.
     if not verify_sqlite_integrity(snap_state, check_header=True, run_pragma=True).get("valid"):
         return False
-    if not _safe_restore_db(snap_state, state_path):
+    guard = {"expected_generation": expected_generation} if expected_generation is not None else {}
+    if not _safe_restore_db(snap_state, state_path, **guard):
         print("  ✗ Auto-restore refused or failed; state.db was not restored.")
         print("    Stop the owning runtime and close database handles before retrying.")
         print("    If the canonical runtime epoch is unreadable, do not restore in place:")
@@ -437,40 +439,65 @@ def _restore_state_db_from_snapshot(state_path: Path, snap_state: Path) -> bool:
 
 
 def _verify_and_restore_one_state_db(home: Path, *, label: str) -> None:
-    """Integrity check + auto-restore for ONE home's state.db from its newest valid snapshot.
-    Never raises: a guard that crashes the update tail is worse than what it detects."""
+    """Keep one profile's failures isolated and its entire check/recovery visible."""
+    from hermes_cli.update_progress import maintenance_stage
+    from hermes_cli.update_receipt import record_followup
+
     try:
-        from hermes_cli.backup import _quick_snapshot_root, verify_sqlite_integrity
-        state_path = home / "state.db"
-        if not state_path.exists():
-            return
-        ok = verify_sqlite_integrity(state_path, check_header=True, run_pragma=True)
-        if ok.get("valid"):
-            logger.debug("Post-update state.db integrity OK (%s): %s", label, ok.get("message"))
-            return
-        print()
-        print(f"⚠ state.db is corrupted after update ({label}): " + ok.get("message", "unknown error"))
-        snap_root = _quick_snapshot_root(home)
-        if not snap_root.exists():
-            print("  ⚠ No pre-update snapshot for this home")
-            return
-        for snap_dir in sorted((d for d in snap_root.iterdir() if d.is_dir()), reverse=True):
-            snap_state = snap_dir / "state.db"
-            if not snap_state.exists():
-                continue
-            if not verify_sqlite_integrity(snap_state, check_header=True, run_pragma=True).get("valid"):
-                continue
-            try:
-                if _restore_state_db_from_snapshot(state_path, snap_state):
-                    print(f"  ✓ Auto-restored from snapshot {snap_dir.name} ({label})")
-                else:
-                    print("  ✗ Auto-restore did not complete; see the restore diagnostic above.")
-            except OSError as exc:
-                print(f"  ✗ Auto-restore file copy failed: {exc}")
-            return
-        print("  ⚠ No valid pre-update snapshot found for this home")
+        # Publish before the first metadata read; NFS stat/exists may block too.
+        with maintenance_stage(f"Checking state.db header/schema and recovery ({label})"):
+            _check_and_restore_one_state_db(home, label=label)
     except Exception as exc:
-        logger.debug("Post-update state.db guard (%s) failed: %s", label, exc)
+        # Preserve cancellation (BaseException); isolate untrusted snapshot
+        # failures such as an invalid epoch so later profiles are still checked.
+        logger.debug("state.db maintenance incomplete for %s", label, exc_info=True)
+        record_followup("state_db_check", f"{label}: check/restore incomplete: {exc}",
+                        retry="inspect this profile's storage/snapshot; other profiles are checked separately")
+        print(f"  ⚠ state.db maintenance incomplete ({label}): {exc}", flush=True)
+
+
+def _check_and_restore_one_state_db(home: Path, *, label: str) -> None:
+    from hermes_cli.backup import _quick_snapshot_root, verify_sqlite_integrity
+    from hermes_cli.state_integrity import check_database
+    from hermes_cli.update_receipt import record_fact, record_followup, _current
+
+    state_path = home / "state.db"
+    ok = check_database(state_path)
+    current = _current.get()
+    checks = list(current.data.get("state_db_checks", [])) if current is not None else []
+    checks.append({"profile": label, **ok})
+    record_fact("state_db_checks", checks)
+    if "size_bytes" in ok:
+        print(f"  state.db size ({label}): {ok['size_bytes'] / (1024 ** 2):.1f} MiB", flush=True)
+    if ok["status"] == "readable":
+        print(f"  ✓ state.db header/schema readable ({label}, {ok['elapsed_seconds']:.1f}s)", flush=True)
+        record_followup("state_db_full_check", f"{label}: full integrity check deferred; data/index pages not fully checked",
+                        retry="run `hermes sessions verify --source <offline-backup.db>` separately")
+        return
+    if ok["status"] != "corrupt":
+        record_followup("state_db_check", f"{label}: check incomplete: {ok['message']}; no restore attempted",
+                        retry="check storage/locks and retry; incomplete does not mean corrupt")
+        return
+    print()
+    print(f"⚠ state.db is corrupted after update ({label}): " + ok.get("message", "unknown error"))
+    snap_root = _quick_snapshot_root(home)
+    if not snap_root.exists():
+        print("  ⚠ No pre-update snapshot for this home")
+        return
+    for snap_dir in sorted((d for d in snap_root.iterdir() if d.is_dir()), reverse=True):
+        snap_state = snap_dir / "state.db"
+        if not snap_state.exists():
+            continue
+        if not verify_sqlite_integrity(snap_state, check_header=True, run_pragma=True).get("valid"):
+            continue
+        if _restore_state_db_from_snapshot(state_path, snap_state, expected_generation=ok["generation"]):
+            print(f"  ✓ Auto-restored from snapshot {snap_dir.name} ({label})")
+        else:
+            record_followup("state_db_restore", f"{label}: auto-restore refused or incomplete; no successful restore recorded",
+                            retry="inspect the restore diagnostic and current database before retrying")
+            print("  ✗ Auto-restore did not complete; see the restore diagnostic above.")
+        return
+    print("  ⚠ No valid pre-update snapshot found for this home")
 
 
 def _verify_and_restore_state_dbs_post_update() -> None:
@@ -976,10 +1003,12 @@ def _run_post_update_maintenance(
     runtime withholds success (and is reported) but is not tail work.
     """
     from hermes_cli.update_receipt import record_followup
+    from hermes_cli.update_progress import maintenance_stage
 
     def owed_step(name, run):
         try:
-            run()
+            with maintenance_stage(name.replace("_", " ")):
+                run()
         except (Exception, SystemExit) as exc:  # health: allow BLE001 -- the code is committed; retry later
             reason = str(exc) or type(exc).__name__
             record_followup(name, reason)
@@ -1022,8 +1051,9 @@ def _run_post_update_maintenance(
     try:
         from hermes_cli.gitlock import fetch_full_commit_graph
         from hermes_cli.update_cmd import _no_prompt_git_kwargs
-        if fetch_full_commit_graph(Path(_m().PROJECT_ROOT), **_no_prompt_git_kwargs()):
-            print("  ✓ Fetched release history (commits only) for version identity")
+        with maintenance_stage("Refreshing release history"):
+            if fetch_full_commit_graph(Path(_m().PROJECT_ROOT), **_no_prompt_git_kwargs()):
+                print("  ✓ Fetched release history (commits only) for version identity")
     except (OSError, subprocess.SubprocessError) as exc:
         detail = (getattr(exc, "stderr", None) or str(exc)).strip().splitlines()[-1:] or [type(exc).__name__]
         print(f"  ⚠ Could not refresh release history ({detail[0]}); the version label may be stale or unknown until the next update")
@@ -1047,7 +1077,8 @@ def _run_post_update_maintenance(
     with _best_effort('Skills sync during update failed: %s'):
         print()
         print("→ Syncing bundled skills...")
-        _print_bundled_skills_sync_report()
+        with maintenance_stage("Syncing bundled skills"):
+            _print_bundled_skills_sync_report()
 
     owed_step("profile_sync", _sync_profiles_after_update)
 
@@ -1055,6 +1086,9 @@ def _run_post_update_maintenance(
         assume_yes=assume_yes, gateway_mode=gateway_mode, pre_update_snapshot_id=pre_update_snapshot_id,
     ))
 
+    with _best_effort('Post-update notices failed: %s'):
+        with maintenance_stage("Post-update tools and notices"):
+            _print_post_update_notices_and_self_heals()
     print()
     update_complete = _print_verified_update_completion(completion_message or _update_complete_message(pre_update_version))
     # A multi-profile host whose gateway came back standalone on a guard says so here too — the
@@ -1064,8 +1098,6 @@ def _run_post_update_maintenance(
         for line in [*consume_rewritten_notice(), *recorded_standalone_warning_lines()]:
             print(line)
 
-    with _best_effort('Post-update notices failed: %s'):
-        _print_post_update_notices_and_self_heals()
     # A non-✓ completion message (parked local changes) withholds success on its own; only a
     # ✓ message that still came back False is the SQLite verdict.
     if not update_complete and (completion_message or "✓").startswith("✓"):
