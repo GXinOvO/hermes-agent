@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-agent.nousresearch.com/schemas/delegation-output-material.json",
+  "title": "Delegated result material contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "artifacts", "findings", "checks", "remaining"],
+  "description": "Structure and material only. Passing it does not prove file semantics, command truth or business acceptance.",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["pass", "partial", "blocked", "fail"]},
+    "summary": {"type": "string", "minLength": 1},
+    "artifacts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "evidence", "limit"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1},
+          "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "limit": {"type": "string"}
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code", "receipt"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "exit_code": {"type": "integer"},
+          "receipt": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "remaining": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}
