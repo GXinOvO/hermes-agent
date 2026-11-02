@@ -61,7 +61,11 @@ as a module name and fails; use `runpy.run_path`.
   it cannot remove its fields or weaken its types. Use the original consumer for
   unrelated output shapes instead of forcing every task into this template.
 - Relative artifact and receipt paths resolve from `--base-dir`, or the result
-  file's directory by default.
+  file's directory by default. Keep `checks[].receipt` as a filesystem path only;
+  put JSON indexes, line references and explanatory prose in the report. The
+  checker treats the entire string as a literal path. Preserve a rejected
+  original result and record any parent-side resolution separately; do not
+  rewrite the child's output to claim its material check passed.
 
 The script rejects missing or false native validation, non-pass/remaining work,
 missing or empty declared/required files, failing reported commands and missing
