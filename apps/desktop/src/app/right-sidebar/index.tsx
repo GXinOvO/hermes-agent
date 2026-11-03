@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { type ComponentProps, useCallback, useEffect } from 'react'
+import { type ComponentProps, useCallback, useEffect, useState } from 'react'
 
 import { TreeSkeleton } from '@/components/chat/skeletons'
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -19,6 +19,7 @@ import { $focusedWorkspaceCwd } from '@/store/session-states'
 
 import { SidebarPanelLabel } from '../shell/sidebar-label'
 
+import { FileSearchPanel } from './files/search-panel'
 import { ProjectTree } from './files/tree'
 import { useProjectTree } from './files/use-project-tree'
 
@@ -163,6 +164,7 @@ function FilesystemTab({
 }: FilesystemTabProps) {
   const { t } = useI18n()
   const r = t.rightSidebar
+  const [searchOpen, setSearchOpen] = useState(false)
 
   // No working directory (a bare/detached chat) → no tree, but keep a way back
   // into a folder (#53004): the projects paradigm removed the old folder picker,
@@ -188,6 +190,18 @@ function FilesystemTab({
         <div className="flex min-w-0 flex-1">
           <SidebarPanelLabel>{cwdName}</SidebarPanelLabel>
         </div>
+        <Tip label={r.filesSearchToggle}>
+          <Button
+            aria-label={r.filesSearchToggle}
+            aria-pressed={searchOpen}
+            className={cn(HEADER_ACTION_CLASS, searchOpen && 'bg-sidebar-accent! text-sidebar-accent-foreground!')}
+            onClick={() => setSearchOpen(open => !open)}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <Codicon name="search" size="0.8125rem" />
+          </Button>
+        </Tip>
         <Tip label={showIgnored ? r.hideIgnored : r.showIgnored}>
           <Button
             aria-label={showIgnored ? r.hideIgnored : r.showIgnored}
@@ -227,20 +241,28 @@ function FilesystemTab({
           </Button>
         </Tip>
       </RightSidebarSectionHeader>
-      <FileTreeBody
-        collapseNonce={collapseNonce}
-        cwd={cwd}
-        data={data}
-        error={error}
-        loading={loading}
-        onActivateFile={onActivateFile}
-        onActivateFolder={onActivateFolder}
-        onLoadChildren={onLoadChildren}
-        onNodeOpenChange={onNodeOpenChange}
-        onPreviewFile={onPreviewFile}
-        onRetry={onRefresh}
-        openState={openState}
-      />
+      {searchOpen ? (
+        <FileSearchPanel
+          onClose={() => setSearchOpen(false)}
+          onOpenFile={path => onPreviewFile?.(path)}
+          root={cwd}
+        />
+      ) : (
+        <FileTreeBody
+          collapseNonce={collapseNonce}
+          cwd={cwd}
+          data={data}
+          error={error}
+          loading={loading}
+          onActivateFile={onActivateFile}
+          onActivateFolder={onActivateFolder}
+          onLoadChildren={onLoadChildren}
+          onNodeOpenChange={onNodeOpenChange}
+          onPreviewFile={onPreviewFile}
+          onRetry={onRefresh}
+          openState={openState}
+        />
+      )}
     </div>
   )
 }
