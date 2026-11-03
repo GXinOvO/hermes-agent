@@ -454,7 +454,7 @@ export const zhHantChrome = {
     filesSearchPlaceholderName: '搜尋檔名',
     filesSearchPlaceholderContent: '搜尋檔案內容',
     filesSearchScope: '限定搜尋範圍',
-    filesSearchScopePlaceholder: '整個專案 —— 或 src/ 、 src/**/*.ts 、 *.py',
+    filesSearchScopePlaceholder: '整個專案，或 src/ · src/**/*.ts',
     filesSearchCase: '區分大小寫',
     filesSearchRegex: '使用正規表示式',
     filesSearchHint: '輸入關鍵字搜尋目前專案，結果會在預覽面板中開啟。',
