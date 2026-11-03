@@ -80,9 +80,8 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     body = content[end_match.end() + 3 :]
     frontmatter: dict[str, Any] = {}
     try:
-        parsed = yaml_load(yaml_content)
-        if isinstance(parsed, dict):
-            frontmatter = parsed
+        from agent.skill_metadata import parse_skill_header
+        frontmatter = parse_skill_header(yaml_content)
     except Exception:
         for line in yaml_content.strip().split("\n"):
             if ":" in line:
@@ -629,7 +628,9 @@ def get_untrusted_project_skills_root() -> Optional[tuple[Path, int]]:
 # high-confidence findings only. The scan cache lives under HERMES_HOME, never inside the repo (we don't
 # write artifacts into the user's checkout).
 _PROJECT_SCAN_SOURCE = "project-local"
-_PROJECT_QUARANTINE_CACHE: dict[str, bool] = {}  # skill_dir -> quarantined
+# Last reported verdict only, for warning suppression. Safety always goes
+# through the scanner's content-keyed cache; a directory path is not a version.
+_PROJECT_QUARANTINE_CACHE: dict[str, bool] = {}
 
 
 def is_quarantined_project_skill(skill_md) -> bool:
@@ -641,15 +642,13 @@ def is_quarantined_project_skill(skill_md) -> bool:
         key = str(skill_dir.resolve())
     except OSError:
         key = str(skill_dir)
-    if key in _PROJECT_QUARANTINE_CACHE:
-        return _PROJECT_QUARANTINE_CACHE[key]
     try:
         from tools.skills_guard import scan_skill_cached
         from hermes_constants import get_hermes_home
         cache_dir = get_hermes_home() / "cache" / "project_skill_scans"
         result, _prov = scan_skill_cached(skill_dir, source=_PROJECT_SCAN_SOURCE, cache_dir=cache_dir)
         quarantined = result.verdict == "dangerous"
-        if quarantined:
+        if quarantined and _PROJECT_QUARANTINE_CACHE.get(key) is not True:
             logger.warning("Project skill quarantined (verdict=dangerous): %s — %s", skill_dir, result.summary)
     except Exception:
         logger.warning("Project skill scan failed — quarantining (fail closed): %s", skill_dir, exc_info=True)

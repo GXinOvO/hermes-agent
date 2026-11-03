@@ -389,21 +389,11 @@ def _run_git(
     allowed_returncodes = allowed_returncodes or set()
 
     try:
-        # NUL-delimited git output contains literal filenames, not text lines.
-        text_options = {} if "-z" in args else {"text": True, "encoding": "utf-8", "errors": "replace"}
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            **text_options,
-            timeout=timeout,
-            env=env,
-            cwd=str(normalized_working_dir),
-            stdin=subprocess.DEVNULL,
-            # Checkpoints fire several bare git calls per turn from the
-            # console-less desktop/gateway backend; suppress the per-call
-            # conhost flash on Windows (no-op on POSIX).
-            creationflags=windows_hide_flags(),
-            check=False,
+        from tools.checkpoint_git import run_git_process
+
+        result = run_git_process(
+            cmd, env=env, cwd=str(normalized_working_dir), timeout=timeout,
+            nul_output="-z" in args,
         )
         ok = result.returncode == 0
         stdout = os.fsdecode(result.stdout) if "-z" in args else result.stdout.strip()
