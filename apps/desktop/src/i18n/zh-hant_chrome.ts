@@ -460,6 +460,7 @@ export const zhHantChrome = {
     filesSearchHint: '輸入關鍵字搜尋目前專案，結果會在預覽面板中開啟。',
     filesSearchNoResults: '沒有符合的結果',
     filesSearchStatus: (hits, files) => `${hits} 處符合，位於 ${files} 個檔案`,
+    filesSearchScanning: (files, hits) => `掃描中…已查 ${files} 個檔案，符合 ${hits} 處`,
     filesSearchTruncated: '僅顯示前若干筆結果',
     filesSearchInvalidPattern: error => `模式無效：${error}`,
     hideIgnored: '隱藏 gitignore 的檔案',

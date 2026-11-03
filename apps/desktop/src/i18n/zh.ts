@@ -4087,6 +4087,7 @@ export const zhOverrides = {
     filesSearchHint: '输入关键词搜索当前项目，结果在预览面板中打开。',
     filesSearchNoResults: '没有匹配结果',
     filesSearchStatus: (hits, files) => `${hits} 处匹配，位于 ${files} 个文件`,
+    filesSearchScanning: (files, hits) => `扫描中…已查 ${files} 个文件，命中 ${hits} 处`,
     filesSearchTruncated: '仅显示前若干条结果',
     filesSearchInvalidPattern: error => `模式无效：${error}`,
     previewUnavailable: '预览不可用',

@@ -1057,6 +1057,7 @@
   "rightSidebar.filesSearchHint": ["ar","de","es","fr","ja","ru"],
   "rightSidebar.filesSearchNoResults": ["ar","de","es","fr","ja","ru"],
   "rightSidebar.filesSearchStatus": ["ar","de","es","fr","ja","ru"],
+  "rightSidebar.filesSearchScanning": ["ar","de","es","fr","ja","ru"],
   "rightSidebar.filesSearchTruncated": ["ar","de","es","fr","ja","ru"],
   "rightSidebar.filesSearchInvalidPattern": ["ar","de","es","fr","ja","ru"],
   "rightSidebar.terminalCloseAll": ["ar"],

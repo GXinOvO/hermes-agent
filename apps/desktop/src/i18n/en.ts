@@ -4243,6 +4243,7 @@ export const en: Translations = {
     filesSearchHint: 'Type to search this project. Results open in the preview pane.',
     filesSearchNoResults: 'No matches',
     filesSearchStatus: (hits, files) => `${hits} result${hits === 1 ? '' : 's'} in ${files} file${files === 1 ? '' : 's'}`,
+    filesSearchScanning: (files, hits) => `Scanning… ${files} files, ${hits} matches so far`,
     filesSearchTruncated: 'showing the first matches only',
     filesSearchInvalidPattern: error => `Invalid pattern: ${error}`,
     previewUnavailable: 'Preview unavailable',

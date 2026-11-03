@@ -15,6 +15,7 @@ import {
   type FileSearchHit,
   type FileSearchMode,
   type FileSearchOutcome,
+  type FileSearchProgress,
   groupHitsByFile,
   runFileSearch
 } from './search'
@@ -103,13 +104,17 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [regex, setRegex] = useState(false)
   const [outcome, setOutcome] = useState<FileSearchOutcome | null>(null)
+  // Counts and hits from a run still in progress: a content search over a large
+  // root takes seconds, and an empty pane during that time reads as "nothing happened".
+  const [live, setLive] = useState<FileSearchProgress | null>(null)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(0)
   const [searching, setSearching] = useState(false)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  const groups = useMemo(() => (outcome ? groupHitsByFile(outcome.hits) : []), [outcome])
+  // Final hits once the walk finishes, otherwise whatever the run has found so far.
+  const groups = useMemo(() => groupHitsByFile(outcome ? outcome.hits : (live?.hits ?? [])), [outcome, live])
   const flat = useMemo(() => groups.flatMap(group => group.hits), [groups])
 
   // Row identity → position in the keyboard order, so a render does not scan the
@@ -128,6 +133,7 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
   useEffect(() => {
     if (!query.trim()) {
       setOutcome(null)
+      setLive(null)
       setError('')
       setSearching(false)
 
@@ -136,8 +142,10 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
 
     const controller = new AbortController()
     let cancelled = false
+    let lastReport = 0
 
     setSearching(true)
+    setLive(null)
 
     const timer = setTimeout(() => {
       void runFileSearch(
@@ -161,13 +169,26 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
             return { binary: result.binary, text: result.text, truncated: result.truncated }
           }
         },
-        controller.signal
+        controller.signal,
+        progress => {
+          // Progress arrives once per batch; repaint at most ~8×/s so a big walk
+          // does not re-render the list hundreds of times.
+          const now = Date.now()
+
+          if (cancelled || now - lastReport < 120) {
+            return
+          }
+
+          lastReport = now
+          setLive({ ...progress, hits: [...progress.hits] })
+        }
       )
         .then(result => {
           if (cancelled) {
             return
           }
 
+          setLive(null)
           setOutcome(result)
           setError('')
           setSelected(0)
@@ -181,6 +202,7 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
           // An invalid regex is the person's typo, not a failure: show the pattern
           // error in place of results and keep the typed query.
           setError(cause instanceof Error ? cause.message : String(cause))
+          setLive(null)
           setOutcome(null)
           setSelected(0)
           setSearching(false)
@@ -337,6 +359,12 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
         ) : null}
 
         {showEmpty ? <div className="px-2.5 py-2 text-xs text-(--ui-text-quaternary)">{r.filesSearchNoResults}</div> : null}
+
+        {searching && !outcome && live ? (
+          <div className="px-2.5 pb-1 text-[0.6875rem] text-(--ui-text-tertiary)">
+            {r.filesSearchScanning(live.filesScanned, live.hits.length)}
+          </div>
+        ) : null}
 
         {!error && outcome && outcome.hits.length > 0 ? (
           <div className="px-2.5 pb-1 text-[0.6875rem] text-(--ui-text-quaternary)">
