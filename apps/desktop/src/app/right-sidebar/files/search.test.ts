@@ -177,6 +177,34 @@ describe('runFileSearch over a real tree', () => {
     expect(out.dirsScanned).toBeLessThanOrEqual(2)
   })
 
+  it('stops reading at maxReads instead of walking every file', async () => {
+    const out = await runFileSearch(
+      { limits: { maxReads: 1 }, mode: 'content', query: 'TARGET_FIELD', root },
+      fsIo
+    )
+
+    expect(out.truncated).toBe(true)
+    // One read means at most one file can contribute hits.
+    expect(new Set(out.hits.map(hit => hit.path)).size).toBeLessThanOrEqual(1)
+  })
+
+  it('answers with what it has when the time budget is spent', async () => {
+    const out = await runFileSearch({ limits: { maxMs: 0 }, mode: 'content', query: 'TARGET_FIELD', root }, fsIo)
+
+    expect(out.truncated).toBe(true)
+    expect(out.hits).toHaveLength(0)
+  })
+
+  it('reports progress while the walk is running', async () => {
+    const seen: number[] = []
+    await runFileSearch({ mode: 'content', query: 'TARGET_FIELD', root }, fsIo, undefined, progress => {
+      seen.push(progress.filesScanned)
+    })
+
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.at(-1)).toBeGreaterThan(0)
+  })
+
   it('returns nothing for an aborted signal', async () => {
     const controller = new AbortController()
 

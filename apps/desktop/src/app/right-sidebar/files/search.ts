@@ -42,6 +42,10 @@ export interface FileSearchLimits {
   maxMatchesPerFile: number
   /** File reads in content mode. */
   maxReads: number
+  /** Wall-clock budget for the whole walk. A root can be arbitrarily large (a home
+   *  directory, a checkout with vendored trees), so the pane answers with what it
+   *  has instead of walking forever. */
+  maxMs: number
   concurrency: number
 }
 
@@ -51,6 +55,7 @@ export const DEFAULT_FILE_SEARCH_LIMITS: FileSearchLimits = {
   maxMatches: 300,
   maxMatchesPerFile: 20,
   maxReads: 1500,
+  maxMs: 15_000,
   concurrency: 6
 }
 
@@ -93,6 +98,15 @@ export interface FileSearchOutcome {
   skipped: number
   /** A limit cut the walk or the result set short. */
   truncated: boolean
+}
+
+/** Live counters for a run in progress: enough to say what it is doing, without
+ *  pretending the answer is final. */
+export interface FileSearchProgress {
+  dirsScanned: number
+  filesScanned: number
+  hits: readonly FileSearchHit[]
+  reads: number
 }
 
 const MAX_SNIPPET = 300
@@ -234,6 +248,36 @@ export interface LineMatch {
   text: string
 }
 
+/**
+ * The literal folder prefix of a scope, when it has one.
+ *
+ * A scope narrows which FILES match, but the walk must not enter folders that cannot
+ * contain them: `src/` under a home directory otherwise lists every folder in the home
+ * before finding one file. Globs contribute their leading literal segments
+ * (`src/**\/*.py` → `src`); a pattern starting with a wildcard has no prefix.
+ */
+export function scopeFolderPrefix(scope?: string): null | string {
+  const raw = toPosixPath(scope ?? '').trim()
+
+  if (!raw) {
+    return null
+  }
+
+  const segments = raw.split('/')
+  const wildcard = segments.findIndex(segment => /[*?{[]/.test(segment))
+  const head = (wildcard < 0 ? raw : segments.slice(0, wildcard).join('/')).replace(/\/+$/, '')
+
+  return head || null
+}
+
+/** Whether a folder can still contain a path inside `prefix`. */
+export function folderCouldHold(rel: string, prefix: string): boolean {
+  const folder = rel.toLowerCase()
+  const target = prefix.toLowerCase()
+
+  return target === folder || target.startsWith(`${folder}/`) || folder.startsWith(`${target}/`)
+}
+
 /** Every match in one file's text, up to `maxPerFile`, each with its 1-based line. */
 export function findLineMatches(text: string, re: RegExp, maxPerFile: number): LineMatch[] {
   const out: LineMatch[] = []
@@ -308,14 +352,24 @@ export function groupHitsByFile(hits: readonly FileSearchHit[]): Array<{ rel: st
 export async function runFileSearch(
   options: FileSearchOptions,
   io: FileSearchIo,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: FileSearchProgress) => void
 ): Promise<FileSearchOutcome> {
   const limits = resolveLimits(options.limits)
   const scope = options.scope
   const query = options.query
   const hits: FileSearchHit[] = []
+  // Reads are the expensive half of a content search: one round trip per file. The
+  // budget has to be enforced here, or a big root turns one query into tens of
+  // thousands of requests and the pane looks hung.
+  let reads = 0
 
   const outcome: FileSearchOutcome = { dirsScanned: 0, filesScanned: 0, hits, skipped: 0, truncated: false }
+
+  const report = () => onProgress?.({ dirsScanned: outcome.dirsScanned, filesScanned: outcome.filesScanned, hits, reads })
+
+  const startedAt = Date.now()
+  const outOfTime = () => Date.now() - startedAt > limits.maxMs
 
   if (!query.trim() || !options.root) {
     return outcome
@@ -324,6 +378,10 @@ export async function runFileSearch(
   const nameMode = options.mode === 'name'
   const matcher = nameMode ? compileQuery(query, { caseSensitive: options.caseSensitive, regex: options.regex }) : null
   const contentMatcher = nameMode ? null : compileQuery(query, { caseSensitive: options.caseSensitive, regex: options.regex })
+
+  // Folders outside the scope's literal prefix are never listed: that is what makes a
+  // scoped search on a huge root cheap instead of merely filtered.
+  const folderPrefix = scopeFolderPrefix(scope)
 
   const queue: string[] = [options.root]
 
@@ -338,7 +396,15 @@ export async function runFileSearch(
       break
     }
 
-    if (!nameMode && hits.length >= limits.maxMatches) {
+    // One budget for both modes: a name query on a big root can match thousands of
+    // paths, and a list that long is neither readable nor cheap to render.
+    if (hits.length >= limits.maxMatches) {
+      outcome.truncated = true
+
+      break
+    }
+
+    if (outOfTime()) {
       outcome.truncated = true
 
       break
@@ -375,7 +441,17 @@ export async function runFileSearch(
         }
 
         if (entry.isDirectory) {
-          queue.push(entry.path)
+          const dirRel = relativeToRoot(options.root, entry.path)
+
+          // `null` means the entry is not under the root (a symlinked listing): keep it
+          // out rather than walk somewhere the search was never scoped to.
+          if (dirRel === null) {
+            continue
+          }
+
+          if (!folderPrefix || folderCouldHold(dirRel, folderPrefix)) {
+            queue.push(entry.path)
+          }
 
           continue
         }
@@ -402,6 +478,12 @@ export async function runFileSearch(
           matcher!.lastIndex = 0
 
           if (matcher!.test(rel)) {
+            if (hits.length >= limits.maxMatches) {
+              outcome.truncated = true
+
+              break
+            }
+
             hits.push({ path: entry.path, rel })
           }
 
@@ -411,6 +493,8 @@ export async function runFileSearch(
         candidates.push({ path: entry.path, rel })
       }
     }
+
+    report()
 
     if (nameMode) {
       continue
@@ -429,6 +513,18 @@ export async function runFileSearch(
         break
       }
 
+      if (reads >= limits.maxReads) {
+        outcome.truncated = true
+
+        break
+      }
+
+      if (outOfTime()) {
+        outcome.truncated = true
+
+        break
+      }
+
       const slice = candidates.slice(i, i + limits.concurrency)
 
       await Promise.all(
@@ -436,6 +532,14 @@ export async function runFileSearch(
           if (hits.length >= limits.maxMatches) {
             return
           }
+
+          if (reads >= limits.maxReads) {
+            outcome.truncated = true
+
+            return
+          }
+
+          reads += 1
 
           if (hasBinaryExtension(candidate.path)) {
             outcome.skipped += 1
@@ -479,8 +583,12 @@ export async function runFileSearch(
           }
         })
       )
+
+      report()
     }
   }
+
+  report()
 
   return outcome
 }
