@@ -112,7 +112,7 @@ def test_ordinary_daemon_keeps_control_auth_and_loop_witness(tmp_path, layout):
         root = Path(__file__).resolve().parents[2]
         token = secrets.token_urlsafe(32)
         env = {key: os.environ[key] for key in ('PATH', 'LANG', 'TZ') if key in os.environ}
-        env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home),
+        env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), HERMES_DISABLE_LAZY_INSTALLS="1",
                    PYTHONPATH=str(root), PYTHONUNBUFFERED='1', HERMES_DASHBOARD_SESSION_TOKEN=token)
         if layout == 'long-temp':
             temp = tmp_path / ('t' * 120)

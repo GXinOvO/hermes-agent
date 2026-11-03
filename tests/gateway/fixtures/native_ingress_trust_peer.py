@@ -8,7 +8,7 @@ import sys
 import threading
 import traceback
 
-from shared_authority_peer import ModelPeer
+from tests.gateway.fixtures.shared_authority_peer import ModelPeer
 from tests.waiting import async_wait_until
 
 
@@ -54,7 +54,7 @@ async def probe(mode, peer):
     # Exercise the real callback which stamps the authorization home, not a synthetic runner call.
     runner._wire_adapter_handlers(adapter)
     if mode in {'multiplex', 'capture', 'recover', 'recover-again'}:
-        from native_ingress_trust_multiplex import multiplex_probe
+        from tests.gateway.fixtures.native_ingress_trust_multiplex import multiplex_probe
         await multiplex_probe(runner, authority, adapter, state, mode, peer)
         return
     source = adapter.build_source(chat_id='trust-chat', chat_type='dm', user_id='fixture-user')

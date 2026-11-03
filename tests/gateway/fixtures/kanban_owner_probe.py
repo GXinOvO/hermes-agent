@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from local_recovery_probe import daemon, websocket, rpc
+from tests.gateway.fixtures.local_recovery_probe import daemon, websocket, rpc
 
 
 class Model(BaseHTTPRequestHandler):

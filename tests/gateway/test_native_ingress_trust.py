@@ -11,7 +11,7 @@ def _probe(tmp_path, mode):
     home.mkdir(exist_ok=True)
     state.mkdir(exist_ok=True)
     env = {key: os.environ[key] for key in ('PATH', 'SYSTEMROOT', 'LANG', 'TZ') if key in os.environ}
-    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), PYTHONPATH=str(repo))
+    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), HERMES_DISABLE_LAZY_INSTALLS="1", PYTHONPATH=str(repo))
     result = subprocess.run([sys.executable, str(Path(__file__).parent / 'fixtures' /
                              'native_ingress_trust_peer.py'), mode], cwd=repo, env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=40, check=False)

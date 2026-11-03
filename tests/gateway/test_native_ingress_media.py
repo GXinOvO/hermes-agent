@@ -15,7 +15,7 @@ def _peer(tmp_path, mode):
     home.mkdir(exist_ok=True)
     state.mkdir(exist_ok=True)
     env = {key: os.environ[key] for key in ('PATH', 'SYSTEMROOT', 'LANG', 'TZ') if key in os.environ}
-    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state),
+    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), HERMES_DISABLE_LAZY_INSTALLS="1",
                PYTHONPATH=str(repo), PYTHONUNBUFFERED='1')
     return [sys.executable, str(Path(__file__).parent / 'fixtures' / 'native_ingress_media_peer.py'), mode], env, repo, state
 

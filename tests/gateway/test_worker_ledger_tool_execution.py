@@ -65,7 +65,7 @@ def test_real_tool_enabled_worker_never_opens_canonical_database(tmp_path):
         'model': {'provider': 'custom', 'default': 'worker-model', 'base_url': url},
         'auxiliary': {'title_generation': {'enabled': False}}}))
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'TZ') if key in os.environ}
-    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), PYTHONPATH=str(root),
+    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), HERMES_DISABLE_LAZY_INSTALLS="1", PYTHONPATH=str(root),
                OPENAI_API_KEY='loopback-only', OPENAI_BASE_URL=url)
     async def create(desc):
         async with websocket(home, desc) as ws:

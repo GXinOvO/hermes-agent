@@ -12,7 +12,7 @@ def _probe(tmp_path, *, advanced=False, runs=False):
     home.mkdir()
     state.mkdir()
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'TZ', 'SYSTEMROOT') if key in os.environ}
-    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), PYTHONPATH=str(repo))
+    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), HERMES_DISABLE_LAZY_INSTALLS="1", PYTHONPATH=str(repo))
     if advanced:
         env['API_ADVANCED'] = '1'
     if runs:
