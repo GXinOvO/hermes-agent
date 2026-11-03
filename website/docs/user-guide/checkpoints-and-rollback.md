@@ -52,6 +52,7 @@ CLI for inspecting and managing the store outside a session:
 | `hermes checkpoints` | Show total size, project count, per-project breakdown |
 | `hermes checkpoints status` | Same as bare `checkpoints` |
 | `hermes checkpoints list` | Alias for `status` |
+| `hermes checkpoints locks [--json]` | Inspect project index locks and their identities without scanning projects or removing locks |
 | `hermes checkpoints prune` | Force a sweep: delete orphans/stale, GC, enforce size cap |
 | `hermes checkpoints clear` | Nuke the entire checkpoint base (asks first) |
 | `hermes checkpoints clear-legacy` | Delete only the `legacy-*` archives from v1 migration |

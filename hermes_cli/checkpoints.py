@@ -58,6 +58,27 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_locks(args: argparse.Namespace) -> int:
+    from tools.checkpoint_locks import index_lock_status
+
+    info = index_lock_status()
+    if args.json:
+        import json
+        print(json.dumps(info, indent=2))
+    else:
+        print(f"Checkpoint base: {info['base']}")
+        print(f"Project index locks: {len(info['locks'])}")
+        for row in info["locks"]:
+            print(f"  {row['project_hash']}  {row['workdir'] or '(unverified project)'}")
+            print(f"    {row['lock_path']}  ownership unknown; preserved")
+        for error in info["errors"]:
+            print(f"  Error: {error}")
+        if info["locks"]:
+            print("Lock age and local process absence do not prove abandonment.")
+            print("Recovery requires writer ownership/lifetime evidence or an offline maintenance boundary.")
+    return 2 if info["errors"] else 0
+
+
 def _print_archives(archives) -> None:
     for arch in archives:
         print(f"  {arch['name']:<40}  {_fmt_bytes(arch['size_bytes']):>10}")
@@ -199,6 +220,10 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     p_list = subs.add_parser("list", help="Alias for 'status'")
     p_list.add_argument("--limit", type=int, default=20)
     p_list.set_defaults(func=cmd_status)
+
+    p_locks = subs.add_parser("locks", help="Inspect project index locks without deleting them")
+    p_locks.add_argument("--json", action="store_true", help="Print lock identities and project mappings as JSON")
+    p_locks.set_defaults(func=cmd_locks)
 
     p_prune = subs.add_parser("prune", help="Delete orphan/stale checkpoints and GC the store")
     p_prune.add_argument("--retention-days", type=int, default=7,

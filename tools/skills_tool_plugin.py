@@ -4,6 +4,7 @@ file-serving helpers shared with the local-skill path. Helpers tests patch on th
 
 import json
 import logging
+import re
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, List
@@ -20,6 +21,9 @@ _INJECTION_PATTERNS: list = [  # shared by local-skill and plugin-skill paths
     "system prompt:", "<system>", "]]>"]
 _SUPPORT_DIRS = ("references", "templates", "assets", "scripts")
 _SKILL_FILE_EXTS = {".md", ".py", ".yaml", ".yml", ".json", ".tex", ".sh"}
+_FRONTMATTER_END = re.compile(r"\n---\s*\n")
+_FRONTMATTER_READ_CHUNK = 4096
+_FRONTMATTER_READ_LIMIT = 64 * 1024
 
 
 def _json(payload: dict) -> str:
@@ -36,6 +40,24 @@ def _read_skill_text(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig", errors="replace")
 
 
+def _read_skill_frontmatter_text(path: Path) -> str:
+    """Read only through a bounded frontmatter header when one is present.
+
+    A skill with an unusually large or malformed header falls back to the
+    complete text so lookup semantics stay identical to ``_read_skill_text``.
+    """
+    text = ""
+    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        while len(text) < _FRONTMATTER_READ_LIMIT:
+            chunk = handle.read(min(_FRONTMATTER_READ_CHUNK, _FRONTMATTER_READ_LIMIT - len(text)))
+            if not chunk:
+                return text
+            text += chunk
+            if _FRONTMATTER_END.search(text):
+                return text
+    return _read_skill_text(path)
+
+
 def _truncate_description(description: str) -> str:
     if len(description) <= MAX_DESCRIPTION_LENGTH:
         return description
@@ -47,7 +69,10 @@ def _safe_frontmatter(path: Path | None = None, *, content: str | None = None) -
     Parses via ``tools.skills_tool._parse_frontmatter`` so test patches are honored."""
     from tools import skills_tool as _st
     with suppress(Exception):
-        return _st._parse_frontmatter(_read_skill_text(path) if content is None else content)[0]
+        source = content if content is not None else (
+            _read_skill_frontmatter_text(path) if path is not None else ""
+        )
+        return _st._parse_frontmatter(source)[0]
     return {}
 
 

@@ -864,8 +864,12 @@ class CheckpointManager:
         index_file = _index_path(store, dir_hash)
 
         # Stage the current tree so the name-only diff sees new files too.
-        _run_git(["add", "-A"], store, abs_dir,
-                 timeout=_GIT_TIMEOUT * 2, index_file=index_file)
+        ok_stage, _, stage_error = _run_git(
+            ["add", "-A"], store, abs_dir,
+            timeout=_GIT_TIMEOUT * 2, index_file=index_file,
+        )
+        if not ok_stage:
+            return {"success": False, "error": f"Could not stage current files: {stage_error}"}
         ok, names_out, err = _run_git(
             ["diff", "--name-only", "-z", commit_hash, "--cached"],
             store, abs_dir, index_file=index_file,
@@ -932,7 +936,7 @@ class CheckpointManager:
             from tools.checkpoint_pruning import store_lock
 
             with store_lock(_resolve_checkpoint_base()):
-                return self._take(abs_dir, reason)
+                return self._take(abs_dir, reason) is True
         except Exception as e:
             logger.debug("Checkpoint failed (non-fatal): %s", e)
             return False
@@ -1147,6 +1151,9 @@ class CheckpointManager:
         if not (store / "HEAD").exists():
             return {"success": False, "error": "No checkpoints exist for this directory"}
 
+        from tools.checkpoint_locks import refuse_locked_index
+        refuse_locked_index(store, abs_dir)
+
         ok, _, err = _run_git(
             ["cat-file", "-t", commit_hash], store, abs_dir,
         )
@@ -1265,16 +1272,16 @@ class CheckpointManager:
                     }
 
         # Take a pre-rollback snapshot so you can undo the undo.
-        self._take(abs_dir, f"pre-rollback snapshot (restoring to {commit_hash[:8]})", prune=False)
+        self._snapshot_before_restore(abs_dir, commit_hash)
 
         dir_hash = _project_hash(abs_dir)
         index_file = _index_path(store, dir_hash)
 
+        delete_targets: list[str] = []
         if restore_paths is not None:
             # Split into files present in the checkpoint (checkout) and
             # Hermes-created files absent from it (delete to restore state).
             checkout_targets: list[str] = []
-            delete_targets: list[str] = []
             for rel in restore_paths:
                 ok_in_commit, _, _ = _run_git(
                     ["cat-file", "-e", f"{commit_hash}:{rel}"],
@@ -1294,16 +1301,6 @@ class CheckpointManager:
                     kept_oversize.append(rel)
                 else:
                     delete_targets.append(rel)
-            for rel in delete_targets:
-                try:
-                    target = Path(abs_dir) / rel
-                    if target.is_file() or target.is_symlink():
-                        target.unlink()
-                except OSError as exc:
-                    logger.warning(
-                        "Safe restore: could not remove %s: %s", rel, exc,
-                    )
-                    failed_deletes.append(rel)
             if not checkout_targets:
                 ok, _stdout, err = True, "", ""
             else:
@@ -1338,6 +1335,11 @@ class CheckpointManager:
         if not ok:
             return {"success": False, "error": f"Restore failed: {err}",
                     "debug": err or None}
+
+        # A rejected checkout (including an index-lock race) must not leave
+        # agent-created files deleted before any recorded files were restored.
+        from tools.checkpoint_locks import delete_restore_paths
+        failed_deletes = delete_restore_paths(index_file, abs_dir, delete_targets)
 
         ok2, reason_out, _ = _run_git(
             ["log", "--format=%s", "-1", commit_hash], store, abs_dir,
@@ -1405,24 +1407,38 @@ class CheckpointManager:
     # Internal
     # ------------------------------------------------------------------
 
-    def _take(self, working_dir: str, reason: str, *, prune: bool = True) -> bool:
-        """Take a snapshot.  Returns True on success."""
+    def _snapshot_before_restore(self, working_dir: str, commit_hash: str) -> None:
+        from tools.checkpoint_pruning import PruneError
+
+        saved = self._take(working_dir, f"pre-rollback snapshot (restoring to {commit_hash[:8]})", prune=False)
+        if saved is None:
+            raise PruneError("Restore aborted: could not save the current files before rollback")
+
+    def _take(self, working_dir: str, reason: str, *, prune: bool = True) -> Optional[bool]:
+        """True: published; False: existing ref already matches; None: not saved."""
         store = _store_path()
 
         err = _init_store(store, working_dir)
         if err:
             logger.debug("Checkpoint store init failed: %s", err)
-            return False
+            return None
+
+        dir_hash = _project_hash(working_dir)
+        index_file = _index_path(store, dir_hash)
+        # A known obstruction cannot produce a recovery point. Refuse before
+        # walking the project or reseeding its index; never infer lock ownership
+        # from age. Git still arbitrates locks created after this preflight.
+        if os.path.lexists(str(index_file) + ".lock"):
+            logger.debug("Checkpoint blocked by existing project index lock: %s.lock", index_file)
+            return None
 
         _touch_project(store, working_dir)
 
         # Quick size guard — don't try to snapshot enormous directories
         if _dir_file_count(working_dir) > _MAX_FILES:
             logger.debug("Checkpoint skipped: >%d files in %s", _MAX_FILES, working_dir)
-            return False
+            return None
 
-        dir_hash = _project_hash(working_dir)
-        index_file = _index_path(store, dir_hash)
         ref = _ref_name(dir_hash)
 
         # Seed the per-project index from the last checkpoint, if any, so the
@@ -1461,7 +1477,7 @@ class CheckpointManager:
         )
         if not ok:
             logger.debug("Checkpoint git-add failed: %s", err)
-            return False
+            return None
 
         if self.max_file_size_mb > 0:
             self._drop_oversize_from_index(store, working_dir, index_file)
@@ -1495,7 +1511,7 @@ class CheckpointManager:
             )
             if ok_ls and not ls_out.strip():
                 logger.debug("Checkpoint skipped: empty tree in %s", working_dir)
-                return False
+                return None
 
         # Write tree from per-project index.
         ok_tree, tree_sha, err = _run_git(
@@ -1504,7 +1520,7 @@ class CheckpointManager:
         )
         if not ok_tree or not tree_sha:
             logger.debug("Checkpoint write-tree failed: %s", err)
-            return False
+            return None
 
         # A nested repository is stored as a gitlink, not its files: say so in
         # the checkpoint itself rather than only when a rollback is refused.
@@ -1530,7 +1546,7 @@ class CheckpointManager:
         )
         if not ok_commit or not new_sha:
             logger.debug("Checkpoint commit-tree failed: %s", err)
-            return False
+            return None
 
         # Update the per-project ref.
         update_args = ["update-ref", ref, new_sha]
@@ -1541,7 +1557,7 @@ class CheckpointManager:
         )
         if not ok_update:
             logger.debug("Checkpoint update-ref failed: %s", err)
-            return False
+            return None
 
         logger.debug("Checkpoint taken in %s: %s (%s)", working_dir, reason, new_sha[:8])
 
