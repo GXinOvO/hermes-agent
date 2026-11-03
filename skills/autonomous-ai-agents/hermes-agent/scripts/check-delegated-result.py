@@ -20,6 +20,8 @@ def _body(result, schema):
         return None, ["result_not_object"]
     if result.get("status") != "completed":
         errors.append("lifecycle_not_completed")
+    if result.get("truncated") is True or result.get("exit_reason") == "max_iterations":
+        errors.append("lifecycle_incomplete")
     if result.get("schema_valid") is not True:
         errors.append("schema_not_validated")
     summary = result.get("summary")
