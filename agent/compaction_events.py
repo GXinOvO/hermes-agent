@@ -13,6 +13,7 @@ hook, so plugins learn about every compaction the model will see without inferri
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import threading
 import uuid
@@ -328,6 +329,23 @@ def publish_prune(agent: Any, messages: list, pruned: list, tool_results_pruned:
     session_id = getattr(agent, "session_id", None) or ""
     turn_session_id = _turn_session_id(agent)
     if _publishes_for(agent):
+        # Keep a local, content-free receipt even when no Relay scope is available. This distinguishes a committed
+        # deterministic prune from ordinary LLM compression in the installed agent log; the Relay mark remains
+        # best-effort observability and still uses its existing target gate.
+        logger.info(
+            "proactive tool-result prune committed: %s",
+            json.dumps(
+                {
+                    "event": "prune_tool_results",
+                    "messages_after": len(pruned),
+                    "messages_before": len(messages),
+                    "session_id": session_id,
+                    "tool_results_pruned": tool_results_pruned,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
         _publish(lambda: prune_payload(
             session_id=session_id, tokens_before=estimate_messages_tokens_rough(messages),
             tokens_after=estimate_messages_tokens_rough(pruned), messages=len(pruned),
