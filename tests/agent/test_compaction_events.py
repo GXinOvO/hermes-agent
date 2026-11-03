@@ -362,6 +362,28 @@ def test_committed_proactive_prune_publishes_one_record(published):
     assert SECRET not in json.dumps(payload)
 
 
+def test_committed_proactive_prune_writes_local_content_free_observation(caplog, published):
+    with caplog.at_level(logging.INFO, logger="agent.compaction_events"):
+        msgs, pruned = _prune_after_tool_results(persist_disabled=False)
+
+    records = [
+        record for record in caplog.records
+        if record.name == "agent.compaction_events"
+        and record.getMessage().startswith("proactive tool-result prune committed: ")
+    ]
+    assert len(records) == 1
+    payload = json.loads(records[0].getMessage().split(": ", 1)[1])
+    assert payload == {
+        "event": "prune_tool_results",
+        "messages_after": len(pruned),
+        "messages_before": len(msgs),
+        "session_id": "prune-session",
+        "tool_results_pruned": payload["tool_results_pruned"],
+    }
+    assert payload["tool_results_pruned"] > 0
+    assert SECRET not in records[0].getMessage()
+
+
 def test_a_persistence_detached_fork_publishes_nothing(published):
     """A background-review fork shares the live session id but rewrites only its own transcript."""
     agent = _Agent(_compressor())
