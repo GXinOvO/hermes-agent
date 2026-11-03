@@ -4237,7 +4237,7 @@ export const en: Translations = {
     filesSearchPlaceholderName: 'Search file names',
     filesSearchPlaceholderContent: 'Search file contents',
     filesSearchScope: 'Limit the search to a folder or pattern',
-    filesSearchScopePlaceholder: 'Whole project — or src/ , src/**/*.ts , *.py',
+    filesSearchScopePlaceholder: 'Whole project, or src/ · src/**/*.ts',
     filesSearchCase: 'Match case',
     filesSearchRegex: 'Use regular expression',
     filesSearchHint: 'Type to search this project. Results open in the preview pane.',

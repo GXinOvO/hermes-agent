@@ -4081,7 +4081,7 @@ export const zhOverrides = {
     filesSearchPlaceholderName: '搜索文件名',
     filesSearchPlaceholderContent: '搜索文件内容',
     filesSearchScope: '限定搜索范围',
-    filesSearchScopePlaceholder: '整个项目 —— 或 src/ 、 src/**/*.ts 、 *.py',
+    filesSearchScopePlaceholder: '整个项目，或 src/ · src/**/*.ts',
     filesSearchCase: '区分大小写',
     filesSearchRegex: '使用正则表达式',
     filesSearchHint: '输入关键词搜索当前项目，结果在预览面板中打开。',
