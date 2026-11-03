@@ -20,6 +20,21 @@ export interface RightSidebarTranslations {
   collapseAll: string
   showIgnored: string
   hideIgnored: string
+  filesSearchToggle: string
+  filesSearchClose: string
+  filesSearchNameMode: string
+  filesSearchContentMode: string
+  filesSearchPlaceholderName: string
+  filesSearchPlaceholderContent: string
+  filesSearchScope: string
+  filesSearchScopePlaceholder: string
+  filesSearchCase: string
+  filesSearchRegex: string
+  filesSearchHint: string
+  filesSearchNoResults: string
+  filesSearchStatus: (hits: number, files: number) => string
+  filesSearchTruncated: string
+  filesSearchInvalidPattern: (error: string) => string
   previewUnavailable: string
   couldNotPreview: (path: string) => string
   noProjectTitle: string
