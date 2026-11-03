@@ -12,8 +12,8 @@ import sys
 import threading
 import time
 
-from kanban_owner_probe import Model as BaseModel
-from local_recovery_probe import daemon, websocket, rpc
+from tests.gateway.fixtures.kanban_owner_probe import Model as BaseModel
+from tests.gateway.fixtures.local_recovery_probe import daemon, websocket, rpc
 
 
 class Model(BaseModel):

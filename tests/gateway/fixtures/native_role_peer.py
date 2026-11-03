@@ -9,7 +9,7 @@ import sys
 import traceback
 from types import SimpleNamespace
 
-from shared_authority_peer import ModelPeer
+from tests.gateway.fixtures.shared_authority_peer import ModelPeer
 from tests.waiting import async_wait_until
 
 
@@ -93,7 +93,7 @@ async def probe(peer):
         runner._configure_profile_adapter(adapter, 'transport', Platform.DISCORD)
 
     if sys.argv[1] not in {'positive', 'multiplex'}:
-        from native_role_fences import fences
+        from tests.gateway.fixtures.native_role_fences import fences
         await fences(runner, authority, adapter, guild, event, peer, sys.argv[1])
         return
 

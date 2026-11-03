@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 
-from authority_controls_peer import ModelPeer
+from tests.gateway.fixtures.authority_controls_peer import ModelPeer
 
 
 async def probe(peer, target, kind):
@@ -171,7 +171,7 @@ def main():
     target.mkdir()
     (target / 'owned.txt').write_text('disposable')
     kind = sys.argv[1] if len(sys.argv) > 1 else 'approval'
-    from authority_clarify_peer import ModelPeer as ClarifyPeer
+    from tests.gateway.fixtures.authority_clarify_peer import ModelPeer as ClarifyPeer
     peer = ThreadingHTTPServer(('127.0.0.1', 0), ModelPeer if kind == 'approval' else ClarifyPeer)
     peer.requests = []
     peer.command = 'rm -r -- ' + shlex.quote(str(target))

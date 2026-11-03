@@ -14,7 +14,7 @@ import time
 import websockets
 from tests.gateway.test_normal_runtime_boot import control
 from tests.waiting import async_wait_until
-from local_recovery_probe import websocket, rpc
+from tests.gateway.fixtures.local_recovery_probe import websocket, rpc
 
 
 class Model(BaseHTTPRequestHandler):

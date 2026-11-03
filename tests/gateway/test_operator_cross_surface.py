@@ -17,7 +17,7 @@ def test_operator_cross_surface_real_auth_fifo_and_attribution(tmp_path, creator
     user.mkdir()
     # Do not inherit credentials, plugins, provider configuration, or user state.
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'TZ') if key in os.environ}
-    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home),
+    env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), HERMES_DISABLE_LAZY_INSTALLS="1",
                PYTHONPATH=str(root), PYTHONUNBUFFERED='1')
     result = subprocess.run(
         [sys.executable, str(root / 'tests/gateway/fixtures/operator_cross_surface_peer.py'), creator],

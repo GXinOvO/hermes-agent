@@ -9,7 +9,7 @@ import time
 import traceback
 from http.server import ThreadingHTTPServer
 
-from shared_authority_peer import ModelPeer
+from tests.gateway.fixtures.shared_authority_peer import ModelPeer
 from tests.waiting import async_wait_until
 
 

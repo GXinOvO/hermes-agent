@@ -14,7 +14,7 @@ def test_full_observer_cannot_block_real_authority_execution(tmp_path):
     home.mkdir()
     state.mkdir()
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'TZ') if key in os.environ}
-    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state),
+    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(state), HERMES_DISABLE_LAZY_INSTALLS="1",
                PYTHONPATH=str(repo), PYTHONUNBUFFERED='1')
     result = subprocess.run(
         [sys.executable, str(Path(__file__).parent / 'fixtures' / 'authority_events_peer.py')],
