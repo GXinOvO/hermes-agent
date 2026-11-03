@@ -886,6 +886,44 @@ def iter_skill_index_files(skills_dir: Path, filename: str):
     yield from map(Path, sorted(matches))
 
 
+def iter_skill_lookup_files(skills_dir: Path, filename: str, legacy_pattern: str):
+    """Walk *skills_dir* once for modern and legacy lookup candidates.
+
+    Modern ``filename`` matches keep the pruning rules of
+    :func:`iter_skill_index_files`. Legacy markdown keeps the historical
+    recursive glob coverage, including excluded directories, so those
+    files are collected from the same walk and filtered by the caller.
+    """
+    modern: list[str] = []
+    legacy: list[str] = []
+    search_root = Path(skills_dir)
+    eligibility = {str(search_root): (True, True)}
+    for root, dirs, files in os.walk(str(search_root), followlinks=True):
+        modern_scope, legacy_scope = eligibility.pop(root, (False, False))
+        has_skill_md = "SKILL.md" in files
+        kept = []
+        for directory in dirs:
+            path = os.path.join(root, directory)
+            modern_child = modern_scope and directory not in EXCLUDED_SKILL_DIRS
+            modern_child = modern_child and not (has_skill_md and directory in SKILL_SUPPORT_DIRS)
+            # Path.rglob does not recurse into linked directories by default;
+            # the modern index does. Keep those independent discovery rules.
+            legacy_child = legacy_scope and not os.path.islink(path)
+            legacy_child = legacy_child and not (has_skill_md and directory in SKILL_SUPPORT_DIRS)
+            if modern_child or legacy_child:
+                eligibility[path] = (modern_child, legacy_child)
+                kept.append(directory)
+        dirs[:] = kept
+        for entry in files:
+            path = os.path.join(root, entry)
+            if entry == filename and modern_scope:
+                modern.append(path)
+            if entry != filename and legacy_scope and Path(path).match(legacy_pattern):
+                legacy.append(path)
+    yield from map(Path, sorted(modern))
+    yield from map(Path, sorted(legacy))
+
+
 # Namespace helpers for plugin-provided skills.
 _NAMESPACE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 

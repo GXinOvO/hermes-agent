@@ -22,9 +22,35 @@ foreign locks, an injected wait interrupt, and byte/executable-bit/symlink resto
 The wait-interrupt test exercises `_run_git` cleanup; it does not establish that CLI,
 Desktop or tool-executor cancellation reaches a synchronous checkpoint wait.
 
-Hermes never deletes index locks in this change. A pre-existing lock, a hard crash,
+Hermes never removes a pre-existing or unknown-owner index lock. A pre-existing lock, a hard crash,
 SIGKILL, or a Git that cannot run its cleanup handlers can still block later checkpoints.
 Do not infer abandonment from age or a single process/fd scan. The fault tests do not
 recover production locks, modify real project repositories, or establish a hard deadline
 for blocked filesystem I/O. Snapshot scans, staging and shared-store retention costs are
 unchanged; no successful-workload speedup is claimed.
+
+## Existing-lock preflight and diagnosis
+
+A snapshot now refuses an already present project index lock before updating project
+metadata, counting project files or reseeding the index. The shared-store operation lock
+still wraps the call, and Git still arbitrates any lock appearing after that observation.
+The return value remains false: no recovery point was created. Restore also refuses a
+known lock before inspecting or modifying working files. Safe restore checks the result
+of staging current files; a failed `git add` must not use an old index to compute a plan
+that could delete agent-created files before a subsequent checkout fails. Deletion of
+agent-created files is deferred until the checkout succeeds, so a lock appearing at
+checkout cannot cause those deletions before the failure is returned. The internal snapshot
+result distinguishes a published snapshot, an already matching saved state, and a failed
+save; restore aborts before changing working files when the safety save failed. The
+public `ensure_checkpoint` result remains boolean. The Python deletion phase acquires
+its own index lock with exclusive creation, including when there are no checkout targets,
+and releases only that exact owned lock in cleanup. Unknown locks are never removed.
+
+`hermes checkpoints locks --json` reports lock identity (`device`, `inode`, size and
+nanosecond timestamps) and the project mapping when its metadata matches the project
+hash. It performs no Git command, project traversal or lock removal. Malformed or
+symlink metadata cannot authorize a mapping; missing ownership information stays
+`unknown`, with `recovery_allowed: false`. This is a point-in-time observation, not an
+exclusive lease or a proof that a lock was abandoned. An offline maintenance boundary
+covering all store writers, or trustworthy writer ownership/lifetime evidence bound to
+the exact lock generation, is still required before legacy-lock recovery.

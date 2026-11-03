@@ -1157,6 +1157,7 @@ Inspect and manage the shadow git store at `~/.hermes/checkpoints/` — the stor
 |------------|-------------|
 | `status` (default) | Show total size, project count, and per-project breakdown. Bare `hermes checkpoints` is equivalent. |
 | `list` | Alias for `status`. |
+| `locks` | Read-only project index lock diagnosis. Reports the project mapping and exact lock identity without walking working trees; ownership remains unknown and no locks are removed. |
 | `prune` | Force a cleanup sweep — delete orphan and stale projects, GC the store, enforce the size cap. Ignores the 24h idempotency marker. |
 | `clear` | Delete the entire checkpoint base. Irreversible; asks for confirmation unless `-f`. |
 | `clear-legacy` | Delete only the `legacy-<timestamp>/` archives produced by the v1→v2 migration. Exits `2` (after printing `Could not delete N archive(s)`) when any archive could not be removed, e.g. read-only git objects on Windows. |
@@ -1166,6 +1167,7 @@ Inspect and manage the shadow git store at `~/.hermes/checkpoints/` — the stor
 | Option | Subcommand | Description |
 |--------|------------|-------------|
 | `--limit N` | `status`, `list` | Max projects to list (default 20). |
+| `--json` | `locks` | Print lock identities, verified project mappings and diagnostic errors as JSON. |
 | `--retention-days N` | `prune` | Drop projects whose `last_touch` is older than N days (default 7). |
 | `--max-size-mb N` | `prune` | After the orphan/stale pass, drop the oldest commit per project until total store size ≤ N MB (default 500). |
 | `--keep-orphans` | `prune` | Skip deleting projects whose working directory no longer exists. |

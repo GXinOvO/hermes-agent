@@ -23,7 +23,8 @@ from tools.skills_tool_setup import (
     _get_required_environment_variables, _is_env_var_persisted, _is_remote_env_backend)
 from tools.skills_tool_plugin import (
     MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, _INJECTION_PATTERNS, _fail, _json,
-    _mark_background_review_read, _preprocess_skill, _read_skill_text, _safe_frontmatter,
+    _mark_background_review_read, _preprocess_skill, _read_skill_text,
+    _safe_frontmatter,
     _serve_plugin_skill, _serve_skill_file, _truncate_description)
 from tools.skills_tool_dedup import dedup_skill_view, reset_skill_view_dedup
 from tools.skill_provenance import is_background_review
@@ -387,7 +388,7 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
     recursive by dir / frontmatter name, legacy flat <name>.md), deduped by resolved path.
     Every copy is returned so the caller resolves them via ``agent.skill_utils.pick_skill_candidate``
     (cross-tier precedence; a same-tier tie of different skills is refused, never guessed)."""
-    from agent.skill_utils import iter_skill_index_files
+    from agent.skill_utils import iter_skill_lookup_files
     candidates: list[tuple[Optional[Path], Path]] = []
     seen_md: set = set()
 
@@ -410,18 +411,17 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
     for search_dir in all_dirs:
         for direct in filter(None, (name, local_category_name)):  # "p:x" with no plugin p → "p/x"
             _record_direct(search_dir / direct, search_dir)
-        # Recursive by directory name plus frontmatter `name:` — skills_list()
-        # exposes the frontmatter name, so skill_view(name) must accept it too.
-        for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
-            if (found_skill_md.parent.name == name
-                    or _safe_frontmatter(found_skill_md).get("name") == name):
-                _record(found_skill_md.parent, found_skill_md)
-        # Legacy flat <name>.md anywhere under the dir. Markdown owned by an ancestor
-        # directory skill loads through file_path and must not shadow a real skill.
-        for found_md in search_dir.rglob(f"{name}.md"):
-            if (found_md.name != "SKILL.md" and not _is_skill_support_path(found_md)
-                    and not _is_package_owned_markdown(found_md, search_dir)):
-                _record(None, found_md)
+        # Modern frontmatter and legacy flat <name>.md candidates come from
+        # one traversal. Markdown owned by an ancestor directory skill loads
+        # through file_path and must not shadow a real skill.
+        for found_path in iter_skill_lookup_files(search_dir, "SKILL.md", f"{name}.md"):
+            if found_path.name == "SKILL.md":
+                if (found_path.parent.name == name
+                        or _safe_frontmatter(found_path).get("name") == name):
+                    _record(found_path.parent, found_path)
+            elif (not _is_skill_support_path(found_path)
+                  and not _is_package_owned_markdown(found_path, search_dir)):
+                _record(None, found_path)
     return candidates
 
 
