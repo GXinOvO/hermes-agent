@@ -26,8 +26,9 @@ Hermes never removes a pre-existing or unknown-owner index lock. A pre-existing 
 SIGKILL, or a Git that cannot run its cleanup handlers can still block later checkpoints.
 Do not infer abandonment from age or a single process/fd scan. The fault tests do not
 recover production locks, modify real project repositories, or establish a hard deadline
-for blocked filesystem I/O. Snapshot scans, staging and shared-store retention costs are
-unchanged; no successful-workload speedup is claimed.
+for blocked filesystem I/O. Snapshot scans, staging and shared-store retention costs were
+outside the timeout-lifecycle repair; no successful-workload speedup is claimed
+for that repair.
 
 ## Existing-lock preflight and diagnosis
 
@@ -54,3 +55,19 @@ symlink metadata cannot authorize a mapping; missing ownership information stays
 exclusive lease or a proof that a lock was abandoned. An offline maintenance boundary
 covering all store writers, or trustworthy writer ownership/lifetime evidence bound to
 the exact lock generation, is still required before legacy-lock recovery.
+
+## Directory scan I/O
+
+`tools/checkpoint_scan.py` lists each real directory once for the project-entry
+limit and store-size accounting. Counts still include hidden entries, directories
+and links, and stop once the existing entry limit is exceeded. Size accounting
+reads regular-file metadata once, includes regular-file symlink targets, and does
+not descend through directory symlinks. Unreadable subtrees and vanished entries
+remain best-effort; no scan result is cached between calls. Entries stream without
+materializing a complete directory, so the entry limit stops reading a wide directory
+as soon as it is exceeded. Directory handles close on normal completion, early
+termination and interruption.
+
+This change does not alter Git index reseeding, staging, snapshot publication,
+retention limits or GC scheduling. Reduced directory/metadata I/O does not itself
+establish a speedup for an entire agent development task.

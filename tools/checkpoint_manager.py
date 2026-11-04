@@ -723,30 +723,16 @@ def _pre_v2_shadow_repos(base: Path) -> list[dict]:
 
 def _dir_file_count(path: str) -> int:
     """Quick file count estimate (stops early if over _MAX_FILES)."""
-    count = 0
-    try:
-        for _ in Path(path).rglob("*"):
-            count += 1
-            if count > _MAX_FILES:
-                return count
-    except (PermissionError, OSError):
-        pass
-    return count
+    from tools.checkpoint_scan import file_count
+
+    return file_count(path, _MAX_FILES)
 
 
 def _dir_size_bytes(path: Path) -> int:
     """Best-effort recursive size in bytes.  Returns 0 on error."""
-    total = 0
-    try:
-        for p in path.rglob("*"):
-            try:
-                if p.is_file():
-                    total += p.stat().st_size
-            except OSError:
-                continue
-    except OSError:
-        pass
-    return total
+    from tools.checkpoint_scan import dir_size_bytes
+
+    return dir_size_bytes(path)
 
 
 # ---------------------------------------------------------------------------
