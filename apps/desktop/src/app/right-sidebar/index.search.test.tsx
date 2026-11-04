@@ -16,6 +16,13 @@ import { RightSidebarPane } from './index'
  * mounts it, which is where a missing/incorrect toggle would show up as "clicking
  * does nothing".
  */
+vi.mock('@/lib/desktop-search', () => ({
+  searchDesktopFiles: vi.fn(async (_request, { onFrame }) => {
+    onFrame({ type: 'batch', hits: [{ path: '/repo/src/app.py', rel: 'src/app.py' }] })
+    onFrame({ type: 'done', truncated: false, warnings: [], elapsedMs: 1 })
+  })
+}))
+
 const readDir = vi.fn<(path: string) => Promise<HermesReadDirResult>>()
 const readFileText = vi.fn<(path: string) => Promise<HermesReadFileTextResult>>()
 

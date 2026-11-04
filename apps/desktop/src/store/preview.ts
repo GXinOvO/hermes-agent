@@ -2,11 +2,13 @@ import { randomUuid } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
 import { dismissTreePane, isPaneVisible } from '@/components/pane-shell/tree/store'
+import type { DesktopFsSessionScope } from '@/lib/desktop-fs'
 import {
   capturePreviewAnnotateDestination,
   clearPreviewAnnotateDestination,
   rememberPreviewAnnotateDestination
 } from '@/lib/preview-annotate/handoff'
+import type { PreviewLocation } from '@/lib/preview-location'
 import { readJson, writeKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
@@ -58,9 +60,14 @@ export interface PreviewTarget {
    * `url` is an id into the artifact registry, which owns the content. They
    * are what lets the rail preview generated HTML the workspace never saw. */
   kind: 'artifact' | 'file' | 'url'
+  /** Captured search file authority, preserved across preview reads and saves. */
+  fileScope?: DesktopFsSessionScope
   label: string
   large?: boolean
   language?: string
+  /** One-shot source navigation; never restored with the tab. */
+  location?: PreviewLocation
+  locationRequestId?: number
   mimeType?: string
   path?: string
   /** `directory`/`missing` are typed non-previewable results from main-process
@@ -239,7 +246,9 @@ function persistTabs() {
     TABS_STORAGE_KEY,
     Object.keys(buckets).length === 0
       ? null
-      : JSON.stringify(buckets, (key, value) => (key === 'dataUrl' ? undefined : value))
+      : JSON.stringify(buckets, (key, value) =>
+          key === 'dataUrl' || key === 'location' || key === 'locationRequestId' ? undefined : value
+        )
   )
 }
 
@@ -879,12 +888,18 @@ function browserTabId(tabs: readonly PreviewTab[]): RightRailTabId {
  *  the mode the tab is already in, so refreshing the target never undoes a
  *  user's Source pick. */
 function withRenderMode(target: PreviewTarget, existing?: PreviewTarget): PreviewTarget {
+  if (target.kind === 'file' && target.location) {
+    return { ...target, locationRequestId: ++locationRequestId, renderMode: 'source' }
+  }
+
   if (target.kind !== 'file' || target.previewKind !== 'html' || target.renderMode) {
     return target
   }
 
   return { ...target, renderMode: existing?.renderMode ?? 'preview' }
 }
+
+let locationRequestId = 0
 
 /** An agent hand-over means "show the page": an HTML file opens rendered even
  *  when its tab is sitting in Source, unlike a re-open from the Files pane. */

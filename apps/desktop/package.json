@@ -134,6 +134,7 @@
     "ignore": "7.0.12",
     "katex": "0.19.0",
     "lucide-react": "0.577.0",
+    "minimatch": "10.2.6",
     "motion": "12.43.0",
     "nanostores": "1.4.2",
     "node-pty": "1.1.0",

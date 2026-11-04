@@ -35,6 +35,8 @@ export interface RightSidebarTranslations {
   filesSearchStatus: (hits: number, files: number) => string
   filesSearchScanning: (files: number, hits: number) => string
   filesSearchTruncated: string
+  filesSearchRunning: (hits: number) => string
+  filesSearchCancel: string
   filesSearchInvalidPattern: (error: string) => string
   previewUnavailable: string
   couldNotPreview: (path: string) => string

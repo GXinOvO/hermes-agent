@@ -88,6 +88,7 @@ export interface FileSearchHit {
   rel: string
   /** Matching line, trimmed to MAX_SNIPPET, content mode only. */
   text?: string
+  ranges?: { from: number; to: number }[]
 }
 
 export interface FileSearchOutcome {

@@ -1,5 +1,3 @@
-import { fileUrlToNativePath } from '@hermes/shared'
-import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import type {
   ComponentProps,
@@ -8,10 +6,9 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode
 } from 'react'
-import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown } from 'streamdown'
 
-import { getApiRequestConnection } from '@/api/client'
 import { requestComposerFocus, requestComposerInsertRefs } from '@/app/chat/composer/focus'
 import { droppedFileInlineRef } from '@/app/chat/composer/inline-refs'
 import { HERMES_PATHS_MIME } from '@/app/chat/hooks/use-composer-actions'
@@ -23,16 +20,6 @@ import { LazyShiki as ShikiHighlighter } from '@/components/chat/shiki-highlight
 import { PageLoader } from '@/components/page-loader'
 import { Tip } from '@/components/ui/tooltip'
 import { translateNow, useI18n } from '@/i18n'
-import {
-  desktopFileDiff,
-  DesktopFileMissingError,
-  desktopFsCacheKey,
-  desktopGitRoot,
-  isReadFileErrorResult,
-  readDesktopFileDataUrl,
-  readDesktopFileText,
-  writeDesktopFileText
-} from '@/lib/desktop-fs'
 import { ExternalLink } from '@/lib/external-link'
 import { Check, Pencil, X } from '@/lib/icons'
 import { createMemoizedMathPlugin } from '@/lib/katex-memo'
@@ -49,13 +36,15 @@ import {
 } from '@/lib/preview-markdown-links'
 import { previewTargetFromMarkdownHref } from '@/lib/preview-targets'
 import { cn } from '@/lib/utils'
-import { markPreviewTabMissing, openPreview, type PreviewTarget } from '@/store/preview'
+import { openPreview, type PreviewTarget } from '@/store/preview'
 import { setPreviewDirty } from '@/store/preview-edit'
-import { $connection, $currentCwd } from '@/store/session'
-import { notifyWorkspaceChanged } from '@/store/workspace-events'
+import { $currentCwd } from '@/store/session'
+
+import { usePreviewFileEdit } from './preview-file-edit'
+import { useLocalPreviewLoad } from './preview-file-load'
+import { localPreviewMode, previewLocationUnavailable } from './preview-file-navigation'
 
 const SHIKI_THEME = { dark: 'github-dark-default', light: 'github-light-default' } as const
-const TEXT_PREVIEW_MAX_BYTES = 512 * 1024
 const SOURCE_CHUNK_LINES = 200
 const SOURCE_LINE_PX = 20
 const SOURCE_OVERSCAN_LINES = 400
@@ -163,22 +152,6 @@ export function PreviewEmptyState({
   )
 }
 
-interface LocalPreviewState {
-  binary?: boolean
-  byteSize?: number
-  dataUrl?: string
-  /** Working-tree-vs-HEAD unified diff, when the file has uncommitted changes. */
-  diff?: string
-  error?: string
-  language?: string
-  /** The read confirmed the file is gone (not a transient failure) — renders
-   *  the explicit tombstone and prunes the tab from future restores. */
-  missing?: boolean
-  text?: string
-  loading: boolean
-  truncated?: boolean
-}
-
 // True when focus is in a field that should swallow plain keystrokes (so the
 // bare-`e` edit shortcut never fires while the user is typing in the composer,
 // a search box, or the editor itself).
@@ -190,20 +163,6 @@ function isTypableElement(el: Element | null): boolean {
   const tag = el.tagName
 
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable
-}
-
-function fileEditScopeKey() {
-  // The REST wrapper has its own routing authority. Include it while the
-  // resolved connection descriptor is catching up with an activation.
-  return JSON.stringify([desktopFsCacheKey(), getApiRequestConnection()])
-}
-
-function filePathForTarget(target: PreviewTarget) {
-  if (target.path) {
-    return target.path
-  }
-
-  return fileUrlToNativePath(target.url) ?? target.url
 }
 
 function formatBytes(bytes: number | undefined) {
@@ -221,26 +180,6 @@ function formatBytes(bytes: number | undefined) {
   }
 
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
-}
-
-function looksBinaryBytes(bytes: Uint8Array) {
-  if (!bytes.length) {
-    return false
-  }
-
-  let suspicious = 0
-
-  for (const byte of bytes.slice(0, 4096)) {
-    if (byte === 0) {
-      return true
-    }
-
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
-      suspicious += 1
-    }
-  }
-
-  return suspicious / Math.min(bytes.length, 4096) > 0.12
 }
 
 function dataUrlToBlob(dataUrl: string) {
@@ -280,40 +219,6 @@ function dataUrlToBlob(dataUrl: string) {
   }
 
   return new Blob([bytes], { type: 'application/pdf' })
-}
-
-async function readTextPreview(filePath: string, sessionId?: string) {
-  try {
-    return await readDesktopFileText(filePath, { sessionId })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-
-    if (!message.includes("No handler registered for 'hermes:readFileText'")) {
-      throw error
-    }
-  }
-
-  // Back-compat for a running Electron process whose preload hasn't been
-  // restarted since readFileText was added. readFileDataUrl already existed.
-  const dataUrl = await window.hermesDesktop.readFileDataUrl(filePath)
-
-  if (isReadFileErrorResult(dataUrl)) {
-    throw new Error(dataUrl.message || `File read failed: ${dataUrl.error}`)
-  }
-
-  const [, metadata = '', data = ''] = dataUrl.match(/^data:([^,]*),(.*)$/) || []
-  const base64 = metadata.includes(';base64')
-  const mimeType = metadata.replace(/;base64$/, '') || undefined
-  const raw = base64 ? atob(data) : decodeURIComponent(data)
-  const bytes = Uint8Array.from(raw, ch => ch.charCodeAt(0))
-
-  return {
-    binary: looksBinaryBytes(bytes),
-    byteSize: bytes.byteLength,
-    mimeType,
-    path: filePath,
-    text: new TextDecoder().decode(bytes)
-  }
 }
 
 // Lightweight markdown renderer for file previews. Streamdown does the parse;
@@ -758,158 +663,69 @@ export function LocalFilePreview({
   target: PreviewTarget
 }) {
   const { t } = useI18n()
-  const [state, setState] = useState<LocalPreviewState>({ loading: true })
   const [forcePreview, setForcePreview] = useState(false)
   const [pdfError, setPdfError] = useState<string>()
   const [pdfUrl, setPdfUrl] = useState<string>()
   // User-picked view; null = auto (diff when changed, else rendered markdown,
   // else source). Reset when the previewed file changes.
   const [userMode, setUserMode] = useState<null | PreviewViewMode>(null)
-  // Spot-editor state. The editor owns its buffer (keyed by `editorKey`); the
-  // live draft + the snapshot the user started from live in refs so typing
-  // never re-renders this (large) component — `dirty` is the only render-worthy
-  // signal and it flips just once when crossing the clean↔dirty boundary.
-  // `selfReload` re-runs the load after a save without the parent.
-  const [editing, setEditing] = useState(false)
-  const draftRef = useRef('')
-  const baselineRef = useRef('')
-  const editorScopeRef = useRef('')
-  const [dirty, setDirty] = useState(false)
-  const [editorKey, setEditorKey] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<null | string>(null)
-  const [conflict, setConflict] = useState(false)
+  const [revealedLocation, setRevealedLocation] = useState<PreviewTarget['locationRequestId']>()
+  const navigationPending = Boolean(target.location && target.locationRequestId !== revealedLocation)
+
+  const finishNavigation = () => {
+    setUserMode('source')
+    setRevealedLocation(target.locationRequestId)
+  }
+
   const [selfReload, setSelfReload] = useState(0)
-  // For the bare-`e` shortcut: the read-view root (to detect focus-within) and a
-  // hover flag (no state — only the keydown handler reads it).
+  // Bare-e edit shortcut reads these interaction resources, not reactive atoms.
   const readViewRef = useRef<HTMLDivElement>(null)
   const hoverRef = useRef(false)
-  const connection = useStore($connection)
-  const fsCacheKey = desktopFsCacheKey(connection)
-  const filePath = filePathForTarget(target)
-  const isImage = target.previewKind === 'image'
-  const isPdf = target.previewKind === 'pdf'
 
-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
-  useEffect(() => {
-    setUserMode(null)
-    setEditing(false)
-    setDirty(false)
-    setSaving(false)
-    setSaveError(null)
-    setConflict(false)
-    draftRef.current = ''
-    baselineRef.current = ''
-  }, [filePath, reloadKey])
-
-  // In source mode HTML files take the same path as plain text files; the
-  // pane owns the rendered (webview) mode. `previewKind === 'binary'` arrives
-  // when the file is forcibly previewed past the binary refusal screen.
-  const isText = target.previewKind === 'text' || target.previewKind === 'binary' || target.previewKind === 'html'
-
-  const blockedByTarget = !isImage && !isPdf && !forcePreview && (target.binary || target.large)
-
-  useEffect(() => {
-    let active = true
-
-    async function load() {
-      if (blockedByTarget) {
-        setState({ loading: false })
-
-        return
-      }
-
-      if (!isImage && !isPdf && !isText) {
-        setState({ loading: false })
-
-        return
-      }
-
-      setState({ loading: true })
-
-      try {
-        if (isImage || isPdf) {
-          // Prefer bytes the caller already handed us (a pasted/dropped
-          // screenshot) over re-reading a path that may be transient/unreadable.
-          const dataUrl = target.dataUrl || (await readDesktopFileDataUrl(filePath, { sessionId }))
-
-          if (active) {
-            setState({ dataUrl, loading: false })
-          }
-
-          return
-        }
-
-        const result = await readTextPreview(filePath, sessionId)
-
-        if (active) {
-          const shouldBlock = !forcePreview && (result.binary || (result.byteSize ?? 0) > TEXT_PREVIEW_MAX_BYTES)
-
-          setState({
-            binary: result.binary,
-            byteSize: result.byteSize,
-            language: result.language || target.language || 'text',
-            loading: false,
-            text: shouldBlock ? undefined : result.text,
-            truncated: result.truncated
-          })
-
-          // Best-effort: fetch the file's working-tree-vs-HEAD diff so the
-          // preview can offer a DIFF view when there are uncommitted changes.
-          // Empty (clean file / not a repo / remote) just hides the option.
-          if (!shouldBlock) {
-            try {
-              const root = await desktopGitRoot(filePath)
-              const diff = root ? await desktopFileDiff(root, filePath) : ''
-
-              if (active && diff.trim()) {
-                setState(prev => (prev.text === result.text ? { ...prev, diff } : prev))
-              }
-            } catch {
-              // No diff available; the preview just shows source.
-            }
-          }
-        }
-      } catch (error) {
-        if (active) {
-          // Expected absence (deleted / moved / cleared /tmp): tombstone the
-          // tab so the next launch drops it instead of re-probing the dead
-          // path, and show the explicit "file no longer exists" state.
-          const missing = error instanceof DesktopFileMissingError
-
-          if (missing) {
-            markPreviewTabMissing(target.url)
-          }
-
-          setState({
-            error: error instanceof Error ? error.message : String(error),
-            loading: false,
-            missing
-          })
-        }
-      }
-    }
-
-    void load()
-
-    return () => {
-      active = false
-    }
-  }, [
+  const {
     blockedByTarget,
     filePath,
-    forcePreview,
-    fsCacheKey,
     isImage,
     isPdf,
     isText,
+    navigationReady,
+    requestScope,
+    scopeKey,
+    shouldBlock,
+    state
+  } = useLocalPreviewLoad({ forcePreview, reloadKey, selfReload, sessionId, target })
+
+  const {
+    editing,
+    dirty,
+    editorKey,
+    saving,
+    saveError,
+    conflict,
+    baseline,
+    handleEditorChange,
+    beginEdit,
+    cancelEdit,
+    discardAndReload,
+    saveEdit
+  } = usePreviewFileEdit({
+    filePath,
+    scopeKey,
+    requestScope,
+    text: state.text,
     reloadKey,
-    selfReload,
-    sessionId,
-    target.dataUrl,
-    target.language,
-    target.url
-  ])
+    onReload: () => setSelfReload(value => value + 1),
+    scopeChangedMessage: t.preview.saveScopeChanged
+  })
+
+  const locationUnavailable = useMemo(
+    () => previewLocationUnavailable(state.text, state.truncated, target.location),
+    [state, target.location]
+  )
+
+  useEffect(() => {
+    setUserMode(null)
+  }, [filePath, reloadKey, scopeKey])
 
   useEffect(() => {
     setPdfUrl(undefined)
@@ -946,15 +762,6 @@ export function LocalFilePreview({
   const canEdit =
     isText && !isImage && !blockedByTarget && state.text !== undefined && !state.truncated && !state.binary
 
-  // Per-keystroke: update the draft ref (no render) and only set `dirty` when it
-  // actually changes — React bails on an identical value, so a long typing run
-  // triggers a single re-render at most.
-  const handleEditorChange = useCallback((value: string) => {
-    draftRef.current = value
-    const next = value !== baselineRef.current
-    setDirty(prev => (prev === next ? prev : next))
-  }, [])
-
   // Publish the unsaved state to the rail so the tab can show a modified dot.
   // Keyed by url; cleared on unmount/tab-change so a stale dot never lingers.
   useEffect(() => {
@@ -962,19 +769,6 @@ export function LocalFilePreview({
 
     return () => setPreviewDirty(target.url, false)
   }, [target.url, editing, dirty])
-
-  const beginEdit = () => {
-    const text = state.text ?? ''
-    editorScopeRef.current = fileEditScopeKey()
-    baselineRef.current = text
-    draftRef.current = text
-    setDirty(false)
-    setEditorKey(key => key + 1)
-    setSaving(false)
-    setSaveError(null)
-    setConflict(false)
-    setEditing(true)
-  }
 
   // Latest `beginEdit` for the keydown listener, so the listener can stay
   // subscribed across renders without recreating itself or going stale.
@@ -1013,76 +807,6 @@ export function LocalFilePreview({
 
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [canEdit, editing])
-
-  const cancelEdit = () => {
-    setEditing(false)
-    setSaveError(null)
-    setConflict(false)
-  }
-
-  const discardAndReload = () => {
-    setEditing(false)
-    setConflict(false)
-    setSaveError(null)
-    setSelfReload(n => n + 1)
-  }
-
-  const saveEdit = async (force = false) => {
-    if (saving) {
-      return
-    }
-
-    setSaving(true)
-    setSaveError(null)
-
-    // Keep the edit's owner across awaits: the FS facade routes each call via
-    // the window's current connection, which can change while validation waits.
-    const saveScope = editorScopeRef.current
-
-    const requireEditorOwner = () => {
-      if (fileEditScopeKey() !== saveScope) {
-        throw new Error(t.preview.saveScopeChanged)
-      }
-    }
-
-    try {
-      requireEditorOwner()
-
-      // Stale-on-disk guard: re-read what's on disk now and compare to the
-      // snapshot the user started from. If something changed underneath (an
-      // agent edit, an external save), don't clobber it silently — surface the
-      // choice. `force` is the user picking "overwrite" from that banner.
-      if (!force) {
-        try {
-          const current = await readTextPreview(filePath, sessionId)
-
-          if (!current.binary && (current.text ?? '') !== baselineRef.current) {
-            setConflict(true)
-            setSaving(false)
-
-            return
-          }
-        } catch {
-          // Couldn't re-read for the check — fall through and attempt the write.
-        }
-      }
-
-      // Also guards Overwrite: bypassing a content conflict never authorizes
-      // writing the same path on another connection/profile or this device.
-      requireEditorOwner()
-      await writeDesktopFileText(filePath, draftRef.current, { sessionId })
-      baselineRef.current = draftRef.current
-      setDirty(false)
-      setConflict(false)
-      setEditing(false)
-      notifyWorkspaceChanged()
-      setSelfReload(n => n + 1)
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setSaving(false)
-    }
-  }
 
   // Rendered before the loading/error branches so a background re-read (file
   // watcher, workspace tick) can't unmount the editor and drop the draft. Uses
@@ -1127,10 +851,13 @@ export function LocalFilePreview({
         <div className="min-h-0 flex-1 overflow-hidden">
           <CodeEditor
             filePath={filePath}
-            initialValue={baselineRef.current}
+            initialValue={baseline}
             key={editorKey}
+            location={navigationPending && navigationReady ? target.location : undefined}
+            locationRequestId={target.locationRequestId}
             onCancel={cancelEdit}
             onChange={handleEditorChange}
+            onLocationRevealed={finishNavigation}
             onSave={() => void saveEdit()}
           />
         </div>
@@ -1160,12 +887,7 @@ export function LocalFilePreview({
     return <PreviewEmptyState body={pdfError} primaryAction={closeAction} title={t.preview.unavailable} />
   }
 
-  if (
-    !isImage &&
-    !isPdf &&
-    !forcePreview &&
-    (target.binary || target.large || state.binary || (state.byteSize ?? 0) > TEXT_PREVIEW_MAX_BYTES)
-  ) {
+  if (shouldBlock) {
     const binary = target.binary || state.binary
     const size = target.byteSize || state.byteSize
 
@@ -1210,25 +932,14 @@ export function LocalFilePreview({
   }
 
   if (isText && state.text !== undefined) {
-    const isMarkdown = (state.language || target.language) === 'markdown'
-    const hasDiff = Boolean(state.diff && state.diff.trim())
-    // Order the toggle reads left→right; default lands on the most useful view.
-    const modes: PreviewViewMode[] = []
-
-    if (isMarkdown || onSelectRendered) {
-      modes.push('rendered')
-    }
-
-    modes.push('source')
-
-    if (hasDiff) {
-      modes.push('diff')
-    }
-
-    const autoMode: PreviewViewMode = hasDiff ? 'diff' : isMarkdown ? 'rendered' : 'source'
-    // The pane hands an HTML file over only once Source was picked; that pick
-    // outranks the diff-first default.
-    const mode = userMode && modes.includes(userMode) ? userMode : onSelectRendered ? 'source' : autoMode
+    const { mode, modes } = localPreviewMode({
+      diff: state.diff,
+      language: state.language,
+      navigationPending,
+      onSelectRendered,
+      target,
+      userMode
+    })
 
     const selectMode = (next: PreviewViewMode) => {
       if (next === 'rendered' && onSelectRendered) {
@@ -1250,7 +961,13 @@ export function LocalFilePreview({
         ref={readViewRef}
       >
         {state.truncated && (
-          <div className="border-b border-border/60 bg-muted/35 px-3 py-1.5 text-[0.68rem] text-muted-foreground">
+          <div
+            aria-label={locationUnavailable ? t.rightSidebar.previewUnavailable : undefined}
+            className="border-b border-border/60 bg-muted/35 px-3 py-1.5 text-[0.68rem] text-muted-foreground"
+            role={locationUnavailable ? 'status' : undefined}
+          >
+            {locationUnavailable &&
+              `${t.rightSidebar.previewUnavailable} · ${target.location!.line}:${target.location!.column ?? 1} · `}
             {t.preview.truncated}
           </div>
         )}
@@ -1283,6 +1000,19 @@ export function LocalFilePreview({
               fullText={state.text}
               path={filePath}
               showLineNumbers
+            />
+          ) : target.location && !navigationReady ? (
+            <PageLoader label={t.preview.loading} />
+          ) : target.location ? (
+            <CodeEditor
+              filePath={filePath}
+              initialValue={state.text}
+              key={`${filePath}:${reloadKey}:${selfReload}`}
+              location={navigationPending ? (locationUnavailable ? null : target.location) : undefined}
+              locationRequestId={target.locationRequestId}
+              onChange={() => {}}
+              onLocationRevealed={finishNavigation}
+              readOnly
             />
           ) : (
             <SourceView

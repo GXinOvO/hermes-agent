@@ -29,9 +29,46 @@ const FILES: Record<string, string> = {
   '/proj/src/deep/view.ts': '// TARGET_FIELD in ts\n'
 }
 
+let searchListener: ((event: unknown) => void) | undefined
+
 function installBridge() {
   ;(globalThis as Record<string, unknown>).hermesDesktop = {
     gitRoot: async () => null,
+    cancelFileSearch: vi.fn(async () => {}),
+    onFileSearchFrame: (listener: (event: unknown) => void) => {
+      searchListener = listener
+
+      return () => {
+        searchListener = undefined
+      }
+    },
+    searchFiles: vi.fn(
+      async ({ id, request }: { id: string; request: { mode: string; query: string; scope?: string } }) => {
+        const hits = Object.entries(FILES).flatMap(([path, text]) => {
+          if (request.scope && !path.endsWith('.py')) {
+            return []
+          }
+
+          if (request.mode === 'name') {
+            return path.includes(request.query) ? [{ path, rel: path.slice(6) }] : []
+          }
+
+          return text
+            .split('\n')
+            .flatMap((line, index) =>
+              line.includes(request.query)
+                ? [{ path, rel: path.slice(6), line: index + 1, col: line.indexOf(request.query), text: line }]
+                : []
+            )
+        })
+
+        if (hits.length) {
+          searchListener?.({ id, frame: { type: 'batch', hits } })
+        }
+
+        searchListener?.({ id, frame: { type: 'done', truncated: false, warnings: [], elapsedMs: 1 } })
+      }
+    ),
     readDir: async (path: string) => {
       const entries = TREE[path]
 
@@ -111,7 +148,9 @@ describe('FileSearchPanel', () => {
     fireEvent.change(screen.getByLabelText('Search file names'), { target: { value: 'app.py' } })
     fireEvent.click(await screen.findByRole('button', { name: 'app.py' }, { timeout: 3000 }))
 
-    expect(onOpenFile).toHaveBeenCalledWith('/proj/src/deep/app.py')
+    expect(onOpenFile).toHaveBeenCalledWith('/proj/src/deep/app.py', undefined, {
+      root: '/proj', owner: { native: true, profile: undefined }
+    })
   })
 
   it('shows content hits with their line numbers', async () => {
@@ -134,6 +173,69 @@ describe('FileSearchPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/1 result in 1 file/)).toBeTruthy(), { timeout: 3000 })
     expect(screen.queryByText('view.ts')).toBeNull()
+  })
+
+  it('passes the exact one-based content location to preview, including repeat clicks', async () => {
+    const { onOpenFile } = renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Content' }))
+    fireEvent.change(screen.getByLabelText('Search file contents'), { target: { value: 'TARGET_FIELD' } })
+    await screen.findByText(/2 results in 2 files/)
+
+    const row = window.document.querySelector<HTMLButtonElement>(
+      '[data-file-search-results] button[title="src/deep/app.py:2"]'
+    )!
+
+    expect(row).toBeTruthy()
+    fireEvent.click(row)
+    fireEvent.click(row)
+    expect(onOpenFile.mock.calls).toEqual([
+      ['/proj/src/deep/app.py', { line: 2, column: 1 }, { root: '/proj', owner: { native: true, profile: undefined } }],
+      ['/proj/src/deep/app.py', { line: 2, column: 1 }, { root: '/proj', owner: { native: true, profile: undefined } }]
+    ])
+  })
+
+  it('shows partial results before completion and does not call cancellation no-matches', async () => {
+    let release!: () => void
+    window.hermesDesktop.searchFiles = vi.fn(async ({ id }) => {
+      searchListener?.({ id, frame: { type: 'batch', hits: [{ path: '/proj/app.py', rel: 'app.py' }] } })
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      searchListener?.({ id, frame: { type: 'done', truncated: false, warnings: [], elapsedMs: 1 } })
+    })
+    renderPanel()
+    fireEvent.change(screen.getByLabelText('Search file names'), { target: { value: 'app' } })
+    expect(await screen.findByRole('button', { name: 'app.py' })).toBeTruthy()
+    expect(screen.getByText(/Searching/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop search' }))
+    expect(window.hermesDesktop.cancelFileSearch).toHaveBeenCalledOnce()
+    expect(screen.getByText(/Search incomplete/)).toBeTruthy()
+    expect(screen.queryByText('No matches')).toBeNull()
+    release()
+  })
+
+  it('reports an unavailable backend instead of no matches', async () => {
+    window.hermesDesktop.searchFiles = vi.fn(async () => {
+      throw new Error('404: Update the connected backend')
+    })
+    renderPanel()
+    fireEvent.change(screen.getByLabelText('Search file names'), { target: { value: 'app' } })
+    expect(await screen.findByText(/Update the connected backend/)).toBeTruthy()
+    expect(screen.queryByText('No matches')).toBeNull()
+  })
+
+  it('highlights the row that was clicked', async () => {
+    renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Content' }))
+    fireEvent.change(screen.getByLabelText('Search file contents'), { target: { value: 'TARGET_FIELD' } })
+    await screen.findByText(/2 results in 2 files/)
+
+    const row = window.document.querySelector<HTMLButtonElement>(
+      '[data-file-search-results] button[title="src/deep/view.ts:1"]'
+    )!
+
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-selected')).toBe('true')
   })
 
   it('reports no matches instead of an empty pane', async () => {

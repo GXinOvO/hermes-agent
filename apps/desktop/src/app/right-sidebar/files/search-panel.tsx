@@ -1,3 +1,5 @@
+import type { FileSearchMatch } from '@hermes/shared/file-search'
+import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -6,61 +8,69 @@ import { Input } from '@/components/ui/input'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
-import { readDesktopFileText } from '@/lib/desktop-fs'
+import { desktopFsCacheKey } from '@/lib/desktop-fs'
+import { searchDesktopFiles } from '@/lib/desktop-search'
+import { $fileSearchOwner, type FileSearchScope } from '@/lib/file-search-owner'
 import { cn } from '@/lib/utils'
+import { $connection } from '@/store/session'
 
-import { readProjectDir } from './ipc'
-import {
-  compileQuery,
-  type FileSearchHit,
-  type FileSearchMode,
-  type FileSearchOutcome,
-  type FileSearchProgress,
-  groupHitsByFile,
-  runFileSearch
-} from './search'
+import { $showIgnoredRoots, showsIgnoredFiles } from './prefs'
+import { compileQuery, type FileSearchHit, type FileSearchMode, groupHitsByFile } from './search'
 
 /** Typing settles before a walk starts: a search reads the filesystem, so each
  *  keystroke must not spawn its own walk. */
 const SEARCH_DEBOUNCE_MS = 220
 
 /** The matched span inside a snippet, so a result row can be scanned by eye. */
-function Highlighted({ caseSensitive, query, regex, text }: { caseSensitive: boolean; query: string; regex: boolean; text: string }) {
+function Highlighted({
+  caseSensitive,
+  query,
+  regex,
+  ranges,
+  text
+}: {
+  caseSensitive: boolean
+  query: string
+  regex: boolean
+  ranges?: { from: number; to: number }[]
+  text: string
+}) {
   const parts = useMemo(() => {
-    if (!query.trim()) {
-      return [{ hit: false, value: text }]
-    }
+    let spans = ranges
 
-    let matcher: RegExp
-
-    try {
-      matcher = compileQuery(query, { caseSensitive, regex })
-    } catch {
-      return [{ hit: false, value: text }]
+    if (!spans) {
+      try {
+        spans = Array.from(text.matchAll(compileQuery(query, { caseSensitive, regex })), match => ({
+          from: match.index,
+          to: match.index + match[0].length
+        }))
+      } catch {
+        return [{ hit: false, value: text }]
+      }
     }
 
     const out: Array<{ hit: boolean; value: string }> = []
     let last = 0
 
-    for (const match of text.matchAll(matcher)) {
-      if (!match[0]) {
-        break
+    for (const span of spans) {
+      if (span.to <= span.from) {
+        continue
       }
 
-      if (match.index > last) {
-        out.push({ hit: false, value: text.slice(last, match.index) })
+      if (span.from > last) {
+        out.push({ hit: false, value: text.slice(last, span.from) })
       }
 
-      out.push({ hit: true, value: match[0] })
-      last = match.index + match[0].length
+      out.push({ hit: true, value: text.slice(span.from, span.to) })
+      last = span.to
     }
 
     if (last < text.length) {
       out.push({ hit: false, value: text.slice(last) })
     }
 
-    return out.length > 0 ? out : [{ hit: false, value: text }]
-  }, [caseSensitive, query, regex, text])
+    return out.length ? out : [{ hit: false, value: text }]
+  }, [caseSensitive, query, ranges, regex, text])
 
   return (
     <>
@@ -77,9 +87,20 @@ function Highlighted({ caseSensitive, query, regex, text }: { caseSensitive: boo
   )
 }
 
+interface SearchOutcome {
+  scope: FileSearchScope
+  hits: FileSearchMatch[]
+  truncated: boolean
+  warnings: string[]
+}
+
+function hasSearchResults(outcome: SearchOutcome | null): outcome is SearchOutcome {
+  return outcome !== null && (outcome.hits.length > 0 || outcome.truncated)
+}
+
 interface FileSearchPanelProps {
   onClose: () => void
-  onOpenFile: (path: string) => void
+  onOpenFile: (path: string, location?: { line: number; column?: number }, scope?: FileSearchScope) => void
   root: string
 }
 
@@ -103,15 +124,21 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
   const [scope, setScope] = useState('')
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [regex, setRegex] = useState(false)
-  const [outcome, setOutcome] = useState<FileSearchOutcome | null>(null)
+  const [outcome, setOutcome] = useState<SearchOutcome | null>(null)
   // Counts and hits from a run still in progress: a content search over a large
   // root takes seconds, and an empty pane during that time reads as "nothing happened".
-  const [live, setLive] = useState<FileSearchProgress | null>(null)
+  const [live, setLive] = useState<SearchOutcome | null>(null)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(0)
   const [searching, setSearching] = useState(false)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const [searchController, setSearchController] = useState<AbortController | null>(null)
+  const connection = useStore($connection)
+  const owner = useStore($fileSearchOwner)
+  const ownerKey = `${desktopFsCacheKey(connection)}:${owner.key}`
+  useStore($showIgnoredRoots)
+  const showIgnored = showsIgnoredFiles(root)
 
   // Final hits once the walk finishes, otherwise whatever the run has found so far.
   const groups = useMemo(() => groupHitsByFile(outcome ? outcome.hits : (live?.hits ?? [])), [outcome, live])
@@ -141,69 +168,87 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
     }
 
     const controller = new AbortController()
+    setSearchController(controller)
     let cancelled = false
     let lastReport = 0
-
+    const hits: FileSearchMatch[] = []
+    let final: SearchOutcome | null = null
     setSearching(true)
     setLive(null)
+    setOutcome(null)
+    setError('')
 
     const timer = setTimeout(() => {
-      void runFileSearch(
-        { caseSensitive, mode, query, regex, root, scope },
+      const searchScope = owner.scope ? { ...owner.scope, root } : undefined
+
+      if (!searchScope) {
+        setError(owner.error)
+        setSearching(false)
+
+        return
+      }
+
+      void searchDesktopFiles(
         {
-          readDir: async dir => {
-            const result = await readProjectDir(dir, root)
-
-            return {
-              entries: (result.entries ?? []).map(entry => ({
-                isDirectory: entry.isDirectory,
-                name: entry.name,
-                path: entry.path
-              })),
-              ...(result.error ? { error: result.error } : {})
-            }
-          },
-          readText: async path => {
-            const result = await readDesktopFileText(path)
-
-            return { binary: result.binary, text: result.text, truncated: result.truncated }
-          }
+          caseSensitive,
+          mode,
+          query,
+          regex: mode === 'content' && regex,
+          root,
+          scope,
+          showIgnored,
+          maxResults: 1000,
+          timeoutMs: 15000
         },
-        controller.signal,
-        progress => {
-          // Progress arrives once per batch; repaint at most ~8×/s so a big walk
-          // does not re-render the list hundreds of times.
-          const now = Date.now()
+        {
+          scope: searchScope,
+          signal: controller.signal,
+          onFrame: frame => {
+            if (cancelled || controller.signal.aborted) {
+              return
+            }
 
-          if (cancelled || now - lastReport < 120) {
-            return
+            if (frame.type === 'error') {
+              setError(frame.message)
+              final = { scope: searchScope, hits: [...hits], truncated: true, warnings: [] }
+            } else if (frame.type === 'done') {
+              final = { scope: searchScope, hits: [...hits], truncated: frame.truncated, warnings: frame.warnings }
+            } else {
+              hits.push(...frame.hits)
+              const now = Date.now()
+
+              if (lastReport && now - lastReport < 120) {
+                return
+              }
+
+              lastReport = now
+              setLive({ scope: searchScope, hits: [...hits], truncated: false, warnings: [] })
+            }
           }
-
-          lastReport = now
-          setLive({ ...progress, hits: [...progress.hits] })
         }
       )
-        .then(result => {
-          if (cancelled) {
+        .then(() => {
+          if (cancelled || controller.signal.aborted) {
             return
           }
 
           setLive(null)
-          setOutcome(result)
-          setError('')
+
+          if (final) {
+            setOutcome(final)
+          }
+
           setSelected(0)
           setSearching(false)
         })
         .catch((cause: unknown) => {
-          if (cancelled) {
+          if (cancelled || controller.signal.aborted) {
             return
           }
 
-          // An invalid regex is the person's typo, not a failure: show the pattern
-          // error in place of results and keep the typed query.
           setError(cause instanceof Error ? cause.message : String(cause))
           setLive(null)
-          setOutcome(null)
+          setOutcome(hits.length ? { scope: searchScope, hits: [...hits], truncated: true, warnings: [] } : null)
           setSelected(0)
           setSearching(false)
         })
@@ -214,15 +259,17 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
       controller.abort()
       clearTimeout(timer)
     }
-  }, [caseSensitive, mode, query, regex, root, scope])
+  }, [caseSensitive, mode, owner, ownerKey, query, regex, root, scope, showIgnored])
 
   const openHit = useCallback(
     (hit: FileSearchHit | undefined) => {
       if (hit) {
-        onOpenFile(hit.path)
+        const scope = (outcome ?? live)?.scope
+        const location = hit.line ? { line: hit.line, column: (hit.col ?? 0) + 1 } : undefined
+        onOpenFile(hit.path, location, scope)
       }
     },
-    [onOpenFile]
+    [live, onOpenFile, outcome]
   )
 
   const handleKeyDown = useCallback(
@@ -270,7 +317,8 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
       active && 'bg-(--ui-row-active-background) text-(--ui-text-primary)'
     )
 
-  const showEmpty = Boolean(query.trim()) && !error && outcome !== null && outcome.hits.length === 0 && !searching
+  const showEmpty =
+    Boolean(query.trim()) && !error && outcome !== null && !outcome.truncated && outcome.hits.length === 0 && !searching
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-file-search="" onKeyDown={handleKeyDown}>
@@ -336,7 +384,19 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
           </Tip>
         ) : null}
         {searching ? (
-          <Codicon className="ms-auto shrink-0 text-(--ui-text-quaternary)" name="loading" size="0.75rem" spinning />
+          <Button
+            aria-label={r.filesSearchCancel}
+            className="ms-auto"
+            onClick={() => {
+              searchController?.abort()
+              setSearching(false)
+              setOutcome(live ? { ...live, truncated: true } : null)
+            }}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <Codicon name="debug-stop" size="0.75rem" />
+          </Button>
         ) : null}
       </div>
 
@@ -358,20 +418,28 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
           <div className="px-2.5 py-2 text-xs text-(--ui-text-quaternary)">{r.filesSearchHint}</div>
         ) : null}
 
-        {showEmpty ? <div className="px-2.5 py-2 text-xs text-(--ui-text-quaternary)">{r.filesSearchNoResults}</div> : null}
+        {showEmpty ? (
+          <div className="px-2.5 py-2 text-xs text-(--ui-text-quaternary)">{r.filesSearchNoResults}</div>
+        ) : null}
 
-        {searching && !outcome && live ? (
+        {searching && !outcome ? (
           <div className="px-2.5 pb-1 text-[0.6875rem] text-(--ui-text-tertiary)">
-            {r.filesSearchScanning(live.filesScanned, live.hits.length)}
+            {r.filesSearchRunning(live?.hits.length ?? 0)}
           </div>
         ) : null}
 
-        {!error && outcome && outcome.hits.length > 0 ? (
+        {!error && hasSearchResults(outcome) ? (
           <div className="px-2.5 pb-1 text-[0.6875rem] text-(--ui-text-quaternary)">
             {r.filesSearchStatus(outcome.hits.length, groups.length)}
             {outcome.truncated ? ` · ${r.filesSearchTruncated}` : ''}
           </div>
         ) : null}
+
+        {outcome?.warnings.map((warning, index) => (
+          <div className="px-2.5 py-1 text-xs text-(--ui-text-tertiary)" key={index} role="status">
+            {warning}
+          </div>
+        ))}
 
         {groups.map(group => (
           <div key={group.path}>
@@ -394,20 +462,30 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
 
               return (
                 <button
+                  aria-selected={index === selected}
                   className={cn(
                     'flex h-6 w-full items-center gap-2 px-2.5 ps-7 text-left text-xs text-(--ui-text-tertiary)',
                     'hover:bg-(--ui-row-hover-background) hover:text-(--ui-text-primary)',
                     index === selected && 'bg-(--ui-row-active-background) text-(--ui-text-primary)'
                   )}
                   key={key}
-                  onClick={() => openHit(hit)}
+                  onClick={() => {
+                    setSelected(index)
+                    openHit(hit)
+                  }}
                   title={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   type="button"
                 >
                   {hit.line ? <span className="shrink-0 text-(--ui-text-quaternary)">{hit.line}</span> : null}
                   <span className="min-w-0 flex-1 truncate">
                     {hit.text ? (
-                      <Highlighted caseSensitive={caseSensitive} query={query} regex={regex} text={hit.text} />
+                      <Highlighted
+                        caseSensitive={caseSensitive}
+                        query={query}
+                        ranges={hit.ranges}
+                        regex={regex}
+                        text={hit.text}
+                      />
                     ) : (
                       hit.rel.split('/').pop()
                     )}

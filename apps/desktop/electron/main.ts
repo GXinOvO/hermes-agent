@@ -1,8 +1,19 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
 import type { GatewayEndpoint } from './local-gateway'
-import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
-import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
+import {
+  configurePythonGatewayTicketClient,
+  createLocalGatewayDials,
+  createStaleGatewayRestarter,
+  ensureLocalGateway,
+  gatewayOwnerProfile,
+  localGatewayDial,
+  nativeGatewayHttpHeaders,
+  redialLocalGateway,
+  runGatewayEnsure,
+  runGatewayOwnerRestart
+} from './local-gateway'
+import { closeGatewayTicketBridges, createGatewayTicketResolver, ticketRuntimeFor } from './local-gateway-python'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
 configurePythonGatewayTicketClient(createGatewayTicketResolver(
@@ -44,6 +55,8 @@ import type { Session } from 'electron'
 
 import { type ActiveRuntimeState, classifyActiveRuntime } from './active-runtime-state'
 import { HERMES_API_EXPECTED_404 } from './api-expected-404'
+import { fetchPublicJsonRequest } from './api-public-json'
+import { multipartBody } from './api-request-body'
 import {
   destroyKeepaliveAgents,
   htmlResponseError,
@@ -258,6 +271,12 @@ import {
 } from './external-terminal'
 import { f12ShortcutDecision, toF12KeyboardEventPayload } from './f12-shortcut'
 import { resolveFeatureFlags } from './feature-flags'
+import { fileSearchApiRequest } from './file-search-api-request'
+import { searchNativeFiles } from './file-search-engine'
+import { streamFileSearch } from './file-search-http'
+import { registerFileSearchIpc } from './file-search-ipc'
+import { streamOauthFileSearch } from './file-search-oauth'
+import { resolveNativeSearchRg } from './file-search-rg'
 import {
   installFindShortcut,
   installFoundInPageForwarder,
@@ -5161,27 +5180,26 @@ async function ensureRuntime(
   throw new Error(`Unexpected bootstrap backend: ${backend.kind}`)
 }
 
-// Assemble a single-file multipart/form-data body (FastAPI `UploadFile`
-// endpoints, e.g. kanban attachments). Hand-rolled because node's http has no
-// FormData and the payload is one file — a dependency would be overkill.
-function multipartBody(upload) {
-  const boundary = `----hermes-${crypto.randomBytes(12).toString('hex')}`
-  const filename = String(upload.filename || 'file').replace(/["\r\n]/g, '_')
-
-  const body = Buffer.concat([
-    Buffer.from(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-        `Content-Type: ${upload.contentType || 'application/octet-stream'}\r\n\r\n`
-    ),
-    Buffer.from(upload.bytes),
-    Buffer.from(`\r\n--${boundary}--\r\n`)
-  ])
-
-  return { body, contentType: `multipart/form-data; boundary=${boundary}` }
-}
 
 function fetchJson(url, token, options: any = {}) {
+  if (options.searchStream) {
+    return (async () => {
+      const headers = options.gatewayDescriptor
+        ? await nativeGatewayHttpHeaders(options.gatewayDescriptor, url, HERMES_HOME, 'POST', options.body)
+        : { 'X-Hermes-Session-Token': token }
+
+      return streamFileSearch(url, options.body, {
+        ...options.searchStream,
+        headers: {
+          ...headersForRemoteRequest(url),
+          ...options.headers,
+          ...headers,
+          ...(options.bearer ? { Authorization: `Bearer ${options.bearer}` } : {})
+        }
+      })
+    })()
+  }
+
   // Retry policy lives in api-transport.ts: idempotent verbs retry on any
   // transient transport error; POST/PUT/DELETE only when the request provably
   // never reached the server (see shouldRetryRequest) — never double-submit.
@@ -5302,105 +5320,7 @@ function fetchJson(url, token, options: any = {}) {
 }
 
 function fetchPublicJson(url, options: any = {}) {
-  // Credential-free JSON GET/POST for public gateway endpoints
-  // (``/api/status``, ``/api/auth/providers``). Unlike ``fetchJson`` it sends
-  // NO ``X-Hermes-Session-Token`` header — used by the auth-mode probe before
-  // any credentials exist, and any time we must not leak a token to an
-  // endpoint that doesn't need one.
-  return withRetry(
-    (requestState: any) =>
-      new Promise((resolve, reject) => {
-        const body = options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body))
-        let parsed
-
-        try {
-          parsed = new URL(url)
-        } catch (error) {
-          reject(new Error(`Invalid URL: ${error.message}`))
-
-          return
-        }
-
-        const client = parsed.protocol === 'https:' ? https : http
-        const agent = jsonAgentFor(parsed.protocol)
-        const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
-
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          reject(new Error(`Unsupported Hermes backend URL protocol: ${parsed.protocol}`))
-
-          return
-        }
-
-        const req = client.request(
-          parsed,
-          {
-            agent,
-            method: options.method || 'GET',
-            headers: {
-              ...headersForRemoteRequest(url),
-              ...(options.headers || {}),
-              'Content-Type': 'application/json',
-              ...(body ? { 'Content-Length': String(body.length) } : {})
-            }
-          },
-          res => {
-            const chunks = []
-            res.on('data', chunk => chunks.push(chunk))
-            res.on('end', () => {
-              const text = Buffer.concat(chunks).toString('utf8')
-
-              if ((res.statusCode || 500) >= 400) {
-                reject(httpStatusError(res.statusCode, text, res.statusMessage))
-
-                return
-              }
-
-              if (res.statusCode >= 300) {
-                reject(htmlResponseError(url, res.statusCode, res.headers.location))
-
-                return
-              }
-
-              if (!text) {
-                resolve(null)
-
-                return
-              }
-
-              const looksHtml = /^\s*<(?:!doctype|html)/i.test(text)
-              const contentType = String(res.headers['content-type'] || '')
-
-              if (looksHtml || contentType.includes('text/html')) {
-                reject(htmlResponseError(url, res.statusCode))
-
-                return
-              }
-
-              try {
-                resolve(JSON.parse(text))
-              } catch {
-                reject(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
-              }
-            })
-          }
-        )
-
-        req.on('error', reject)
-        req.setTimeout(timeoutMs, () => {
-          req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
-        })
-
-        // Past this point the request is on the wire — see fetchJson.
-        requestState.bodySent = true
-
-        if (body) {
-          req.write(body)
-        }
-
-        req.end()
-      }),
-    { method: options.method || 'GET' }
-  )
+  return fetchPublicJsonRequest(url, options, headersForRemoteRequest)
 }
 
 function mimeTypeForPath(filePath) {
@@ -7182,6 +7102,22 @@ function openOauthLoginWindow(
 //      vouched replay-safe (`options.replayOn401`). Anything else keeps the
 //      no-replay rule of requestWithOauthFallback.
 function fetchJsonViaOauthSession(url, options: any = {}) {
+  if (options.searchStream) {
+    const sess = getOauthSessionForUrl(url)
+
+    if (!sess) {
+      return Promise.reject(new Error('OAuth session partition is unavailable'))
+    }
+
+    return streamOauthFileSearch(url, options.body, {
+      ...options.searchStream,
+      headers: { ...headersForRemoteRequest(url), ...options.headers },
+      session: sess,
+      partition: resolveOauthPartitionForUrl(url),
+      request: opts => electronNet.request(opts)
+    })
+  }
+
   const partition = resolveOauthPartitionForUrl(url)
 
   const attempt = (): Promise<unknown> =>
@@ -15188,7 +15124,14 @@ async function getJsonForBackend(descriptor, path, opts: any = {}) {
 async function fetchJsonForBackend(
   descriptor,
   path,
-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number; profileScoped?: boolean } = {}
+  opts: {
+    method?: string
+    body?: unknown
+    upload?: unknown
+    timeoutMs?: number
+    profileScoped?: boolean
+    searchStream?: any
+  } = {}
 ) {
   const url = `${descriptor.baseUrl}${path}`
 
@@ -15225,6 +15168,7 @@ async function fetchJsonForBackend(
       method: opts.method,
       body: opts.body,
       timeoutMs: opts.timeoutMs,
+      searchStream: opts.searchStream,
       headers: descriptor.headers
     }
 
@@ -15240,6 +15184,7 @@ async function fetchJsonForBackend(
     body: opts.body,
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
+    searchStream: opts.searchStream,
     headers: descriptor.headers,
     gatewayDescriptor: descriptor.gatewayEndpoint ? descriptor : undefined
   })
@@ -15959,7 +15904,8 @@ async function dispatchRegistryApiRequest(
     method: request?.method,
     body: request?.body,
     upload: request?.upload,
-    timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
+    timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS),
+    searchStream: request?.searchStream
   })
 
   desktopProfilePreferences.afterProfileRequest(registryConnectionId, request, response, connection.mode)
@@ -16059,12 +16005,14 @@ async function handleHermesApiRequest(request) {
     // Main's shared transport for every descriptor: configured headers, a native
     // gateway grant per attempt, and the OAuth bearer→cookie fallback that
     // survives refresh failures and login races (requestWithOauthFallback).
-    const send = current => fetchJsonForBackend(current, apiRoute.requestPath, {
-      method: request?.method,
-      body: request?.body,
-      upload: request?.upload,
-      timeoutMs
-    })
+    const send = current =>
+      fetchJsonForBackend(current, apiRoute.requestPath, {
+        method: request?.method,
+        body: request?.body,
+        upload: request?.upload,
+        timeoutMs,
+        searchStream: request?.searchStream
+      })
 
     response = connection.gatewayEndpoint
       ? await redialLocalGateway({
@@ -16110,7 +16058,29 @@ function formatApiRequestFailure(
   return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
 }
 
+registerFileSearchIpc({
+  ipcMain,
+  runNative: async (request, run) => {
+    const resolved = await resolveHermesBackend([])
+
+    if (!resolved.command) {
+      throw new Error('Local Hermes runtime is unavailable')
+    }
+
+    const backend = await ticketRuntimeFor({ ...resolved, command: resolved.command })
+    const rgPath = await resolveNativeSearchRg(backend, resolveHermesCwd(), run.signal)
+    await searchNativeFiles(request, { ...run, rgPath, privateHomes: [HERMES_HOME] })
+  },
+  runRemote: async (owner, request, run) => {
+    await handleHermesApiRequest(fileSearchApiRequest(owner, request, run))
+  }
+})
+
 ipcMain.handle('hermes:api', async (_event, request) => {
+  if (request?.searchStream !== undefined) {
+    throw new Error('Use the file-search channel for streamed searches')
+  }
+
   // Hold the deletion gate for BOTH profile deletes and renames: a concurrent
   // renderer reconnect entering ensureBackend() mid-mutation would otherwise
   // respawn the old-name backend and recreate its HERMES_HOME (#45474).
@@ -16494,6 +16464,7 @@ const streamThrottle = createStreamThrottle(undefined, undefined, {
   // normal idle throttling contract.
   keepFullscreenPainting: process.platform === 'linux' && linuxOzoneBackend(process.env, process.argv) === 'wayland'
 })
+
 registerStreamWorkClock(ipcMain, sender => BrowserWindow.fromWebContents(sender))
 
 function isAnyTurnInFlight() {
@@ -16520,9 +16491,11 @@ ipcMain.on('hermes:active-work', (event, payload) => {
       event.sender.off('destroyed', forget)
       event.sender.off('render-process-gone', forget)
       activeWorkByWebContents.delete(id)
+
       if (owner) {
         streamThrottle.setVoiceActive(owner, false)
       }
+
       updateStreamThrottleFromActiveWork()
     }
 
@@ -16536,9 +16509,11 @@ ipcMain.on('hermes:active-work', (event, payload) => {
   const work = normalizeActiveWork(payload)
   activeWorkByWebContents.set(id, work)
   lastActiveWorkSeen = work
+
   if (owner?.webContents === event.sender && event.senderFrame === event.sender.mainFrame) {
     streamThrottle.setVoiceActive(owner, payload?.voiceActive === true)
   }
+
   updateStreamThrottleFromActiveWork()
 })
 

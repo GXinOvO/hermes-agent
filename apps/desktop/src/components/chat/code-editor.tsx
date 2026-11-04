@@ -1,11 +1,12 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, indentOnInput, LanguageDescription } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, StateEffect, StateField } from '@codemirror/state'
 import { Decoration, drawSelection, EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { type RefObject, useEffect, useRef } from 'react'
 
 import { tryFormatJson } from '@/lib/json-format'
+import type { PreviewLocation } from '@/lib/preview-location'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/themes/context'
 
@@ -34,6 +35,7 @@ function applyFormatJson(view: EditorView, onError?: (error: string) => void): F
  *  config list focusing its block in the document). */
 export interface CodeEditorApi {
   formatJson: () => FormatOutcome
+  revealLocation: (location: PreviewLocation) => void
   setCursor: (pos: number) => void
 }
 
@@ -55,6 +57,10 @@ interface CodeEditorProps {
   // Read once at mount. To load a different file or discard edits, remount the
   // component (give it a new React `key`) rather than pushing a new value in.
   initialValue: string
+  /** An explicit request, applied once after the view is ready. */
+  location?: PreviewLocation | null
+  locationRequestId?: number
+  onLocationRevealed?: () => void
   onCancel?: () => void
   onChange: (value: string) => void
   /** Button or Mod-Shift-F. */
@@ -62,6 +68,41 @@ interface CodeEditorProps {
   /** Fires with the primary cursor offset whenever the selection moves. */
   onCursorChange?: (pos: number) => void
   onSave?: () => void
+  /** Source browsing: focus/select/scroll without permitting edits. */
+  readOnly?: boolean
+}
+
+const searchLineEffect = StateEffect.define<number | null>()
+
+const searchLine = StateField.define({
+  create: () => Decoration.none,
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes)
+
+    for (const effect of transaction.effects) {
+      if (effect.is(searchLineEffect)) {
+        next =
+          effect.value === null
+            ? Decoration.none
+            : Decoration.set([Decoration.line({ class: 'cm-hermes-search-line' }).range(effect.value)])
+      }
+    }
+
+    return next
+  },
+  provide: field => EditorView.decorations.from(field)
+})
+
+function revealLocation(view: EditorView, location: PreviewLocation) {
+  const lineNumber = Number.isFinite(location.line) ? Math.trunc(location.line) : 1
+  const line = view.state.doc.line(Math.max(1, Math.min(lineNumber, view.state.doc.lines)))
+  const column = Number.isFinite(location.column) ? Math.trunc(location.column!) : 1
+  const pos = line.from + Math.max(0, Math.min(column - 1, line.length))
+  view.dispatch({
+    effects: [searchLineEffect.of(line.from), EditorView.scrollIntoView(pos, { x: 'nearest', y: 'center' })],
+    selection: { anchor: pos }
+  })
+  view.focus()
 }
 
 // Focus treatment for the active range: a subtle wash on its lines, and
@@ -157,6 +198,10 @@ const LAYOUT_THEME = EditorView.theme({
   },
   '.cm-hermes-active-block': {
     backgroundColor: 'color-mix(in srgb, var(--dt-foreground) 5%, transparent)'
+  },
+  '.cm-hermes-search-line': {
+    backgroundColor: 'color-mix(in srgb, var(--theme-primary) 18%, transparent)',
+    boxShadow: 'inset 2px 0 var(--theme-primary)'
   }
 })
 
@@ -183,11 +228,15 @@ export function CodeEditor({
   filePath,
   highlight,
   initialValue,
+  location,
+  locationRequestId,
   onCancel,
   onChange,
   onCursorChange,
   onFormatJsonError,
-  onSave
+  onLocationRevealed,
+  onSave,
+  readOnly = false
 }: CodeEditorProps) {
   const { resolvedMode } = useTheme()
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -202,6 +251,8 @@ export function CodeEditor({
   const onFormatJsonErrorRef = useRef(onFormatJsonError)
   const onSaveRef = useRef(onSave)
   const formatJsonRef = useRef(formatJson)
+  const onLocationRevealedRef = useRef(onLocationRevealed)
+  onLocationRevealedRef.current = onLocationRevealed
   onCancelRef.current = onCancel
   onChangeRef.current = onChange
   onCursorChangeRef.current = onCursorChange
@@ -267,7 +318,14 @@ export function CodeEditor({
         languageConf.current.of([]),
         themeConf.current.of(githubEditorTheme(isDark)),
         highlightConf.current.of([]),
-        editableConf.current.of(EditorState.readOnly.of(disabled)),
+        searchLine,
+        editableConf.current.of([
+          EditorState.readOnly.of(disabled || readOnly),
+          EditorView.editable.of(!readOnly),
+          ...(readOnly
+            ? [EditorView.contentAttributes.of({ role: 'textbox', tabindex: '0', 'aria-readonly': 'true' })]
+            : [])
+        ]),
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
             onChangeRef.current(update.state.doc.toString())
@@ -299,6 +357,7 @@ export function CodeEditor({
 
           return applyFormatJson(view)
         },
+        revealLocation: location => revealLocation(view, location),
         setCursor: pos => {
           const clamped = Math.max(0, Math.min(pos, view.state.doc.length))
           view.dispatch({ scrollIntoView: true, selection: { anchor: clamped } })
@@ -309,7 +368,9 @@ export function CodeEditor({
 
     // Focus on mount so entering edit mode (button or double-click) lands the
     // caret in the buffer ready to type, no extra click required.
-    view.focus()
+    if (!readOnly) {
+      view.focus()
+    }
 
     return () => {
       view.destroy()
@@ -366,8 +427,32 @@ export function CodeEditor({
   }, [highlightFrom, highlightTo])
 
   useEffect(() => {
-    viewRef.current?.dispatch({ effects: editableConf.current.reconfigure(EditorState.readOnly.of(disabled)) })
-  }, [disabled])
+    const view = viewRef.current
+
+    if (view && location !== undefined) {
+      if (location) {
+        revealLocation(view, location)
+      } else {
+        // A requested line is absent from a truncated document: retire any
+        // previous highlight without pretending we jumped to a clamped line.
+        view.dispatch({ effects: searchLineEffect.of(null) })
+      }
+
+      onLocationRevealedRef.current?.()
+    }
+  }, [location, locationRequestId])
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: editableConf.current.reconfigure([
+        EditorState.readOnly.of(disabled || readOnly),
+        EditorView.editable.of(!readOnly),
+        ...(readOnly
+          ? [EditorView.contentAttributes.of({ role: 'textbox', tabindex: '0', 'aria-readonly': 'true' })]
+          : [])
+      ])
+    })
+  }, [disabled, readOnly])
 
   if (!framed) {
     return <div className={cn('h-full min-h-0 overflow-hidden', className)} ref={hostRef} />

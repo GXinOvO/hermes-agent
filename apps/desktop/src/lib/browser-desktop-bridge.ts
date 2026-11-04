@@ -9,6 +9,7 @@ import { createBrowserFilesBridge } from '@/lib/browser-files'
 import { WEBAPP_LAUNCH_REQUIRED } from '@/lib/browser-launch-session'
 import { onBrowserFocusSession, showBrowserNotification } from '@/lib/browser-notifications'
 import { createBrowserProfileBridge } from '@/lib/browser-profile'
+import { createBrowserSearchBridge } from '@/lib/browser-search'
 import { createBrowserSettings } from '@/lib/browser-settings'
 import { createBrowserTerminal } from '@/lib/browser-terminal'
 import { browserApi, browserBootstrap, ticketedWebsocketUrl } from '@/lib/browser-transport'
@@ -103,6 +104,7 @@ export function installBrowserDesktopBridge(): boolean {
     ...createBrowserClipboardBridge({ saveBuffer: uploads.saveImageBuffer }),
     ...createBrowserConnectionBridge({ api, bootstrap }),
     ...files,
+    ...createBrowserSearchBridge(bootstrap),
     ...createBrowserDesktopPluginsBridge({ api, files }),
     ...uploads,
     api: rendererApi,

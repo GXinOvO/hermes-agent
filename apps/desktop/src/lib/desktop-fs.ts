@@ -44,8 +44,8 @@ export function desktopFsCacheKey(connection: HermesConnection | null = $connect
   return connectionCacheKey(connection)
 }
 
-export function isDesktopFsRemoteMode() {
-  return $connection.get()?.mode === 'remote' || !hostHas('nativeHostFiles')
+export function isDesktopFsRemoteMode(scope?: DesktopFsSessionScope) {
+  return scope?.owner ? !scope.owner.native : $connection.get()?.mode === 'remote' || !hostHas('nativeHostFiles')
 }
 
 // Active profile for FS/git REST calls. Without it the Electron api bridge
@@ -58,6 +58,8 @@ export function desktopFsProfile(): string | undefined {
  *  sandbox, so a gateway read names it; a local (native) read has no use for it. */
 export interface DesktopFsSessionScope {
   sessionId?: null | string
+  /** Explicit search/preview authority; omitted by legacy ambient callers. */
+  owner?: { connectionId?: string; profile?: string; native: boolean }
 }
 
 interface FsRoute {
@@ -70,6 +72,13 @@ interface FsRoute {
  *  no known owner the request names no session and goes to the window's profile. */
 function fsRoute(scope?: DesktopFsSessionScope): FsRoute {
   const sessionId = scope?.sessionId || undefined
+
+  if (scope?.owner) {
+    const { connectionId, profile } = scope.owner
+
+    return { owner: { connectionId, profile }, sessionId }
+  }
+
   const owner = sessionId ? sessionFileOwnerScope(sessionId) : null
 
   return owner ? { owner, sessionId } : { owner: { profile: desktopFsProfile() } }
@@ -135,7 +144,7 @@ export async function readDesktopFileText(
   path: string,
   scope?: DesktopFsSessionScope
 ): Promise<HermesReadFileTextResult> {
-  if (!isDesktopFsRemoteMode()) {
+  if (!isDesktopFsRemoteMode(scope)) {
     const result = await bridge().readFileText(path)
 
     if (isReadFileErrorResult(result)) {
@@ -162,7 +171,7 @@ export async function writeDesktopFileText(
 ): Promise<{ path: string }> {
   const desktop = bridge()
 
-  if (!isDesktopFsRemoteMode()) {
+  if (!isDesktopFsRemoteMode(scope)) {
     if (!desktop.writeTextFile) {
       throw new Error('Saving is not available')
     }
@@ -190,7 +199,7 @@ export async function createRemoteDir(path: string): Promise<string> {
 }
 
 export async function readDesktopFileDataUrl(path: string, scope?: DesktopFsSessionScope): Promise<string> {
-  if (!isDesktopFsRemoteMode()) {
+  if (!isDesktopFsRemoteMode(scope)) {
     const result = await bridge().readFileDataUrl(path)
 
     if (isReadFileErrorResult(result)) {
