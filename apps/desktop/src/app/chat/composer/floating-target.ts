@@ -21,6 +21,7 @@ const captureOwners = new Set<string>()
 const carets = new WeakMap<HTMLElement, Range>()
 let pointerDownTarget: Element | null = null
 let keyboardNavigation = false
+let floatingLayerFocused = false
 let reconcileQueued = false
 let pendingPaneFocus: string | null = null
 let stopPaneFocus: (() => void) | undefined
@@ -220,8 +221,12 @@ function trackPointerMove(event: PointerEvent) {
     selectionOutsideComposer() ||
     keepsOwnFocus(document.activeElement) ||
     inFloatingLayer(document.activeElement) ||
+    // A control the user focused keeps it when the pointer only passes over the
+    // transcript. Tab headers are the exception: they carry roving focus from
+    // arrow-key navigation, and deliberate pointer movement still hands typing
+    // focus back to the composer (see floating-target-tabs.test.ts).
     document.activeElement?.matches(
-      'button, a[href], select, [role="button"], [tabindex]:not([data-slot="composer-rich-input"])'
+      'button, a[href], select, [role="button"], [tabindex]:not([data-slot="composer-rich-input"]):not([role="tab"])'
     )
   ) {
     return
@@ -296,6 +301,13 @@ function trackFocus(event: FocusEvent) {
     return
   }
 
+  // A closing portal can detach its focused node before restoring its opener,
+  // leaving relatedTarget null. Keep the last focus origin across that teardown.
+  const fromFloatingLayer =
+    floatingLayerFocused || inFloatingLayer(event.relatedTarget instanceof Element ? event.relatedTarget : null)
+
+  floatingLayerFocused = inFloatingLayer(target)
+
   const hostId = target.closest<HTMLElement>('[data-composer-owner]')?.dataset.composerOwner
 
   if (hostId === $floatingComposerOwner.get()?.id) {
@@ -308,12 +320,16 @@ function trackFocus(event: FocusEvent) {
     return
   }
 
-  // A delayed focus/restore isn't a navigation gesture. A clicked control,
-  // keyboard Tab, or the inline edit opened by a bubble click still keeps its
-  // normal focus, without redirecting to the input.
+  // Navigation selects the recipient without moving the caret. Tab headers
+  // must update the owning split too, while retaining their roving focus, and
+  // a delayed focus/restore is not navigation either: a clicked control,
+  // keyboard Tab, the inline edit opened by a bubble click, or focus returned
+  // from a closing overlay keeps its own focus instead of being redirected.
   if (
+    target.closest('[role="tab"]') ||
     isTouchInteraction() ||
     keyboardNavigation ||
+    fromFloatingLayer ||
     keepsOwnFocus(target) ||
     (pointerDownTarget && target.contains(pointerDownTarget))
   ) {
@@ -355,6 +371,7 @@ export function registerFloatingComposer(id: string, surface: Omit<FloatingCompo
   surfaces.set(id, surface)
 
   if (surfaces.size === 1) {
+    floatingLayerFocused = inFloatingLayer(document.activeElement)
     stopPaneFocus = onPaneFocusRequest(paneId => {
       pendingPaneFocus = paneId
       queueMicrotask(fulfillPaneFocus)
@@ -405,6 +422,7 @@ export function registerFloatingComposer(id: string, surface: Omit<FloatingCompo
       keyboardNavigation = false
       pointer = null
       composing = null
+      floatingLayerFocused = false
     }
   }
 }
