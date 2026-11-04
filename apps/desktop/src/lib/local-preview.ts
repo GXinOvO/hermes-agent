@@ -274,7 +274,7 @@ export function localPreviewTarget(rawTarget: string, cwd?: string | null): Prev
 
 async function enrichPreviewTarget(target: PreviewTarget | null, scope?: DesktopFsSessionScope): Promise<PreviewTarget | null> {
   if (
-    !isDesktopFsRemoteMode() ||
+    !isDesktopFsRemoteMode(scope) ||
     !target ||
     target.kind !== 'file' ||
     target.previewKind === 'image' ||
@@ -314,6 +314,26 @@ export async function normalizeOrLocalPreviewTarget(
   cwd?: string | null,
   scope?: DesktopFsSessionScope
 ): Promise<PreviewTarget | null> {
+  if (scope?.owner) {
+    // Native normalization stats this machine. Never let it canonicalize a
+    // remote /workspace into an unrelated local path with the same spelling.
+    const target = scope.owner.native
+      ? await normalizeNativeOrAmbientPreviewTarget(rawTarget, cwd, scope)
+      : await enrichPreviewTarget(localPreviewTarget(rawTarget, cwd), scope)
+
+    const captured = target ? { ...target, fileScope: scope } : null
+
+    return captured
+  }
+
+  return normalizeNativeOrAmbientPreviewTarget(rawTarget, cwd, scope)
+}
+
+async function normalizeNativeOrAmbientPreviewTarget(
+  rawTarget: string,
+  cwd?: string | null,
+  scope?: DesktopFsSessionScope
+): Promise<PreviewTarget | null> {
   try {
     const normalized = await window.hermesDesktop?.normalizePreviewTarget?.(rawTarget, cwd || undefined)
 
@@ -325,7 +345,7 @@ export async function normalizeOrLocalPreviewTarget(
       // machine, so remote mode keeps the fabricated fallback the gateway
       // read resolves later.
       if (normalized.previewKind === 'directory' || normalized.previewKind === 'missing') {
-        return isDesktopFsRemoteMode() ? enrichPreviewTarget(localPreviewTarget(rawTarget, cwd), scope) : null
+        return isDesktopFsRemoteMode(scope) ? enrichPreviewTarget(localPreviewTarget(rawTarget, cwd), scope) : null
       }
 
       return enrichPreviewTarget(normalized, scope)
@@ -337,7 +357,7 @@ export async function normalizeOrLocalPreviewTarget(
     // is authoritative — the fallback below can only fabricate a broken
     // preview tab (#101683). Remote-backend paths, and a dev server without
     // the bridge, keep it.
-    if (!isDesktopFsRemoteMode() && normalized === null) {
+    if (!isDesktopFsRemoteMode(scope) && normalized === null) {
       return null
     }
   } catch {

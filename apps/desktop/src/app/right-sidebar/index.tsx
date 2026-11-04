@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { type ComponentProps, useCallback, useEffect, useState } from 'react'
+import { type ComponentProps, useCallback, useEffect, useRef, useState } from 'react'
 
 import { TreeSkeleton } from '@/components/chat/skeletons'
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -8,7 +8,9 @@ import { Codicon } from '@/components/ui/codicon'
 import { Tip } from '@/components/ui/tooltip'
 import { useDelayedTrue } from '@/hooks/use-delayed-true'
 import { useI18n } from '@/i18n'
+import type { FileSearchScope } from '@/lib/file-search-owner'
 import { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
+import type { PreviewLocation } from '@/lib/preview-location'
 import { cn } from '@/lib/utils'
 import { refreshRepoStatus, registerRepoStatusCwd } from '@/store/coding-status'
 import { $panesFlipped } from '@/store/layout'
@@ -33,6 +35,7 @@ export function RightSidebarPane({ onActivateFile, onActivateFolder }: RightSide
   const r = t.rightSidebar
   const panesFlipped = useStore($panesFlipped)
   const targetCwd = useStore($focusedWorkspaceCwd)
+  const previewRequestRef = useRef(0)
   const hasWorkspace = Boolean(targetCwd)
 
   const {
@@ -77,17 +80,33 @@ export function RightSidebarPane({ onActivateFile, onActivateFolder }: RightSide
 
   const canCollapse = Object.values(openState).some(Boolean)
 
-  const previewFile = async (path: string) => {
+  const previewFile = async (path: string, location?: PreviewLocation, scope?: FileSearchScope) => {
+    const request = ++previewRequestRef.current
+
     try {
-      const preview = await normalizeOrLocalPreviewTarget(path, effectiveCwd || undefined)
+      const preview = scope
+        ? await normalizeOrLocalPreviewTarget(path, scope.root, scope)
+        : await normalizeOrLocalPreviewTarget(path, effectiveCwd || undefined)
+
+      if (request !== previewRequestRef.current) {
+        return
+      }
 
       if (!preview) {
         throw new Error(r.couldNotPreview(path))
       }
 
-      openPreview(preview)
+      const target = location ? { ...preview, location } : preview
+
+      if (scope) {
+        openPreview(target, scope.sessionId ?? null, null)
+      } else {
+        openPreview(target)
+      }
     } catch (error) {
-      notifyError(error, r.previewUnavailable)
+      if (request === previewRequestRef.current) {
+        notifyError(error, r.previewUnavailable)
+      }
     }
   }
 
@@ -244,7 +263,7 @@ function FilesystemTab({
       {searchOpen ? (
         <FileSearchPanel
           onClose={() => setSearchOpen(false)}
-          onOpenFile={path => onPreviewFile?.(path)}
+          onOpenFile={onPreviewFile ?? (() => {})}
           root={cwd}
         />
       ) : (
@@ -285,7 +304,7 @@ interface FileTreeBodyProps {
   onActivateFolder: (path: string) => void
   onLoadChildren: (id: string) => void | Promise<void>
   onNodeOpenChange: (id: string, open: boolean) => void
-  onPreviewFile?: (path: string) => void
+  onPreviewFile?: (path: string, location?: PreviewLocation, scope?: FileSearchScope) => void
   /** Force-reload the root. The hook also auto-retries while errored, so this
    *  is the impatient-user path. */
   onRetry?: () => void

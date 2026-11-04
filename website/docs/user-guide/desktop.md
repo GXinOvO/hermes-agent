@@ -264,6 +264,14 @@ Provider and model changes remain a local draft until you click **Apply**. **Can
 
 Explore and preview the working directory without leaving the app — useful for following along as the agent reads, writes, and edits files. Set the initial project directory with `hermes desktop --cwd <path>` (or the `HERMES_DESKTOP_CWD` environment variable).
 
+Click **Search files** in the Files header to search filenames or file contents under the displayed project root. An empty scope searches the whole root; `src/` selects a subtree, `*.py` matches that filename pattern at any depth, and `src/**/*.py` limits it to Python files under `src`. Content queries support case matching and ripgrep regular expressions; unsupported expressions produce an error. Scope paths and globs follow the file host's case-sensitive spelling. Multiline content queries are not supported.
+
+Search runs ripgrep on the filesystem host, streaming grouped results instead of downloading each file to Desktop. Native local files use Electron's local process; a remote connection uses that connection and profile. **Stop search**, changing the query or closing the panel cancels the active run. Results are limited to 1,000 matching lines/files and a 15-second execution budget; incomplete results and engine failures are shown explicitly. Binary files are skipped. The eye toggle reveals project ignores while dependency/cache directories and credential paths remain excluded. Ripgrep also observes its native `.ignore` and global Git ignore rules, so the default search can omit a nested repository that the tree reveals; enable ignored files when needed.
+
+Click a content result to open its source preview at the matching line and UTF-16 column, with the line highlighted. Repeated clicks re-position the existing tab. Markdown results open source, and a truncated preview reports when the requested line is unavailable.
+
+Both Desktop and the connected backend need this search capability; rebuild a source-built Desktop after updating. A profile whose terminal backend adds a second SSH workspace hop currently reports search unavailable instead of searching the gateway's disk. A Windows Python server using a Selector event loop reports an explicit unsupported-runtime error; Windows Desktop's native local search uses Electron and does not depend on that loop. Windows native execution still requires platform validation.
+
 ### Artifacts
 
 Preview links above the composer are session suggestions, not a task-completion checklist. Dismissing one keeps historical tool rows from bringing it back after navigation or reload. A new successful tool completion can offer the file again. Read-only file inspection and failed writes do not create suggestions. Files with the same name show enough directory context to distinguish them; dismissing a suggestion does not delete its file or transcript. Changing a `/goal` does not erase a conversation's artifacts.

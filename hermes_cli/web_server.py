@@ -815,6 +815,8 @@ from fastapi import Depends as _Depends
 from hermes_cli.web_server_surface import route_on as _route_on
 
 app.include_router(_files_routes.router)
+from hermes_cli.file_search_api import router as _file_search_router
+app.include_router(_file_search_router)
 # The Webapp's routes exist only on the surfaces whose policy names them (404 elsewhere).
 app.include_router(_upload_routes.router, dependencies=[_Depends(_route_on("browser_files"))])
 app.include_router(_desktop_plugin_routes.router, dependencies=[_Depends(_route_on("desktop_plugins"))])

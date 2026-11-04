@@ -1,4 +1,5 @@
 import type { GatewayWsUrlResult } from '@hermes/shared'
+import type { FileSearchFrame, FileSearchPayload } from '@hermes/shared/file-search'
 import type { HermesSkin } from '@hermes/shared/skin'
 import type { TranslucencyState } from '@hermes/shared/translucency'
 
@@ -28,6 +29,8 @@ import type {
 } from './store/quick-entry'
 
 export {}
+
+export type HermesFileSearchPayload = FileSearchPayload
 
 export type DesktopMachineProfile = MachineProfile
 
@@ -522,6 +525,9 @@ declare global {
       /** Append one raw line to desktop.log (fire-and-forget, notifyError path). */
       logLine?: (line: string) => void
       readDir: (path: string) => Promise<HermesReadDirResult>
+      searchFiles?: (payload: HermesFileSearchPayload) => Promise<void>
+      cancelFileSearch?: (id: string) => Promise<void>
+      onFileSearchFrame?: (callback: (event: { id: string; frame: FileSearchFrame }) => void) => () => void
       gitRoot?: (path: string) => Promise<string | null>
       // Reveal a path in the OS file manager (Finder / Explorer).
       revealPath?: (path: string) => Promise<boolean>

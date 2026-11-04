@@ -1,4 +1,6 @@
+import type { FileSearchFrame, FileSearchPayload } from '@hermes/shared/file-search'
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
+import type { IpcRendererEvent } from 'electron'
 
 import type { DesktopProfileRoute } from './desktop-profile'
 import type { HudModifierApi, HudModifierStatus } from './hud-modifier-types'
@@ -498,6 +500,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   reportRendererError: report => ipcRenderer.send('hermes:logs:renderer-error', report),
   logLine: (line: string): void => ipcRenderer.send('hermes:logs:renderer-line', line),
   readDir: dirPath => ipcRenderer.invoke('hermes:fs:readDir', dirPath),
+  searchFiles: (payload: FileSearchPayload) => ipcRenderer.invoke('hermes:fs:search', payload),
+  cancelFileSearch: (id: string) => ipcRenderer.invoke('hermes:fs:search:cancel', id),
+  onFileSearchFrame: (callback: (payload: { id: string; frame: FileSearchFrame }) => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { id: string; frame: FileSearchFrame }) => callback(payload)
+    ipcRenderer.on('hermes:fs:search:frame', listener)
+
+    return () => ipcRenderer.removeListener('hermes:fs:search:frame', listener)
+  },
   gitRoot: startPath => ipcRenderer.invoke('hermes:fs:gitRoot', startPath),
   revealPath: targetPath => ipcRenderer.invoke('hermes:fs:reveal', targetPath),
   openDir: dirPath => ipcRenderer.invoke('hermes:fs:openDir', dirPath),
