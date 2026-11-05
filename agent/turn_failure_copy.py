@@ -130,6 +130,7 @@ _EXIT_REASON_FAILURES: tuple[tuple[str, str, bool, bool], ...] = (
     # #55316/#54756: the loop stopped on a tool tail with no follow-up text; the
     # finalizer synthesizes the visible close and fails the turn.
     ("pending_tool_result", "loop_error", True, True),
+    ("guardrail_halt", "loop_error", False, True),
     ("interpreter_shutdown", "interpreter_shutdown", False, True),
     # Advisory: a deterministic local bug is not a task failure for the kanban breaker.
     ("local_processing_error", "loop_error", False, False),

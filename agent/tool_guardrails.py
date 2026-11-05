@@ -342,6 +342,17 @@ class ToolCallGuardrailController:
         self._persisted_result_paths: dict[str, str] = {}
         self._turn_web_search_count = 0
         self._turn_subagent_count = 0
+        self._read_progress_results: dict[tuple[ToolCallSignature, str], None] = {}
+
+    def reset_read_history(self) -> None:
+        """Forget results removed from context, without rearming failures or per-turn caps."""
+        self._no_progress.clear()
+        self._identical_streak_sig = None
+        self._identical_streak_result_hash = ""
+        self._identical_streak_count = 0
+        self._identical_streak_first_call_id = ""
+        self._call_history.clear()
+        self._persisted_result_paths.clear()
 
     @property
     def halt_decision(self) -> ToolGuardrailDecision | None:
@@ -432,6 +443,14 @@ class ToolCallGuardrailController:
         if tool_name in PROGRESS_RESET_TOOL_NAMES or file_mutation_result_landed(tool_name, result):
             self._progress_since_failure.update(dict.fromkeys(self._exact_failure_counts, True))
             self._same_tool_failure_counts.clear()
+            # Opaque commands/polls cannot prove a mutation from changing output alone.
+            # Only a new landed file mutation re-arms reads; keep cycle detection intact.
+            progress = (signature, _result_hash(result, tool_name))
+            if file_mutation_result_landed(tool_name, result) and progress not in self._read_progress_results:
+                self._no_progress.clear()
+                self._read_progress_results[progress] = None
+                if len(self._read_progress_results) > _STALL_GUARD_CYCLE_HISTORY:
+                    self._read_progress_results.pop(next(iter(self._read_progress_results)))
         if not self._is_idempotent(tool_name):
             self._no_progress.pop(signature, None)
             return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
