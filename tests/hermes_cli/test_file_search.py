@@ -116,6 +116,27 @@ def test_secrets_and_excluded_directories_never_appear_even_with_include_glob(tr
     assert "node_modules/pkg.js" not in rels
 
 
+def test_exact_file_scope_survives_many_root_siblings(tmp_path):
+    root = tmp_path / "large-project"
+    root.mkdir()
+    target = root / "target.py"
+    target.write_text("TARGET_SCOPE_REPRO\n")
+    (root / "other.py").write_text("TARGET_SCOPE_REPRO outside scope\n")
+    target_dir = root / "target-dir"
+    target_dir.mkdir()
+    (target_dir / "nested.py").write_text("TARGET_SCOPE_REPRO nested\n")
+    for index in range(1600):
+        (root / f"sibling-directory-{index:04d}-long-name").mkdir()
+
+    frames = collect(root, query="TARGET_SCOPE_REPRO", scope="target.py")
+    directory_frames = collect(root, query="TARGET_SCOPE_REPRO", scope="target-dir")
+
+    assert [(hit["rel"], hit["line"]) for hit in hits(frames)] == [("target.py", 1)]
+    assert [hit["rel"] for hit in hits(directory_frames)] == ["target-dir/nested.py"]
+    assert frames[-1]["type"] == "done" and not frames[-1]["truncated"]
+    assert directory_frames[-1]["type"] == "done" and not directory_frames[-1]["truncated"]
+
+
 def test_scope_cannot_escape_selected_root(tree):
     from hermes_cli.file_search import SearchRequest, validate_search_root
 
