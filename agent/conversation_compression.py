@@ -41,6 +41,7 @@ from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_API_VERSION
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_request_tokens_rough
 from agent.session_activity import ActivityProvenance, normalize_activity_provenance
 from agent.usage_anchor import set_usage_anchor
+from agent.read_context import reset_read_context
 from hermes_state_ids import new_session_id as mint_session_id
 from hermes_state_pidns import holder_namespace_token
 from agent.conversation_compression_watermark import held_archive_watermark
@@ -3348,29 +3349,11 @@ def _warn_summary_or_aux_fallback(agent: Any) -> None:
             )
 
 
-def _reset_read_dedup_caches(task_id: str, *, session_id: str = "") -> None:
-    """Advance the file-read and skill_view repeat-read dedup to a fresh generation after a boundary.
-    The mtime map is kept: the first read of each unchanged key returns full content compaction may have
-    omitted; later reads return stubs, and stub-hit counters restart at the same boundary (#84857).
-    The computer_use screenshot dedup is session-keyed and forgets its last frame for the same reason.
-    """
-    with contextlib.suppress(Exception):
-        from tools.file_tools_read_tracking import reset_file_dedup
-        reset_file_dedup(task_id)
-    if session_id:
-        with contextlib.suppress(Exception):
-            from tools.computer_use.tool import reset_screenshot_dedup
-            reset_screenshot_dedup(session_id)
-    with contextlib.suppress(Exception):
-        from tools.skills_tool import reset_skill_view_dedup
-        reset_skill_view_dedup(task_id)
-
-
 def _finish_compaction_boundary(
     agent: Any, compressed: list, *, new_system_prompt: str, old_session_id: Optional[str], in_place: bool,
     compacted_in_place: bool, session_commit_succeeded: bool, defer_context_engine_notification: bool,
     compression_made_progress: bool, compression_used_fallback: bool, compression_feasibility_skip: bool,
-    task_id: str,
+    task_id: str, history_rewritten: bool,
 ) -> int:
     """Post-commit bookkeeping: notify engines/providers/hooks, re-arm usage tracking.
     Returns the rough post-compression token estimate (diagnostics only)."""
@@ -3456,7 +3439,8 @@ def _finish_compaction_boundary(
             )
         else:
             compressor._verify_compaction_cleared_threshold = True
-    _reset_read_dedup_caches(task_id, session_id=agent.session_id or "")
+    if history_rewritten:
+        reset_read_context(agent, task_id)
     return _compressed_est
 
 
@@ -4212,13 +4196,15 @@ def compress_context(
             return messages, commit.refused_prompt
         compressed = commit.compressed
         split_status = commit.split_status
+        rewritten = commit.compacted_in_place or (
+            messages_before_compression is not None and compressed != messages_before_compression)
         _compressed_est = _finish_compaction_boundary(
             agent, compressed, new_system_prompt=new_system_prompt, old_session_id=commit.old_session_id,
             in_place=in_place, compacted_in_place=commit.compacted_in_place,
             session_commit_succeeded=commit.session_commit_succeeded,
             defer_context_engine_notification=defer_context_engine_notification,
             compression_made_progress=commit.made_progress, compression_used_fallback=_compression_used_fallback,
-            compression_feasibility_skip=_compression_feasibility_skip, task_id=task_id,
+            compression_feasibility_skip=_compression_feasibility_skip, task_id=task_id, history_rewritten=rewritten,
         )
         logger.info(
             "context compression done: session=%s messages=%d->%d rough_tokens=~%s awaiting_real_usage=true",
@@ -4228,7 +4214,6 @@ def compress_context(
             "committed" if split_status in {"not_applicable", "in_place_committed", "rotated_committed"} else "aborted"
         )
         # A rewrite that survived a later bookkeeping failure is still what the model sees: count it as saved.
-        rewritten = commit.compacted_in_place or compressed is not messages
         if rewritten or lifecycle.commit_status == "committed":
             _record_committed_attempt_effect(agent, effect_messages_before, compressed, verbatim_tail, split_status)
         _emit_compression_attempt_telemetry(

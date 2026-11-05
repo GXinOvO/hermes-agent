@@ -2160,31 +2160,8 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
                     break
             except (Exception, KeyboardInterrupt):
                 continue
-    # Book cron_complete only when the last row is a real assistant reply ([SILENT] counts). Only a
-    # POSITIVELY recognized bad status downgrades (keep tuple in sync with
-    # session_lifecycle_statuses); unknown values / probe failures fail OPEN.
-    # Verified completion booking (#93820): the run may only be recorded as cron_complete when the session's
-    # LAST message row is a real assistant reply — a plain answer or the [SILENT] sentinel (both are
-    # assistant-text rows, so both classify as 'complete'). A turn that died after a tool call,
-    # mid-API-wait, or without any assistant text leaves the last row as a tool result / pending call / user
-    # prompt and must not surface as a healthy run. session_lifecycle_statuses is the existing cost-bounded
-    # classifier for exactly this shape. Only a POSITIVELY recognized pathological status (see the status
-    # vocabulary in hermes_state's session_lifecycle_statuses docstring — keep the tuple below in sync when
-    # it grows) downgrades the booking: an unknown value (newer classifier shape, test doubles) keeps the
-    # historical reason, and so does a failed probe — the booking itself is FAIL-OPEN on probe errors,
-    # because classification is best-effort metadata and must not mislabel a healthy run.
-    _end_reason = "cron_complete"
-    try:
-        _statuses = _session_db.session_lifecycle_statuses([_final_cron_session_id])
-        _lifecycle = _statuses.get(_final_cron_session_id)
-        if _lifecycle in ("interrupted", "error", "empty"):
-            _end_reason = "cron_incomplete_no_output"
-            logger.warning(
-                "Job '%s': session ended without a final assistant "
-                "message (lifecycle=%s) — booking run as %s",
-                job_id, _lifecycle, _end_reason)
-    except (Exception, KeyboardInterrupt) as e:
-        logger.debug("Job '%s': session lifecycle classification failed: %s", job_id, e)
+    from cron.scheduler_session_finalization import cron_session_end_reason
+    _end_reason = cron_session_end_reason(_session_db, agent, _final_cron_session_id, job_id)
     # Stamp the job's workdir on the row BEFORE end_session (title-write ordering, #50536): the
     # sidebar groups by cwd prefix and nothing else writes a cron row's cwd (#108205).
     if workdir:
