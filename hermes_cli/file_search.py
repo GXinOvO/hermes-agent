@@ -199,7 +199,11 @@ def _pruning_globs(root: Path, target: str) -> list[str]:
                 pattern = f"!/{relative}{_escape_glob(entry.name)}"
                 size += len(pattern.encode("utf-8")) + 4
                 if size > 12000:
-                    raise ValueError("Search scope has too many siblings to prune safely")
+                    # Keep the exclusions already generated, then let the
+                    # post-filter enforce the target scope. A large sibling
+                    # set must make the search less pruned, not fail the
+                    # user's exact-file query.
+                    return patterns
                 patterns.extend(["--glob", pattern])
         parent /= component
         relative += _escape_glob(component) + "/"
