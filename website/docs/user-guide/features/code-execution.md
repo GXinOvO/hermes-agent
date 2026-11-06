@@ -29,6 +29,26 @@ print(summary)
 
 **Available tools inside scripts:** `web_search`, `web_extract`, `read_file`, `write_file`, `search_files`, `patch`, `terminal` (foreground only).
 
+Tool calls travel one at a time over the RPC connection, in the order the script issues them. Wrapping a stub in `ThreadPoolExecutor` does not make calls concurrent.
+
+### Independent read-only batches
+
+`parallel(calls)` runs a batch of independent read-only calls with bounded concurrency (at most 4 workers, 16 calls) and returns results in input order:
+
+```python
+from hermes_tools import parallel
+
+results = parallel([
+    {"tool": "read_file", "args": {"path": "/repo/a.py"}},
+    {"tool": "read_file", "args": {"path": "/repo/b.py"}},
+])
+print(results[0]["content"], results[1]["content"])
+```
+
+Only `read_file`, `search_files`, `web_search` and `web_extract` are accepted, and only when enabled for the session. Explicit empty tool grants stay empty; omitting the grant in the Python API retains its legacy default. `terminal`, `write_file` and `patch` stay serial — a batch containing them is refused before any call runs. The whole batch must fit the remaining per-cell tool budget. Invalid batches raise `RuntimeError` without dispatch; valid batches return one result per input, including individual error objects. This path is local-transport only.
+
+The worker limit applies to one batch, not the entire host. File reads retain native deduplication and read-before-write tracking; web tools retain caches and their normal policy checks. A batch is not a filesystem snapshot or an OS isolation boundary. On cancellation, queued work is refused and the coordinator returns without waiting for already-started synchronous I/O; that I/O may finish later under the old cell's context and accounting. A disconnected batch is not automatically replayed, because it may already have run. The caller must inspect the error before deciding whether to issue a new batch.
+
 ## When the Agent Uses This
 
 The agent uses `execute_code` when there are:
