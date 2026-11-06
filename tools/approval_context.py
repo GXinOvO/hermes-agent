@@ -285,10 +285,15 @@ def _get_approval_config() -> dict:
     (load_config_readonly contract) — callers must not mutate it or any nested structure."""
     try:
         from hermes_cli.config import load_config_readonly
-        return load_config_readonly().get("approvals", {}) or {}
+        from hermes_cli.config_read_errors import FailedConfigRead
+        config = load_config_readonly()
+        approvals = config.get("approvals", {}) or {}
+        if isinstance(config, FailedConfigRead):
+            return {**approvals, "unattended_inherit_approvals": False}
+        return approvals
     except Exception as e:
         logger.warning("Failed to load approval config: %s", e)
-        return {}
+        return {"unattended_inherit_approvals": False}
 
 
 def _get_approval_mode() -> str:
@@ -300,6 +305,20 @@ def _get_approval_mode() -> str:
     except Exception:
         pass
     return _normalize_approval_mode(_get_approval_config().get("mode", "manual"))
+
+
+def _can_inherit_approvals() -> bool:
+    """Whether stored consent is eligible in the current profile and context.
+
+    Keep the raw stores intact: disabling inheritance only makes a headless
+    decision consult its native policy again. API clients with a live approval
+    surface remain interactive, as determined by the gate's presence resolver.
+    """
+    if _get_approval_config().get("unattended_inherit_approvals", True) is not False:
+        return True
+    from tools import approval
+    return (not approval._unattended_contexts()
+            or (_get_session_platform() == "api_server" and approval._presence()[3]))
 
 
 def _get_approval_timeout() -> int:
