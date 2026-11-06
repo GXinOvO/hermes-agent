@@ -619,6 +619,13 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
     complete_event_delivery(evt, claim)
 
 
+def _notif_should_wake(evt: dict) -> bool:
+    from tools.process_registry_notifications import should_surface_notification
+    return should_surface_notification(evt) or (
+        evt.get("type", "completion") == "completion"
+        and evt.get("completion_reason") in {"lost", "failed_start"})
+
+
 def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, completions=None, *, owned=False) -> bool:
     """Route one dequeued event: foreign (another live session owns it) → requeued, or onto ``deferred`` during the
     shutdown drain; unowned (addressed but unprovable — never adopt an orphan) → parked for a bounded window so the
@@ -638,9 +645,6 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     if not owned and _notification_event_requires_owner(evt) and not _session_owns_notification_event(sid, session, evt):
         _notif_unowned_event(sid, evt, deferred)
         return True
-    from tools.process_registry_notifications import should_surface_notification
-    if not should_surface_notification(evt):
-        return True
     if evt_type in {"completion", "heartbeat"} and registry.is_completion_consumed(evt.get("session_id", "")):
         return True
     text = fmt(evt)
@@ -658,6 +662,8 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
         render_notification(lambda: _emit("status.update", sid, {"kind": "process", "text": display_text}),
                             platform="tui", diagnostic=diagnostic_process_event(evt))
         emitted.add(dedup_key)
+    if not _notif_should_wake(evt):
+        return True
     if evt_type != "async_delegation" and _background_notifications_off(session):
         # The user opted out of process-driven agent wakes: the status row above is the whole
         # delivery. Subagent results are not process notifications and still land.

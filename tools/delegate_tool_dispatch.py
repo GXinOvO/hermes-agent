@@ -187,7 +187,8 @@ def _run_children_parallel(batch: _Batch, results: list, *, honor_parent_interru
                 # Detached unit: a crash before the join must not lose children that already finished.
                 _record_finished_child(batch, entry, honor_parent_interrupt)
                 _report_child_done(parent_agent, spinner_ref, entry, _tag, task_labels, n_tasks, n_here - len(results))
-                if (not honor_parent_interrupt and batch.unit_id and entry.get("status") in SUBAGENT_FAILURE_STATUSES
+                if (not honor_parent_interrupt and batch.unit_id
+                        and (entry.get("status") in SUBAGENT_FAILURE_STATUSES or entry.get("truncated"))
                         and len(results) < n_here):
                     # Detached unit, a sibling is still running: tell the parent NOW, not when the last one finishes.
                     # Non-durable and separate from the unit's final result (which is still delivered once).
