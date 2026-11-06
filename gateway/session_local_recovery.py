@@ -109,10 +109,31 @@ def _checked_entry(authority, receipt, source, route):
     return entry
 
 
+def _receipt_same_existing_store(authority, receipt):
+    try:
+        receipt_home = Path(receipt['profile_id'])
+        owner_home = Path(authority.profile_id)
+        db_path = Path(authority.db.db_path)
+        resolved_home = owner_home.resolve(strict=True)
+        return (receipt_home.is_absolute() and owner_home.is_absolute()
+                and receipt_home.resolve(strict=True) == resolved_home
+                and resolved_home.is_dir()
+                and db_path.resolve(strict=True) == resolved_home / 'state.db'
+                and db_path.is_file()
+                and receipt_home.samefile(owner_home)
+                and (receipt_home / 'state.db').samefile(db_path)
+                and receipt_home.resolve(strict=True) == owner_home.resolve(strict=True) == resolved_home
+                and getattr(authority.db, '_db_file_identity', None) is not None
+                and not authority.db._db_file_was_replaced())
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def owned_receipt(authority, sid):
     """*sid*'s stored receipt with its LOCAL source, route and entry, once all are this owner's."""
     receipt = local_receipt(authority.db, sid)
-    if receipt['profile_id'] != authority.profile_id:
+    if (receipt['profile_id'] != authority.profile_id
+            and not _receipt_same_existing_store(authority, receipt)):
         raise RuntimeStoreError('profile_mismatch')
     chat_id = (receipt['legacy_session_id'] if 'legacy_session_id' in receipt else
                local_identity(receipt['profile_id'], receipt['principal_id'], receipt['request_id']))

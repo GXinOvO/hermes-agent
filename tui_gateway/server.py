@@ -1166,12 +1166,7 @@ def _is_pivot_marker(entry: Any) -> bool:
 
 
 def _append_model_switch_marker(session: dict | None, *, model: str, provider: str) -> None:
-    """Record a real system-history pivot after a live model switch. Only the newest marker is kept (each
-    switch strips prior ones, so N switches leave one marker, not N re-sent every API call; self-healing
-    across resumes because the next switch collapses whatever a reload brought back).
-
-    See #65891.
-    """
+    """Persist the newest live-model pivot before publishing it to history (#65891)."""
     session_key = str((session or {}).get("session_key") or "").strip()
     if not session_key:
         return
@@ -1179,40 +1174,45 @@ def _append_model_switch_marker(session: dict | None, *, model: str, provider: s
     marker = (
         f"{_MODEL_SWITCH_MARKER_PREFIX}{model}{provider_part}. From this point forward, use this runtime "
         "metadata when answering questions about what model/provider is active.]")
-    # A user message, not system: strict OpenAI-compatible providers (vLLM, Qwen) reject non-leading system messages.
-    # See #48338.
-    entry: dict[str, Any] = {"role": "user", "content": marker, "display_kind": "model_switch"}
+    # Strict providers reject mid-conversation system roles (#48338); keep the user-role pivot.
+    from agent.context_compressor import _DB_PERSISTED_MARKER
+    from agent.message_metadata import stamp_message_timestamp, stamp_message_uid
+    entry: dict[str, Any] = stamp_message_timestamp(
+        {"role": "user", "content": marker, "display_kind": "model_switch"})
+    stamp_message_uid(entry)
     with session.get("history_lock") or contextlib.nullcontext():
         history = session.setdefault("history", [])
-        history[:] = [h for h in history if not _is_model_switch_marker(h)]
-        history.append(entry)
-        session["history_version"] = int(session.get("history_version", 0)) + 1
-    try:
-        agent = session.get("agent")
-        db = getattr(agent, "_session_db", None) if agent is not None else None
-        if db is None:
-            _ensure_session_db_row(session)
-        with (contextlib.nullcontext(db) if db is not None else _session_db(session)) as db:
-            if db is not None:
-                from agent.context_compressor import _DB_PERSISTED_MARKER
-                # Same stale-key hazard as the submit row: this durable pivot must land in the session the
-                # live agent writes to, or a model switch between turns on a rotated session files the notice
-                # under a parent the conversation no longer reads from (#123545).
+        try:
+            agent = session.get("agent")
+            db = getattr(agent, "_session_db", None) if agent is not None else None
+            if db is None and _ensure_session_db_row(session) is False:
+                raise RuntimeError("session store unavailable")
+            with (contextlib.nullcontext(db) if db is not None else _session_db(session)) as db:
+                # Resolve the live target under the history lock, as for the submit row (#123545).
                 target = _submit_row_target_key(session)
-                # The in-memory strip above keeps one marker; the durable rows need the same invariant or N
-                # switches leave N active rows that all replay on resume (#65891 kept it in memory only).
-                db.deactivate_messages_by_display_kind(target, "model_switch")
-                from agent.message_metadata import stamp_message_uid
-                entry["_row_id"] = db.append_message(
-                    session_id=target, role="user", content=marker, display_kind="model_switch",
-                    message_uid=stamp_message_uid(entry))
-                entry[_DB_PERSISTED_MARKER] = True
-    except Exception:
-        # warning, not debug: filing the pivot in the LIVE session (#123545) means this write can now hit
-        # CompressionSessionClosedError on a closed parent, which the old session_key target could not.
-        # Swallowed at debug, a model switch silently loses its durable notice — the next resume replays
-        # without it and nothing lands in errors.log. Matches _persist_live_session_system_prompt above.
-        logger.warning("failed to persist model switch marker", exc_info=True)
+                if db is None or not target:
+                    raise RuntimeError("session store unavailable")
+                def persist(conn):
+                    # Retire/insert atomically; the native writer checks guards, updates counters
+                    # and restores tentative row stamps on rollback (including failed replacement).
+                    conn.execute("UPDATE messages SET active = 0 WHERE session_id = ? "
+                                 "AND display_kind = 'model_switch' AND active = 1", (target,))
+                    db._append_messages_in_transaction(conn, target, [entry])
+
+                db._execute_transcript_write(persist, [entry], patience_s=db._TRANSCRIPT_WRITE_PATIENCE_S)
+        except Exception:
+            logger.warning("failed to persist model switch marker", exc_info=True)
+            # The model already switched: let its pin/--once restore finish, but keep this UID out
+            # of live merges. The existing model selector is the recovery entry once storage returns.
+        else:
+            entry[_DB_PERSISTED_MARKER] = True
+            history[:] = [h for h in history if not _is_model_switch_marker(h)]
+            history.append(entry)
+            session["history_version"] = int(session.get("history_version", 0)) + 1
+            return
+    _emit("error", _lifecycle_own_sid(session), {
+        "message": f"Model switched to {model}{provider_part}, but its history notice could not "
+                   "be saved. Restore session storage and retry this model selection."})
 
 
 def _write_config_changes(sets: dict, unsets: tuple = ()) -> None:
