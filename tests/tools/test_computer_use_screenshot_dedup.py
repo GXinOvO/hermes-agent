@@ -149,9 +149,13 @@ class TestScreenshotDedup:
     def test_compaction_boundary_redelivers_pixels(self):
         """The summary may have dropped the frame an "unchanged" note points at, so the first
         capture after compaction must carry the image even when the screen is byte-identical."""
-        from agent.conversation_compression import _reset_read_dedup_caches
+        from types import SimpleNamespace
+
+        from agent.read_context import reset_read_context
 
         cu_tool._capture_response(_cap(seed=1), session_id="s1")
         assert not _is_multimodal(cu_tool._capture_response(_cap(seed=1), session_id="s1"))
-        _reset_read_dedup_caches("task", session_id="s1")
+        # The boundary reset moved to agent.read_context; it re-arms the same session-keyed
+        # screenshot dedup plus the read-guard epochs.
+        reset_read_context(SimpleNamespace(session_id="s1"), "task")
         assert _is_multimodal(cu_tool._capture_response(_cap(seed=1), session_id="s1"))
