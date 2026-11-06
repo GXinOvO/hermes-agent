@@ -466,7 +466,7 @@ def _run_post_turn_followups(
         # _release_turn_scopes / _post_turn_housekeeping have released the worker's runtime scopes. Queue ownership,
         # notification policy and nested dispatch still belong to this session.
         from tools.process_registry_awaiting import drained_for
-        from tools.process_registry_notifications import format_process_notification, should_surface_notification
+        from tools.process_registry_notifications import format_process_notification
         key = session.get("session_key", "")
         owns = lambda e: process_registry._owns_event(
             e, key, lambda evt: _session_owns_notification_event(sid, session, evt), e.get("type") == "async_delegation")
@@ -475,7 +475,7 @@ def _run_post_turn_followups(
         with _session_profile_runtime_scope(session), drained_for(process_registry, owns) as mine:
             deferred = []
             _notif_handle_ready(
-                sid, session, [evt for evt in mine if should_surface_notification(evt)],
+                sid, session, mine,
                 session.setdefault("_notification_emitted", set()), process_registry,
                 format_process_notification, deferred, owned=True)
             for event in deferred:

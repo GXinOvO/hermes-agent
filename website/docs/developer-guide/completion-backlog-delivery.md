@@ -37,6 +37,30 @@ Addressed events still require a provable owner; another live session cannot ado
 them. Delegation delivery continues through its existing durable claim/complete
 ledger, once per delegation rather than once per process batch.
 
+## Child-process visibility and escalation
+
+TUI/Desktop render process status updates after ownership and consumed-output checks,
+separately from deciding whether a notification starts a model turn. By default a
+subagent's ordinary completion, nonzero command exit, heartbeat or watch event updates
+status without waking the parent. The child's own process polling and log reads remain
+available. `delegation.surface_child_process_notifications: true` enables those parent
+wakes; `display.background_process_notifications: off` still disables process wakes.
+These controls do not mute final delegation results.
+
+A child process marked `lost` or `failed_start` can wake the parent without waiting for
+the child to finish, subject to the process-wake preference. `failed_start` is supported
+when an event carries that reason; ordinary spawn exceptions still return directly to
+the child's tool call and do not gain a new notification producer here. Existing
+delegation failure and timeout results also reach the parent. In a parallel batch, a child that exhausts
+its iteration budget now sends an early incomplete-result notice, including its partial
+summary, while siblings continue; that notice does not consume the final batch result.
+The existing inactivity monitor handles stalled delegation results; this change does not
+shorten its thresholds or add semantic detection of repeated unsuccessful work.
+
+Status presentation still honors diagnostic-display preferences. Restored status events
+are not model responses or a new persistent chat message. This policy does not promise
+that every application-level blocker can be inferred from a command exit code or text.
+
 ## Local validation and its limits
 
 `evals/completion_backlog_probe.py REPO OUTPUT.json` starts real local shell children

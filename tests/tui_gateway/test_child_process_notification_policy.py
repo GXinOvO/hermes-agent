@@ -73,7 +73,7 @@ def test_child_process_events_do_not_wake_parent_by_default(surface, kind, exit_
     session, registry, starts, frames = surface
     route(surface, [event(kind, exit_code=exit_code)])
     assert starts == []
-    assert frames == []
+    assert len(frames) == 1
     assert session["running"] is False
     assert registry.completion_queue.empty()
 
@@ -81,7 +81,7 @@ def test_child_process_events_do_not_wake_parent_by_default(surface, kind, exit_
 def test_legacy_child_task_id_is_filtered(surface):
     route(surface, [event(owner_task_id="", task_id="sa-child")])
     assert surface[2] == []
-    assert surface[3] == []
+    assert len(surface[3]) == 1
 
 
 @pytest.mark.parametrize("kind", ["completion", "heartbeat", "watch_match"])
@@ -117,7 +117,7 @@ def test_child_filter_uses_owning_profile_configuration(surface, tmp_path):
     surface[0]["profile_home"] = str(owner_home)
     route(surface, [event()])
     assert surface[2] == []
-    assert surface[3] == []
+    assert len(surface[3]) == 1
 
 
 def test_foreign_child_notification_is_requeued_before_filtering(surface, monkeypatch):
@@ -163,8 +163,124 @@ def test_live_poller_drops_child_event_before_parent_delivery(surface, monkeypat
         assert len(starts) == 1
         assert "parent result" in starts[0][0]
         assert "proc_child" not in starts[0][0]
-        assert len(frames) == 1
+        assert len(frames) == 2
         assert registry.completion_queue.empty()
     finally:
         stop.set()
         worker.join(2)
+
+
+def test_post_turn_keeps_child_status_without_a_model_turn(surface, monkeypatch):
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    session, _, starts, frames = surface
+    registry = ProcessRegistry()
+    registry._completions_restored = True
+    process = ProcessSession(
+        id="proc_child_post_turn", command="build target", started_at=1,
+        session_key="parent-session", owner_task_id="sa-child", notify_on_complete=True,
+    )
+    registry._running[process.id] = process
+    with server._session_profile_runtime_scope(session):
+        registry._finish_exited(process, 2)
+    monkeypatch.setattr("tools.process_registry.process_registry", registry)
+    monkeypatch.setattr(server, "_drain_queued_prompt", lambda *args: False)
+
+    server._run_post_turn_followups("request", "ui", session, {}, None)
+
+    assert starts == []
+    assert len(frames) == 1
+    assert "Failed" in frames[0][2]["text"]
+    assert session["running"] is False
+    assert registry.completion_queue.empty()
+
+
+@pytest.mark.parametrize("reason", ["lost", "failed_start"])
+@pytest.mark.parametrize("path", ["poller", "post_turn"])
+def test_child_process_infrastructure_failure_wakes_parent(surface, monkeypatch, reason, path):
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    session, _, starts, frames = surface
+    registry = ProcessRegistry()
+    registry._completions_restored = True
+    process = ProcessSession(
+        id="proc_child_infrastructure", command="build target", started_at=1,
+        session_key="parent-session", owner_task_id="sa-child", notify_on_complete=True,
+    )
+    registry._running[process.id] = process
+    with server._session_profile_runtime_scope(session):
+        registry._finish_exited(process, None, reason, "backend_lost" if reason == "lost" else reason)
+    monkeypatch.setattr("tools.process_registry.process_registry", registry)
+
+    if path == "post_turn":
+        monkeypatch.setattr(server, "_drain_queued_prompt", lambda *args: False)
+        server._run_post_turn_followups("request", "ui", session, {}, None)
+    else:
+        route((session, registry, starts, frames), [registry.completion_queue.get_nowait()])
+
+    assert len(starts) == 1
+    assert "proc_child_infrastructure" in starts[0][0]
+    assert len(frames) == 1
+    assert registry.completion_queue.empty()
+
+
+@pytest.mark.parametrize("status", ["error", "timeout", "failed"])
+def test_terminal_child_failure_is_delivered_before_siblings_and_final_result(surface, monkeypatch, status):
+    from tools import async_delegation as ad
+
+    session, registry, starts, _ = surface
+    record = {
+        "delegation_id": "deleg-failed-child", "status": "running", "is_batch": True,
+        "session_key": "parent-session", "origin_ui_session_id": "ui",
+        "goals": ["blocked task", "ongoing sibling"], "goal": "blocked task",
+        "dispatched_at": 1,
+    }
+    monkeypatch.setattr(ad, "_records", {record["delegation_id"]: record})
+    monkeypatch.setattr("tools.process_registry.process_registry", registry)
+    entry = {"task_index": 0, "status": status, "error": "terminal child failure"}
+    with server._session_profile_runtime_scope(session):
+        ad.push_task_failure_notice(record["delegation_id"], entry, n_tasks=2)
+    notice = registry.completion_queue.get_nowait()
+    route(surface, [notice])
+    assert len(starts) == 1
+    assert "terminal child failure" in starts[0][0]
+    assert ad._records[record["delegation_id"]]["status"] == "running"
+    assert notice["task_failure_notice"] is True
+
+    with server._session_profile_runtime_scope(session):
+        ad._push_completion_event(record, {"results": [entry, {"task_index": 1, "status": "completed", "summary": "done"}]}, "completed")
+    final = registry.completion_queue.get_nowait()
+    route(surface, [final])
+    assert len(starts) == 2
+    assert "done" in starts[1][0]
+    assert not final.get("task_failure_notice")
+
+
+def test_explicit_process_notification_off_keeps_status_without_waking(surface, tmp_path):
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({
+        "display": {"background_process_notifications": "off"},
+    }))
+    route(surface, [event(completion_reason="lost", exit_code=None)])
+    assert surface[2] == []
+    assert len(surface[3]) == 1
+
+
+def test_single_failed_command_remains_available_to_its_child(surface):
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    session, _, starts, frames = surface
+    registry = ProcessRegistry()
+    registry._completions_restored = True
+    process = ProcessSession(
+        id="proc_child_recoverable", command="build target", started_at=1,
+        session_key="parent-session", owner_task_id="sa-child", notify_on_complete=True,
+    )
+    process.append_output("recoverable compiler diagnostic")
+    registry._running[process.id] = process
+    with server._session_profile_runtime_scope(session):
+        registry._finish_exited(process, 2)
+    route((session, registry, starts, frames), [registry.completion_queue.get_nowait()])
+    assert starts == []
+    assert len(frames) == 1
+    assert registry.poll(process.id)["exit_code"] == 2
+    assert registry.read_log(process.id)["output"] == "recoverable compiler diagnostic"
