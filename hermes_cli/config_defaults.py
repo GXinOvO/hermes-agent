@@ -1648,22 +1648,19 @@ DEFAULT_CONFIG = {
     # timeout: seconds before an unanswered prompt fails closed (CLI and gateway). 60s
     #   proved too tight for Telegram/Discord push notifications, hence 300.
     "approvals": {
-        # single_query_mode — what to do when a single-query (-q) session hits a dangerous command. -q runs
-        # export HERMES_INTERACTIVE=1 (for interactive sudo prompts) but have NO user waiting to answer
-        # approval prompts — an unanswered prompt just waits the full timeout then fails closed, so the
-        # agent is forced to work around the block (often via execute_code). This setting makes that intent
-        # explicit: deny    — block the command and let the agent find another way (default, safe; mirrors
-        # cron_mode deny) approve — auto-approve all dangerous commands in single-query mode These surfaces
-        # bind a session platform like chat gateways do, but have no send_exec_approval and no /approve
-        # channel — a pending approval there just blocks for the full timeout with nobody to answer (#37284,
-        # #87509): deny    — block the command instantly and let the agent find another way (default, safe;
-        # mirrors cron_mode deny) approve — auto-approve all dangerous commands on unattended platforms
+        # Headless modes: deny blocks flagged actions instantly; approve trusts
+        # them explicitly. -q exports HERMES_INTERACTIVE for sudo, but nobody
+        # answers approvals. Webhook/API platforms can likewise bind a platform
+        # without an answerable approval surface (#37284, #87509).
         "mode": "smart",
         "timeout": 300,
         "discord_prompt_timeout": 300,  # Discord buttons stay clickable (min 30 s, cap MAX_SAFE_TIMEOUT_S)
         "cron_mode": "deny",
         "single_query_mode": "deny",
         "unattended_mode": "deny",
+        # False: headless cron/-q/webhook/API decisions re-check their native
+        # policy instead of inheriting session/Always consent or prepared guards.
+        "unattended_inherit_approvals": True,
         # Extra rules appended to the smart-approval guardian's SYSTEM prompt, e.g. "Always ESCALATE
         # commands touching /etc".
         "smart_policy": "",

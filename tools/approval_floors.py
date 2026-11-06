@@ -187,6 +187,8 @@ def _matching_permanent_allowlist_entry(command: str) -> str | None:
     ``recursive delete``; manual entries are command text, possibly with
     shell-style wildcards like ``podman *``."""
     from tools import approval as _a
+    if not _ctx._can_inherit_approvals():
+        return None
     command = (command or "").strip()
     if not command or _has_allowlist_shell_operator(command):
         return None

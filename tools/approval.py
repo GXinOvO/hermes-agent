@@ -396,6 +396,8 @@ def _approval_scope(session_key: str, pattern_key: str) -> str | None:
     decision and its provenance label cannot disagree when a grant is revoked concurrently.
     Accepts the canonical key and the legacy regex-derived key so existing command_allowlist
     entries survive key migrations."""
+    if not approval_context._can_inherit_approvals():
+        return None
     aliases = _approval_key_aliases(pattern_key)
     with _lock:
         permanent = _permanent_set()
@@ -414,6 +416,8 @@ def is_approved(session_key: str, pattern_key: str) -> bool:
 
 def _is_permanently_approved(pattern_key: str) -> bool:
     """Permanent approval only, with compatibility for migrated pattern keys."""
+    if not approval_context._can_inherit_approvals():
+        return False
     aliases = _approval_key_aliases(pattern_key)
     with _lock:
         return any(alias in _permanent_set() for alias in aliases)
@@ -1250,7 +1254,7 @@ def check_all_command_guards(command: str, env_type: str,
 
     from agent.terminal_approval_batch import consume_prepared_guard
     prepared = consume_prepared_guard(command, env_type, has_host_access)
-    if prepared is not None:
+    if prepared is not None and approval_context._can_inherit_approvals():
         return prepared
 
     approval_mode = approval_context._get_approval_mode()
