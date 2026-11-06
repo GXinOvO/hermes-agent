@@ -228,7 +228,9 @@ def finalize_foreground_result(
     returncode = result.get("returncode", 0)
     output, sudo_auth_failed, sudo_cache_cleared = _sudo_annotations(command, output, env_type)
     output = _apply_output_transform_hook(command, output, returncode, effective_task_id, env_type)
-    output = _truncate_head_tail(output)
+    truncated_output = _truncate_head_tail(output)
+    output_truncated = bool(result.get("truncated") or result.get("full_output_path")) or truncated_output != output
+    output = truncated_output
     # Strip ANSI so the model never copies escapes into file writes, then
     # redact secrets; redact_terminal_output is command-aware (env-dump
     # commands get the KEY=value pass, source/config dumps skip it).
@@ -261,6 +263,7 @@ def finalize_foreground_result(
     # metadata is present only when output overflowed the capture window.
     optional_fields: list[tuple[str, Any]] = [
         ("cwd", changed_cwd),
+        ("truncated", True if output_truncated else None),
         ("environment_recreated", _ENV_RECREATED_NOTE if result.get("environment_recreated") else None),
         *_redact_spill_file(result.get("full_output_path"), result.get("output_total_chars"), command),
         ("verification_evidence", _verification_evidence(
