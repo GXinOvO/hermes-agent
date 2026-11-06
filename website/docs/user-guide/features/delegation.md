@@ -600,7 +600,7 @@ delegate_task(
 
 **Cost warning:** With `max_spawn_depth: 3` and `max_concurrent_children: 3`, the tree can reach 3×3×3 = 27 concurrent leaf agents. Each extra level multiplies spend — raise `max_spawn_depth` intentionally.
 
-**One-shot runs are capped separately.** `hermes chat -q` / `--oneshot` sessions may spawn at most `delegation.oneshot_max_children` subagents in total (default `2`, `0` = unlimited). A one-shot run has no later turn to receive results, and in benchmark trajectories most of its spawns were "independently review my own work" rather than parallel work — each such child re-pays a cold system prompt and re-reads the repo. Interactive and gateway sessions are unaffected. Because a one-shot joins its children inside the `delegate_task` call, its schema leaves out the live-control parameters (`action` list/steer/stop, `subagent_id`, `message`).
+**One-shot runs are capped separately.** `hermes chat -q` / `--oneshot` sessions may spawn at most `delegation.oneshot_max_children` subagents in total (default `2`, `0` = unlimited). A one-shot run has no later turn to receive results, and in benchmark trajectories most of its spawns were "independently review my own work" rather than parallel work — each such child re-pays a cold system prompt and re-reads the repo. Interactive and gateway sessions are unaffected. Because a one-shot joins its children inside the `delegate_task` call, its schema leaves out the control parameters (`action`, `subagent_id`, `message`, `delegation_id`).
 
 ## Finite chat runs
 
@@ -651,7 +651,7 @@ delegation:
 - **`background`** (alias `async`): every gateway session keeps background delegation.
 
 An inline session's `delegate_task` says results return in the call and leaves out the
-live-control parameters (`action` list/steer/stop, `subagent_id`, `message`), the same
+control parameters (`action`, `subagent_id`, `message`, `delegation_id`), the same
 schema as a one-shot run. While it waits, the typing indicator stays on and the turn
 behaves like any long tool call. `/stop` stops the children, and so does a follow-up
 message under the default `busy_input_mode: interrupt` (each child returns an interrupted
@@ -701,6 +701,28 @@ For **durable execution** that must survive session closure or process restart, 
 - `cronjob` (action=`create`) — schedules a separate agent run; immune to parent-turn interrupts.
 - `terminal(background=True, notify_on_complete=True)` — long-running shell commands that keep running while the agent does other things.
 :::
+
+### Reading a stored result
+
+In a background-capable session, use the delegation ID returned by dispatch to read
+its durable record without spawning another child or changing delivery state:
+
+```python
+delegate_task(action="result", delegation_id="deleg_...")
+```
+
+The response includes execution state, delivery state and attempts, timestamps,
+available session/model metadata, and the stored result. A running unit may return
+partial per-child entries. Local ledger reads require the caller to own the parent
+session or its compression lineage; session-worker reads use the worker store's
+session fence. Unknown, foreign, ownerless and unreadable records return the same
+not-found error. Missing worker-store metadata is returned as `null`.
+
+Reading a result does not acknowledge delivery, resume execution or prove that the
+task passed acceptance. For completed workers, `tool_trace.execution` reports the
+matched terminal call's observed outcome, exit code and output truncation. Reuse
+sufficient, consistent check evidence; investigate missing, failed, truncated,
+conflicting or outdated evidence and retain required independent review.
 
 ## Key Properties
 
