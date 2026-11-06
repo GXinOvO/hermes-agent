@@ -29,6 +29,7 @@
     "../shared/src/file-url.ts",
     "../shared/src/file-search.ts",
     "../shared/src/file-search-stream.ts",
+    "../shared/src/hermes-cloud.ts",
     "../shared/src/translucency.ts"
   ],
   "exclude": ["src", "electron/**/*.e2e.mts"]
