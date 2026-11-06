@@ -3445,6 +3445,7 @@ export const jaOverrides = {
       readAloud: '読み上げ',
       copyFullResponse: '回答全体をコピー',
       readAloudFullResponseHint: 'Shiftを押しながらクリック: 回答全体を読み上げ',
+      contentRefusedNotice: 'このメッセージはモデルの安全フィルターによって拒否されました。別の内容でお試しください。',
       editMessage: 'メッセージを編集',
       stop: '停止',
       restorePrevious: '前のチェックポイントに戻す',

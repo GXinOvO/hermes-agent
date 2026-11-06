@@ -4501,6 +4501,7 @@ export const en: Translations = {
       react: 'React',
       dismissError: 'Dismiss error',
       responseStopped: 'Response stopped',
+      contentRefusedNotice: "This message was refused by the model's safety filter — try a different query.",
       ...enErrorLayers,
       errorCodes: enErrorCodes,
       errorAuthKinds: {
