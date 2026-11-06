@@ -57,9 +57,11 @@ def execute_parallel(args, *, allowed_tools, tool_call_counter, max_tool_calls,
         for call in calls:
             futures.append(pool.submit(propagate_context_to_thread(invoke), call))
         pending = set(futures)
-        while pending:
+        while True:
             if stopped():
                 return tool_error("execute_code stopped; unfinished reads may still be running.")
+            if not pending:
+                break
             _, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
         return json.dumps([future.result() for future in futures], ensure_ascii=True)
     except Exception as exc:
