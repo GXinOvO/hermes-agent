@@ -733,21 +733,17 @@ class TestExecuteCodeEdgeCases(unittest.TestCase):
 
 
     @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
-    def test_nonoverlapping_tools_fallback(self):
-        """When enabled_tools has no overlap with SANDBOX_ALLOWED_TOOLS,
-        should fall back to all allowed tools."""
-        code = (
-            "from hermes_tools import terminal\n"
-            "print('fallback ok')\n"
-        )
-        with patch("model_tools.handle_function_call",
-                    return_value=json.dumps({"ok": True})):
+    def test_nonoverlapping_tools_do_not_expand_the_explicit_grant(self):
+        code = "from hermes_tools import terminal\n"
+        with patch("model_tools.handle_function_call") as dispatch:
             result = json.loads(execute_code(
                 code, task_id="test-nonoverlap",
                 enabled_tools=["vision_analyze", "browser_snapshot"],
             ))
-        self.assertEqual(result["status"], "success")
-        self.assertIn("fallback ok", result["output"])
+        self.assertEqual(result["status"], "error")
+        self.assertIn("cannot import name 'terminal'", result["error"])
+        self.assertEqual(result["tool_calls_made"], 0)
+        dispatch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

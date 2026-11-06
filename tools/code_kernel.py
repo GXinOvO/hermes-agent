@@ -204,11 +204,17 @@ class CellAuthority:
     refused instead of running under a stale approval/session/turn identity.
     """
 
-    def __init__(self, task_id: str):
+    def __init__(self, task_id: str, max_tool_calls: int = 50):
         import contextvars
         self.task_id = task_id
         self.ctx = contextvars.copy_context()
         self.active = True
+        self.admission_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.max_tool_calls = max_tool_calls
+        self.counter, self.log = [0], []
+        from tools.interrupt import acting_for_tid
+        self.origin_tid = acting_for_tid.get() or threading.get_ident()
         # ((getter, setter), captured value) per thread-local prompt callback (approval, sudo, vault unlock…)
         self._callbacks: list = []
         try:
@@ -219,18 +225,26 @@ class CellAuthority:
             self._callbacks = []
 
     def retire(self) -> None:
-        self.active = False
+        with self.admission_lock:
+            self.active = False
+            self.stop_event.set()
 
     def dispatch(self, tool_name: str, tool_args: dict) -> str:
         """Run one tool call under THIS cell's context and callbacks."""
         from tools.registry import tool_error
-        if not self.active:
-            return tool_error("No active execute_code cell: the cell this kernel call "
-                              "belonged to has settled, so its tool authority is retired.")
-        return self.ctx.run(self._invoke, tool_name, tool_args)
+        with self.admission_lock:
+            if not self.active:
+                return tool_error("No active execute_code cell: the cell this kernel call "
+                                  "belonged to has settled, so its tool authority is retired.")
+        return self._dispatch_started(tool_name, tool_args)
+
+    def _dispatch_started(self, tool_name: str, tool_args: dict) -> str:
+        return self.ctx.copy().run(self._invoke, tool_name, tool_args)
 
     def _invoke(self, tool_name: str, tool_args: dict) -> str:
         from model_tools import handle_function_call
+        from tools.interrupt import acting_for_tid
+        origin = acting_for_tid.set(self.origin_tid)
         previous = None
         if self._callbacks:
             try:
@@ -242,6 +256,7 @@ class CellAuthority:
         try:
             return handle_function_call(tool_name, tool_args, task_id=self.task_id)
         finally:
+            acting_for_tid.reset(origin)
             if previous is not None:
                 try:
                     for setter, cb in previous:
@@ -452,10 +467,21 @@ def _rpc_forever(kernel: SessionKernel, max_tool_calls: int,
         if authority is None:
             return tool_error("No active execute_code cell: this kernel has no cell authority installed.")
         return authority.dispatch(tool_name, tool_args)
+    def _request_dispatch(request: dict) -> str:
+        from tools.code_execution_rpc import _handle_rpc_request
+        authority = kernel.cell_authority
+        if authority is None:
+            return tool_error("No active execute_code cell: this kernel has no cell authority installed.")
+        return _handle_rpc_request(
+            request, allowed_tools=sandbox_tools, tool_call_counter=authority.counter,
+            max_tool_calls=authority.max_tool_calls, dispatch=authority.dispatch, tool_call_log=authority.log,
+            call_start=time.monotonic(), where="sandbox", stop_event=kernel.stop_event,
+            allow_parallel=True,
+        )
     while not kernel.stop_event.is_set():
         _rpc_server_loop(kernel.server_sock, "", kernel.tool_call_log, kernel.tool_call_counter,
                          max_tool_calls, sandbox_tools, kernel.stop_event, kernel.rpc_token,
-                         dispatch=_dispatch)
+                         dispatch=_dispatch, request_dispatch=_request_dispatch)
 
 
 def _stdout_reader(kernel: SessionKernel) -> None:
@@ -726,6 +752,8 @@ def _await_cell(kernel: SessionKernel, timeout: int, is_interrupted) -> tuple[st
             payload = kernel.response_q.get(timeout=0.05)
         except queue.Empty:
             continue
+        if is_interrupted():
+            return "interrupted", {}
         if payload.get("status") in ("kernel-eof", "protocol-error"):
             return "error", payload
         return "success", payload
@@ -835,7 +863,7 @@ def _run_cell(kernel: SessionKernel, key: tuple, code: str, *, task_id: str, chi
     reused = kernel.proc is not None
     # Captured on the calling thread BEFORE the cell runs (the snapshot a per-call RPC thread
     # would get) and installed on the kernel so RPC dispatches under THIS cell's identity.
-    authority = CellAuthority(task_id)
+    authority = CellAuthority(task_id, max_tool_calls)
     with kernel.lock:
         try:
             if kernel.proc is None:
@@ -843,13 +871,15 @@ def _run_cell(kernel: SessionKernel, key: tuple, code: str, *, task_id: str, chi
                        sandbox_tools=sandbox_tools, max_tool_calls=max_tool_calls)
             assert kernel.proc is not None and kernel.proc.stdin is not None
             # Per-cell tool budget: the RPC loop enforces counter < max; reset without restarting.
-            kernel.tool_call_counter[0] = 0
-            kernel.cell_log_start = len(kernel.tool_call_log)
+            kernel.tool_call_counter = authority.counter
+            kernel.tool_call_log = authority.log
+            kernel.cell_log_start = 0
             kernel.raw.drain(), kernel.stderr.drain()  # raw output leaked between cells belongs to no cell
             kernel.cell_authority = authority
             kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code}) + "\n").encode("utf-8"))
             kernel.proc.stdin.flush()
             status, payload = _await_cell(kernel, timeout, is_interrupted)
+            authority.retire()
             result = _cell_result(
                 kernel, key, status, payload,
                 timeout=timeout, sandbox_tools=sandbox_tools, reused=reused,
