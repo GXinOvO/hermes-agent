@@ -726,7 +726,7 @@ def _user_local_bin_entries() -> list[str]:
     installed there were ``command not found`` from the terminal tool (#111778)."""
     local_bin = Path.home() / ".local" / "bin"
     try:
-        return [str(local_bin)] if local_bin.is_dir() else []
+        return [str(local_bin.resolve())] if local_bin.is_dir() else []
     except OSError:
         # HOME can point at a directory this process may not traverse (CI runs
         # with HOME=/root as an unprivileged user); such a home has no usable
@@ -744,8 +744,13 @@ def _append_missing_sane_path_entries(existing_path: str) -> str:
         return existing_path
     # dict preserves first-occurrence order; empty entries dropped.
     ordered = dict.fromkeys(entry for entry in existing_path.split(":") if entry)
-    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *_managed_runtime_path_entries(),
-                                  *_user_local_bin_entries()]))
+    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *_managed_runtime_path_entries()]))
+    for entry in _user_local_bin_entries():
+        if entry not in ordered and not any(
+            os.path.isabs(existing) and os.path.isdir(existing) and os.path.realpath(existing) == entry
+            for existing in ordered
+        ):
+            ordered[entry] = None
     return ":".join(ordered)
 
 
