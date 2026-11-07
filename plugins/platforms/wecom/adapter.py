@@ -28,6 +28,7 @@ AIOHTTP_AVAILABLE = aiohttp is not None
 HTTPX_AVAILABLE = httpx is not None
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms.helpers import MessageDeduplicator, bounded_put, send_chunks
 from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin
 from gateway.platforms.base import gateway_trust_env, BasePlatformAdapter, SendResult
@@ -589,6 +590,7 @@ class WeComAdapter(WeComStreamMixin, WeComMediaMixin, ChatSendQueueMixin, OwnAcc
     async def _send_proactive_markdown(self, chat_id: str, content: str) -> dict[str, Any]:
         return await self._send_request(APP_CMD_SEND, {"chatid": chat_id, **self._markdown_body(content)})
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send standalone markdown (never touches active streams); serialized per chat for the 30 msgs/min
         limit (846607). ``metadata["is_approval_prompt"]`` uses the control lane."""
@@ -610,6 +612,8 @@ class WeComAdapter(WeComStreamMixin, WeComMediaMixin, ChatSendQueueMixin, OwnAcc
                 try:
                     response = await self._send_reply_markdown(reply_req_id, content)
                 except (TimeoutError, RuntimeError) as passive_err:
+                    if strict_transport():
+                        raise
                     # req_id may be stale after a reconnect — proactive send needs none.
                     logger.warning("[%s] Passive reply failed (%s), falling back to proactive send", self.name, passive_err)
                     response = await self._send_proactive_markdown(chat_id, content)

@@ -3247,6 +3247,7 @@ export interface SessionResumeResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  background_results?: BackgroundResult[] | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -3263,6 +3264,16 @@ export interface SessionResumeResult {
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   auto_continue?: AutoContinue | null
+}
+export interface BackgroundResult {
+  event_type: 'background.complete' | 'btw.complete' | 'preview.restart.complete'
+  payload: SideAgentCompletePayload
+}
+/** ``methods_prompt._spawn_side_agent``: ``{task_id, **extra, text}``; btw adds ``question``. */
+export interface SideAgentCompletePayload {
+  task_id: string
+  text: string
+  question?: string | null
 }
 /** ``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting client rebuilds its bubbles from. */
 export interface InflightTurn {
@@ -3322,6 +3333,7 @@ export interface SessionActivateResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  background_results?: BackgroundResult[] | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -5135,6 +5147,7 @@ export interface CanonicalSnapshot {
   pending: CanonicalPendingAdmission[]
   prompts: CanonicalPendingPrompt[]
   info: CanonicalSnapshotInfo
+  background_results?: BackgroundResult[] | null
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   open_requests?: OpenRequestEntry[] | null
@@ -5459,6 +5472,7 @@ export interface CanonicalBotDeliverParams {
   session_id?: string | null
   author?: Record<string, unknown> | null
   notification_category?: string | null
+  sealed_cron_result_v1?: Record<string, unknown> | null
 }
 /** A delivery's receipt. It names its admission, unless ``refused``: the FIFO refused the delivery before anything was committed (``gateway/session_bot.py``), a terminal ``failed`` receipt with no admission that the relay settles as the sender's answer. */
 export interface CanonicalBotDeliverResult {
@@ -5474,6 +5488,25 @@ export interface CanonicalBotDeliverResult {
   error?: string | null
   reason?: string | null
   target_state?: 'idle' | 'working' | 'waiting_approval' | 'waiting_clarify' | 'paused' | null
+  sealed_cron_result_v1?: Record<string, unknown> | null
+}
+export interface CanonicalBotPrepareParams {
+  profile?: string | null
+  message: string
+  id: string
+  session_id?: string | null
+  author?: Record<string, unknown> | null
+  notification_category?: string | null
+  sealed_cron_result_v1?: Record<string, unknown> | null
+  create_missing?: boolean
+}
+export interface CanonicalBotPrepareResult {
+  profile_home: string
+  session_id: string
+  live_session_id: string
+  lease_id: string
+  authority_epoch: number
+  principal_id: string
 }
 export interface CanonicalBotCancelParams {
   profile?: string | null
@@ -6032,12 +6065,6 @@ export interface SessionControlUpdatePayload {
 export interface BillingStepUpVerificationPayload {
   verification_url: string
   user_code: string
-}
-/** ``methods_prompt._spawn_side_agent``: ``{task_id, **extra, text}``; btw adds ``question``. */
-export interface SideAgentCompletePayload {
-  task_id: string
-  text: string
-  question?: string | null
 }
 /** ``methods_prompt`` restart body + ``agent_callbacks._preview_restart_callbacks``. */
 export interface PreviewRestartProgressPayload {
@@ -6980,6 +7007,7 @@ export interface CanonicalRpcMethods {
   'approval.respond': { params: CanonicalApprovalParams; result: PromptResponseResult }
   'bot_relay.cancel': { params: CanonicalBotCancelParams; result: CanonicalBotCancelResult }
   'bot_relay.deliver': { params: CanonicalBotDeliverParams; result: CanonicalBotDeliverResult }
+  'bot_relay.prepare': { params: CanonicalBotPrepareParams; result: CanonicalBotPrepareResult }
   'bot_relay.settle': { params: CanonicalBotDeliverParams; result: CanonicalBotDeliverResult }
   /** Lock one answer of the owner's batch clarify request (editable until every question is locked); only a viewer attached to that session with session:respond may lock. */
   'clarify.lock': { params: ClarifyLockParams; result: ClarifyLockResult }
@@ -7067,6 +7095,7 @@ export const CANONICAL_RPC_METHODS = [
   'approval.respond',
   'bot_relay.cancel',
   'bot_relay.deliver',
+  'bot_relay.prepare',
   'bot_relay.settle',
   'clarify.lock',
   'clarify.respond',

@@ -1,19 +1,20 @@
-"""Durable delivery-obligation ledger for gateway final responses (rows in the shared ``state.db``;
-WAL, owner pid + process-start liveness, bounded retention) so a crash between finalize and
-platform ACK cannot lose a response silently. Checkpoints: record_obligation() 'pending' before
-any send | mark_attempting() 'attempting' right before the await | mark_delivered() 'delivered'
-only on SendResult.success | mark_failed() 'failed' on a definitive rejection. Crash semantics
-(never silently resend an ambiguous send): pending = never started, redeliver plainly; attempting
-= crashed mid-await, platform MAY have it, redeliver WITH a visible recovered marker; failed =
-rejected once, restart is a retry boundary, also marked; delivered = prune. Attempts are capped
-and stale rows expire, both -> 'abandoned' (kept briefly, then pruned). Everything is
-best-effort: ledger failures must never block a send; callers wrap every call in try/except.
+"""Durable final-delivery receipts in the process home's shared ``state.db``.
+
+New ordinary replies freeze ``human_reply_v1`` and retain marked crash/failure retries.
+Runtime-bound automation freezes ``strict_automation_v1`` with exact admission provenance:
+claim before transport, ACK -> delivered; failed/partial/orphaned attempt -> unknown, never
+automatic resend. A missing strict receipt fails closed. Historical records without policy
+remain legacy: pending with zero attempts permits a first send, other unacknowledged states
+become unknown; delivered never reopens. Never infer historical identity from message text.
+Strict/legacy receipts are retained as replay fences; ordinary terminal receipts are bounded.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -206,6 +207,12 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
     if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
         add_column_if_missing(conn, "delivery_obligations", "adapter_profile", "adapter_profile TEXT")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}
+    for name, declaration in (("recovery_policy", "recovery_policy TEXT"),
+                              ("provenance_json", "provenance_json TEXT"),
+                              ("payload_kind", "payload_kind TEXT NOT NULL DEFAULT 'text'")):
+        if name not in columns:
+            add_column_if_missing(conn, "delivery_obligations", name, declaration)
 
 
 def _transaction():
@@ -269,15 +276,15 @@ def compute_obligation_id(session_key: str, message_ref: str, content: str) -> s
 
 def record_obligation(*, obligation_id: str, session_key: str, platform: str, chat_id: str,
                       thread_id: Optional[str], content: str, adapter_profile: Optional[str] = None) -> None:
-    """Record a final response as owed to the platform (state='pending')."""
+    """Record a new ordinary reply. Never reset an existing delivery receipt."""
     now, (pid, started) = time.time(), _owner_stamp()
     with _DB_LOCK, _transaction() as conn:
         conn.execute(
-            """INSERT OR REPLACE INTO delivery_obligations
+            """INSERT OR IGNORE INTO delivery_obligations
                (obligation_id, session_key, platform, chat_id, thread_id,
                 content, state, attempts, created_at, updated_at,
-                owner_pid, owner_started_at, adapter_profile)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)""",
+                owner_pid, owner_started_at, adapter_profile, recovery_policy)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, 'human_reply_v1')""",
             (obligation_id, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
              content, now, now, pid, started, str(adapter_profile).strip() if adapter_profile else "default"))
         # Same transaction, same connection: the cron ledgers prune this way too
@@ -285,21 +292,99 @@ def record_obligation(*, obligation_id: str, session_key: str, platform: str, ch
         _prune_unlocked(conn, now)
 
 
+def claim_automation_send(*, binding: dict, session_key: str, platform: str, chat_id: str,
+                          thread_id: Optional[str], content: str, adapter_profile: Optional[str],
+                          payload_kind: str = 'text') -> tuple[str, bool, str]:
+    """Freeze runtime provenance and CAS a never-attempted send. No second transport attempt.
+
+    ``binding`` is produced by session_delivery_policy.delivery_binding after exact durable
+    admission/result validation. This function is not a wire/model-facing policy selector.
+    Attachment payloads are receipts, not text that the boot sweep can replay as a message.
+    """
+    if binding.get('route') != session_key or payload_kind not in {'text', 'attachments', 'tts'}:
+        raise ValueError('automation delivery binding mismatch')
+    provenance = json.dumps(binding, sort_keys=True, separators=(',', ':'))
+    # One admission has one final per kind. A changed render or changed local file is
+    # a conflict to reconcile, never a new id authorizing another transport attempt.
+    oid = compute_obligation_id(session_key, 'automation:' + provenance, payload_kind)
+    now, (pid, started) = time.time(), _owner_stamp()
+    profile = str(adapter_profile).strip() if adapter_profile else 'default'
+    with _DB_LOCK, _transaction() as conn:
+        conn.execute("""INSERT OR IGNORE INTO delivery_obligations
+            (obligation_id,session_key,platform,chat_id,thread_id,content,state,attempts,
+             created_at,updated_at,owner_pid,owner_started_at,adapter_profile,
+             recovery_policy,provenance_json,payload_kind)
+            VALUES (?,?,?,?,?,?,'pending',0,?,?,?,?,?,'strict_automation_v1',?,?)""",
+            (oid, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
+             content, now, now, pid, started, profile, provenance, payload_kind))
+        saved = conn.execute("""SELECT state,recovery_policy,provenance_json,platform,chat_id,
+            thread_id,adapter_profile,payload_kind,content FROM delivery_obligations WHERE obligation_id=?""", (oid,)).fetchone()
+        expected = ('strict_automation_v1', provenance, platform, str(chat_id),
+                    str(thread_id) if thread_id else None, profile, payload_kind, content)
+        if saved[1:] != expected:
+            raise ValueError('automation delivery receipt conflict')
+        changed = conn.execute("""UPDATE delivery_obligations SET state='attempting',attempts=1,
+            updated_at=?,owner_pid=?,owner_started_at=?
+            WHERE obligation_id=? AND state='pending' AND attempts=0""", (now, pid, started, oid)).rowcount
+        return oid, bool(changed), 'attempting' if changed else saved[0]
+
+
+def obligation_policy(obligation_id: str) -> Optional[str]:
+    with _DB_LOCK, _transaction() as conn:
+        row = conn.execute('SELECT recovery_policy FROM delivery_obligations WHERE obligation_id=?',
+                           (obligation_id,)).fetchone()
+    return row[0] if row else None
+
+
+def mark_unknown(obligation_id: str, error: str = '') -> None:
+    _update_state(obligation_id, 'unknown', error=error)
+
+
+def record_human_final_failure(descriptor: dict, error: str) -> str:
+    """Explicit ordinary-human refusal hands retry ownership to the existing ledger.
+
+    The sealed descriptor was already claimed before transport. Insert ``failed``
+    directly: a kill must never expose a pending row for a possibly partial send.
+    Strict automation and unproven legacy descriptors cannot use this migration.
+    """
+    binding = descriptor['binding']
+    if binding.get('policy') != 'human_reply_v1':
+        raise ValueError('ordinary retry requires exact human admission provenance')
+    source, part = binding['source'], descriptor['parts']['text']
+    if part['state'] != 'attempting':
+        raise ValueError('ordinary retry requires a claimed final')
+    oid = compute_obligation_id(binding['route'], 'human-final:' + binding['admission_id'], part['content'])
+    now, (pid, started) = time.time(), _owner_stamp()
+    with _DB_LOCK, _transaction() as conn:
+        conn.execute("""INSERT OR IGNORE INTO delivery_obligations
+            (obligation_id,session_key,platform,chat_id,thread_id,content,state,attempts,
+             created_at,updated_at,owner_pid,owner_started_at,adapter_profile,
+             recovery_policy,provenance_json,payload_kind)
+            VALUES (?,?,?,?,?,?,'failed',0,?,?,?,?,?,'human_reply_v1',?,'text')""",
+            (oid,binding['route'],source['platform'],str(source['chat_id']),source.get('thread_id'),
+             part['content'],now,now,pid,started,descriptor['adapter_profile'] or 'default',
+             json.dumps(binding,sort_keys=True)))
+        conn.execute("UPDATE delivery_obligations SET last_error=? WHERE obligation_id=? AND state='failed'",
+                     (str(error)[:500],oid))
+    return oid
+
+
 def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: str, chat_id: str,
                             thread_id: Optional[str], content: str, since: float,
                             adapter_profile: Optional[str] = None) -> None:
-    """Adopt a reply a killed process persisted but never ledgered. Unowned, so this boot's sweep
-    claims it, and 'attempting', because a streamed reply may already be on screen: it is
-    redelivered once, with the recovered marker. A no-op when the same reply was already ledgered
-    since *since* (the turn start), and idempotent across boots that die before their sweep."""
+    """Quarantine a crash-left reply lacking trusted outbound provenance as ``unknown``.
+
+    A stream may already be visible. The sweep retains it as unknown, never authorizes a send
+    by guessing whether it was human or automation. Existing exact receipts remain untouched.
+    """
     now = time.time()
     with _DB_LOCK, _transaction() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO delivery_obligations
                (obligation_id, session_key, platform, chat_id, thread_id,
                 content, state, attempts, created_at, updated_at,
-                owner_pid, owner_started_at, adapter_profile)
-               SELECT ?, ?, ?, ?, ?, ?, 'attempting', 0, ?, ?, NULL, NULL, ?
+                owner_pid, owner_started_at, adapter_profile, last_error)
+               SELECT ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?, NULL, NULL, ?, 'legacy_delivery_unproven: reconciliation required'
                WHERE NOT EXISTS (SELECT 1 FROM delivery_obligations
                                  WHERE session_key = ? AND content = ? AND created_at >= ?)""",
             (obligation_id, session_key, platform, str(chat_id), str(thread_id) if thread_id else None,
@@ -316,7 +401,13 @@ def mark_delivered(obligation_id: str) -> None:
 
 
 def mark_failed(obligation_id: str, error: str = "") -> None:
-    _update_state(obligation_id, "failed", error=error)
+    # A transport refusal may follow an accepted earlier chunk, so strict consumers
+    # cannot infer no side effect from a failed aggregate SendResult.
+    with _DB_LOCK, _transaction() as conn:
+        conn.execute("""UPDATE delivery_obligations SET state=CASE
+            WHEN recovery_policy='human_reply_v1' THEN 'failed' ELSE 'unknown' END,
+            updated_at=?,last_error=? WHERE obligation_id=? AND state!='delivered'""",
+            (time.time(), str(error)[:500] or None, obligation_id))
 
 
 def release_runtime_claim(obligation_id: str, error: str = "") -> bool:
@@ -345,7 +436,7 @@ def _update_state(obligation_id: str, state: str, error: str = "") -> None:
         conn.execute(
             """UPDATE delivery_obligations
                SET state=?, updated_at=?, last_error=?
-               WHERE obligation_id=?""",
+               WHERE obligation_id=? AND state!='delivered'""",
             (state, time.time(), error[:500] if error else None, obligation_id))
 
 
@@ -363,6 +454,15 @@ def _claimed_row(oid, session_key, platform, chat_id, thread_id, content, attemp
             **({"marker": marker} if needs_marker and marker else {}), "profile": profile,
             **({"runtime_recovery": True} if runtime else {}),
             **({"last_error": last_error} if last_error else {}), "attempts": attempts + 1}
+
+
+def _recovery_scalars(attempts, created_at, updated_at, owner_pid=None, owner_started_at=None):
+    return (type(attempts) is int and attempts >= 0
+        and all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                for value in (created_at, updated_at))
+        and (owner_pid is None or type(owner_pid) is int and owner_pid > 0)
+        and (owner_started_at is None or type(owner_started_at) in (int, float)
+             and math.isfinite(owner_started_at) and owner_started_at >= 0))
 
 
 def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Optional[set] = None,
@@ -391,14 +491,27 @@ def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Opt
         rows = conn.execute(
             """SELECT obligation_id, session_key, platform, chat_id, thread_id,
                       content, state, attempts, created_at,
-                      owner_pid, owner_started_at, adapter_profile, last_error, updated_at
+                      owner_pid, owner_started_at, adapter_profile, last_error, updated_at,
+                      recovery_policy, payload_kind
                FROM delivery_obligations
                WHERE state IN ('pending', 'attempting', 'failed')"""
         ).fetchall()
         for (oid, session_key, platform, chat_id, thread_id, content, state, attempts, created_at,
-             owner_pid, owner_started_at, adapter_profile, last_error, updated_at) in rows:
+             owner_pid, owner_started_at, adapter_profile, last_error, updated_at, policy, kind) in rows:
+            if not _recovery_scalars(attempts, created_at, updated_at, owner_pid, owner_started_at):
+                logger.warning('Delivery obligation %s retained for reconciliation', oid)
+                continue
             if _owner_alive(owner_pid, owner_started_at):
                 continue  # a live gateway still owns this row
+            if policy != 'human_reply_v1':
+                # Unknown legacy provenance cannot authorize a replay. A strict row may
+                # only make its first attempt; attachments require the original exact payload.
+                if state != 'pending' or attempts != 0:
+                    conn.execute("UPDATE delivery_obligations SET state='unknown',updated_at=? "
+                                 "WHERE obligation_id=?", (now, oid))
+                    continue
+                if kind != 'text':
+                    continue
             if attempts >= MAX_ATTEMPTS or (now - created_at) > STALE_AFTER_SECONDS:  # exhausted -> abandoned
                 conn.execute(
                     """UPDATE delivery_obligations
@@ -469,9 +582,12 @@ def sweep_failed_for_runtime(platform: str, now: Optional[float] = None, *,
                       content, attempts, created_at, owner_pid,
                       owner_started_at, last_error, adapter_profile, updated_at
                FROM delivery_obligations
-               WHERE state='failed' AND platform=?""", (platform,)).fetchall()
+               WHERE state='failed' AND recovery_policy='human_reply_v1' AND platform=?""", (platform,)).fetchall()
         for (oid, session_key, row_platform, chat_id, thread_id, content, attempts, created_at,
              owner_pid, owner_started_at, last_error, adapter_profile, updated_at) in rows:
+            if not _recovery_scalars(attempts, created_at, updated_at, owner_pid, owner_started_at):
+                logger.warning('Delivery obligation %s retained for reconciliation', oid)
+                continue
             # Exact process-start matching prevents PID reuse from stealing work.
             if adapter_profile != expected_profile or owner_pid != pid or owner_started_at != started:
                 continue
@@ -517,9 +633,12 @@ def pending_retries(now: Optional[float] = None) -> list[dict[str, Any]]:
         rows = conn.execute(
             """SELECT platform, adapter_profile, updated_at, last_error, attempts, created_at
                FROM delivery_obligations
-               WHERE state='failed' AND owner_pid IS ? AND owner_started_at IS ?""", (pid, started)).fetchall()
+               WHERE state='failed' AND recovery_policy='human_reply_v1'
+                 AND owner_pid IS ? AND owner_started_at IS ?""", (pid, started)).fetchall()
     earliest: dict[tuple, float] = {}
     for platform, adapter_profile, updated_at, last_error, attempts, created_at in rows:
+        if not _recovery_scalars(attempts, created_at, updated_at):
+            continue
         # Reconnect-only rows (a claim released because the adapter was gone) are re-claimed by the
         # reconnect sweep; a timer would claim and release them every tick until the adapter is back.
         if is_reconnect_only(last_error):
@@ -538,12 +657,16 @@ def _prune_unlocked(conn, now: float) -> None:
     """Retention DELETEs on the caller's open connection — must run inside the caller's transaction."""
     conn.execute(
         """DELETE FROM delivery_obligations
-           WHERE state IN ('delivered', 'abandoned') AND updated_at < ?""", (now - _RETENTION_SECONDS,))
-    total = conn.execute("SELECT COUNT(*) FROM delivery_obligations").fetchone()[0]
+           WHERE recovery_policy='human_reply_v1' AND state IN ('delivered', 'abandoned')
+             AND updated_at < ?""", (now - _RETENTION_SECONDS,))
+    # Strict/legacy uncertainty receipts are replay fences, not disposable cache rows.
+    # Removing one would turn an exact repeated admission into a fresh send authority.
+    total = conn.execute("SELECT COUNT(*) FROM delivery_obligations WHERE recovery_policy='human_reply_v1'").fetchone()[0]
     if total > _MAX_ROWS:
         conn.execute(
             """DELETE FROM delivery_obligations WHERE obligation_id IN (
                  SELECT obligation_id FROM delivery_obligations
+                 WHERE recovery_policy='human_reply_v1'
                  ORDER BY CASE state
                             WHEN 'delivered' THEN 0
                             WHEN 'abandoned' THEN 1

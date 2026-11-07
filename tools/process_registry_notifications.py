@@ -159,6 +159,8 @@ def _notice_lines(results) -> list[str]:
 def _preamble(evt: dict, title: str, intro: str, completed_at: float, *, with_goal: bool) -> list[str]:
     """Shared preamble: title, intro, blank, dispatch time, [goal], context/toolsets, role+model."""
     lines = [title, intro, ""]
+    if evt.get('result_durability') == 'failed':
+        lines.append('Result not durably saved: this is an in-memory copy; preserve it before restart and do not rerun completed work.')
     dispatched_at = evt.get("dispatched_at")
     if isinstance(dispatched_at, (int, float)):
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(dispatched_at))

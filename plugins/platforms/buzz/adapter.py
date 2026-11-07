@@ -34,6 +34,7 @@ from gateway.platforms._shared import (
     apply_yaml_bridge as _apply_yaml_bridge, get_scoped_secret as _shared_scoped_secret, profile_scoped as _profile_scoped,
     seed_extra_from_env as _seed_extra_from_env,
 )
+from gateway.strict_transport import strict_transport
 from gateway.platforms._shared import send_error
 
 
@@ -820,6 +821,8 @@ class BuzzAdapter(BuzzCursorMixin, BasePlatformAdapter):
         return code, out, err
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        if strict_transport():
+            return SendResult(success=False, error="strict Buzz CLI internal retries unverified")
         if not content:
             return SendResult(success=False, error="Empty message")
         # Anchor: metadata.thread_id, then metadata.reply_to_message_id (stream/progress sends), then reply_to.

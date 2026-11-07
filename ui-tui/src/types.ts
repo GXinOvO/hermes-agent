@@ -141,6 +141,8 @@ export interface PasteSection {
 }
 
 export interface Msg {
+  /** Display-only sealed result identity; history reset also resets deduplication. */
+  backgroundResultId?: string
   info?: SessionInfo
   kind?: 'diff' | 'event' | 'image' | 'intro' | 'panel' | 'slash' | 'trail'
   // Local image paths shown inline under the row: a user turn's attachments,

@@ -93,3 +93,42 @@ it('dials the grant, describes the owner, creates a session and redials through 
   expect(connect).toHaveBeenLastCalledWith(false, true)
   gw.kill()
 })
+
+it('republishes saved background results from the hydrated snapshot', async () => {
+  vi.stubGlobal('WebSocket', FakeSocket)
+
+  const gw = new GatewayClient({ connect: async () => ({
+    url: 'ws://127.0.0.1:9/api/ws', protocols: ['hermes-gateway-v1'],
+    profile_id: '/home/p', instance_id: 'owner'
+  }) })
+  const events: { type: string; session_id?: string; payload?: Record<string, unknown> }[] = []
+
+  gw.on('event', event => events.push(event as (typeof events)[number]))
+  gw.start()
+  gw.drain()
+  await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1))
+  const socket = FakeSocket.instances[0]!
+
+  socket.open()
+  await vi.waitFor(() => expect(socket.sent.some(frame => frame.method === 'runtime.describe')).toBe(true))
+  socket.reply('runtime.describe', { session_create: { sources: ['tui'], parameters: ['request_id', 'source'] } })
+  await vi.waitFor(() => expect(events.some(event => event.type === 'gateway.ready')).toBe(true))
+  events.length = 0
+
+  gw.hydrateSharedPrompts({
+    session_id: 'S1', authority_epoch: 3, prompts: [], open_requests: [],
+    background_results: [
+      { event_type: 'background.complete', payload: { task_id: 't1', text: 'nightly brief' } },
+      { event_type: 'btw.complete', payload: { task_id: 't2', text: 'aside', question: 'q' } }
+    ]
+  })
+
+  expect(events).toEqual([
+    { type: 'background.complete', session_id: 'S1', payload: { task_id: 't1', text: 'nightly brief' } },
+    { type: 'btw.complete', session_id: 'S1', payload: { task_id: 't2', text: 'aside', question: 'q' } }
+  ])
+
+  gw.hydrateSharedPrompts({ session_id: 'S1', authority_epoch: 3, prompts: [], open_requests: [] })
+  expect(events).toHaveLength(2)
+  gw.kill()
+})

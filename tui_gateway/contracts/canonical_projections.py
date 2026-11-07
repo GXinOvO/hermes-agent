@@ -73,6 +73,7 @@ class CanonicalBotDeliverParams(Params):
     session_id: str | None = None
     author: dict[str, JsonValue] | None = None
     notification_category: str | None = None
+    sealed_cron_result_v1: dict[str, JsonValue] | None = None
 
 
 class CanonicalBotDeliverResult(Result):
@@ -93,12 +94,26 @@ class CanonicalBotDeliverResult(Result):
     reason: str | None = None
     # The target Bot Chat's live state at answer time (``gateway/session_bot_state.py``); never stored.
     target_state: Literal['idle', 'working', 'waiting_approval', 'waiting_clarify', 'paused'] | None = None
+    sealed_cron_result_v1: dict[str, JsonValue] | None = None
 
     @model_validator(mode='after')
     def _admitted_or_refused(self):
         if (self.admission_id is None) != (self.refused is True) or (self.refused and self.status != 'failed'):
             raise ValueError('a deliver result names its admission, or is a refused failed receipt without one')
         return self
+
+
+class CanonicalBotPrepareParams(CanonicalBotDeliverParams):
+    create_missing: bool = False
+
+
+class CanonicalBotPrepareResult(Result):
+    profile_home: str
+    session_id: str
+    live_session_id: str
+    lease_id: str
+    authority_epoch: int
+    principal_id: str
 
 
 class CanonicalBotCancelParams(Params):
@@ -126,6 +141,7 @@ for _name, _params, _result in (
     ('groups.create', CanonicalRoomCreateParams, GroupsCreateResult),
     ('groups.approve', CanonicalRoomApproveParams, GroupsApproveResult),
     ('bot_relay.deliver', CanonicalBotDeliverParams, CanonicalBotDeliverResult),
+    ('bot_relay.prepare', CanonicalBotPrepareParams, CanonicalBotPrepareResult),
     # The sender's finalize of a refusal marked ``admitted: false``: the same identity, answered
     # with the id's terminal not-sent receipt or its existing admission (``gateway/session_bot.py``).
     ('bot_relay.settle', CanonicalBotDeliverParams, CanonicalBotDeliverResult),

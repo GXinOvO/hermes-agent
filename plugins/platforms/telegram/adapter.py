@@ -142,6 +142,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 from gateway.authz_mixin import _coerce_allow_set
 from agent.i18n import get_language, t
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport
 from gateway.platforms.base import (
     BasePlatformAdapter, ExecApprovalPrompt, SendResult, classify_send_error, unauthorized_action_notice,
     cache_image_from_bytes_async, cache_audio_from_bytes_async, cache_video_from_bytes_async, resolve_proxy_url, SUPPORTED_VIDEO_TYPES,
@@ -3636,9 +3637,18 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
             tracked.add(task)
             task.add_done_callback(tracked.discard)
 
+    async def _prepare_strict_transport(self, method, **kwargs):
+        from plugins.platforms.telegram.strict_delivery import preflight
+        preflight(self, method, **kwargs)
+
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a message to a Telegram chat."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_text
+            return await send_text(self, chat_id, content, reply_to, metadata)
         if not self._bot:
             live = self._replacement_telegram_adapter()
             if live is not None:
@@ -5202,10 +5212,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                 raise
         raise _last_parse_error or RuntimeError("Telegram send_voice failed for all caption variants")
 
+    @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         """Send audio as a native Telegram voice message or audio file."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'voice', chat_id, audio_path, caption, reply_to, metadata)
         if not self._bot:
             return SendResult(success=False, error="Not connected")
         _transcoded_voice_path: Optional[str] = None
@@ -5247,10 +5262,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                 with contextlib.suppress(OSError):
                     os.unlink(_transcoded_voice_path)
 
+    @single_attempt_transport
     async def send_multiple_images(
         self, chat_id: str, images: list[tuple], metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:
         """Send images as Telegram albums (``send_media_group``, 10 per chunk). Animated GIFs can't join a
         media group (need ``send_animation``) so they go via the base per-image path, as does a failed chunk."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_images
+            return await send_images(self, chat_id, images, metadata)
         if not self._bot:
             return SendResult(success=False, error="Not connected")
         if not images:
@@ -5324,10 +5344,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                         os.remove(tmp)
         return SendResult(success=delivered, error=None if delivered else "all images failed to send")
 
+    @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         """Send a local image file natively as a Telegram photo."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'image_file', chat_id, image_path, caption, reply_to, metadata)
         # Pre-compress large raster images to progressive JPEG once; the photo send and the document
         # fallback both reuse the compressed file so either upload stays under media_write_timeout.
         compressed = self._compress_image_to_jpeg(image_path)
@@ -5385,10 +5410,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         logger.warning("[%s] Failed to send %s: %s", self.name, media_key, _redact_telegram_error_text(e))
         return await fallback
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         """Send a document/file natively as a Telegram file attachment."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'document', chat_id, file_path, caption, reply_to, metadata, file_name=file_name)
         return await self._send_local_file(
             "File", file_path, chat_id, reply_to, metadata, "document",
             lambda f: {"document": f, "filename": file_name or os.path.basename(file_path), "caption": self._caption_1024(caption)},
@@ -5397,6 +5427,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                     TelegramAdapter, self,
                 ).send_document(chat_id, file_path, caption, file_name, reply_to, metadata=metadata)))
 
+    @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
@@ -5407,6 +5438,10 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         ``320x320`` video with ``duration=0`` and no thumbnail, which clients then draw as a square
         tile whatever the true aspect ratio (portrait reels and 16:9 clips alike).
         """
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'video', chat_id, video_path, caption, reply_to, metadata)
         geometry = await asyncio.to_thread(_probe_video_geometry, video_path)
         thumb_path = (
             await asyncio.to_thread(_video_thumbnail_jpeg, video_path, geometry.get("duration"))
@@ -5431,10 +5466,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                 with contextlib.suppress(OSError):
                     os.remove(thumb_path)
 
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a URL image as a Telegram photo: URL send (<5MB) → download+upload (≤10MB) → base text."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'photo', chat_id, image_url, caption, reply_to, metadata)
         if not self._bot:
             return SendResult(success=False, error="Not connected")
         from tools.url_safety import is_safe_url
@@ -5463,10 +5503,15 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
                 logger.error("[%s] File upload send_photo also failed: %s", self.name, e2, exc_info=True)
                 return await super().send_image(chat_id, image_url, caption, reply_to, metadata=metadata)
 
+    @single_attempt_transport
     async def send_animation(
         self, chat_id: str, animation_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an animated GIF natively as a Telegram animation (auto-plays inline)."""
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from plugins.platforms.telegram.strict_delivery import send_media
+            return await send_media(self, 'animation_url', chat_id, animation_url, caption, reply_to, metadata)
         if not self._bot:
             return SendResult(success=False, error="Not connected")
         try:

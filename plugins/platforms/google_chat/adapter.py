@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from agent.i18n import t
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from agent.secret_scope import is_multiplex_active
 from gateway.platforms._shared import (
     get_scoped_secret as _get_scoped_secret, seed_extra_from_env as _seed_extra_from_env, send_error
@@ -1061,11 +1062,15 @@ class GoogleChatAdapter(BasePlatformAdapter):
         self._rate_limit_hits[chat_id] = self._rate_limit_hits.get(chat_id, 0) + 1
         return self._rate_limit_hits[chat_id]
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a text message; ``metadata`` may carry ``thread_id``. A tracked typing card is
         patched in place (delete would leave a "Message deleted" tombstone) with the first
         chunk, further chunks are new messages; ``_keep_typing`` is paused meanwhile."""
+        if strict_transport():
+            from .strict_delivery import send_text
+            return await send_text(self, chat_id, content, reply_to, metadata)
         thread_id = self._resolve_thread_id(reply_to, metadata, chat_id=chat_id)
         self.pause_typing_for_chat(chat_id)
         try:
@@ -1248,6 +1253,9 @@ class GoogleChatAdapter(BasePlatformAdapter):
     def _new_authed_http(self) -> Any:
         """Fresh AuthorizedHttp per call: httplib2 shares SSL state, so the discovery
         client is not thread-safe across ``asyncio.to_thread`` workers."""
+        if strict_transport():
+            from .strict_delivery import authed_http
+            return authed_http(self._credentials)
         return AuthorizedHttp(self._credentials, http=httplib2.Http(timeout=30))
 
     async def _call_with_retry(self, sync_fn: Callable[[], Any], *, op_name: str = "chat-api-call") -> Any:
@@ -1256,6 +1264,8 @@ class GoogleChatAdapter(BasePlatformAdapter):
 
         Pattern lifted from PR #14965.
         """
+        if strict_transport():
+            return await asyncio.to_thread(sync_fn)
         delay = _RETRY_BASE_DELAY
         for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
             try:
@@ -1378,6 +1388,30 @@ class GoogleChatAdapter(BasePlatformAdapter):
                 return None  # card disappeared — caller creates a new message
             raise
 
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from gateway.strict_transport import require_strict_transport
+        from urllib.request import url2pathname
+        calls = []
+        for url, caption in images:
+            if url.startswith("file://"):
+                method, kwargs = "send_image_file", {"image_path": url2pathname(url[7:])}
+            elif self._is_animation_url(url):
+                method, kwargs = "send_animation", {"animation_url": url}
+            else:
+                method, kwargs = "send_image", {"image_url": url}
+            require_strict_transport(self, method)
+            calls.append((method, dict(kwargs, caption=caption or None)))
+        result = SendResult(success=False, error="no images to send")
+        for method, kwargs in calls:
+            result = await getattr(self, method)(chat_id=chat_id, metadata=metadata, **kwargs)
+            if not result.success:
+                break
+        return result
+
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -1386,6 +1420,9 @@ class GoogleChatAdapter(BasePlatformAdapter):
         thread_id = self._resolve_thread_id(reply_to, metadata, chat_id=chat_id)
         text = "\n".join(([caption] if caption else []) + [image_url])
         try:
+            if strict_transport():
+                from .strict_delivery import send_text
+                return await send_text(self, chat_id, text, reply_to, metadata)
             patched = await self._consume_typing_card_with_text(chat_id, text)
             if patched is not None:
                 return patched
@@ -1401,24 +1438,29 @@ class GoogleChatAdapter(BasePlatformAdapter):
         return await self._send_file(
             chat_id, path, caption, mime_hint=mime_hint, thread_id=thread_id, override_filename=override_filename)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, **kwargs: Any) -> SendResult:
         return await self._send_file_reply(chat_id, image_path, caption, reply_to, kwargs, "image/*")
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
         reply_to: Optional[str] = None, **kwargs: Any,
     ) -> SendResult:
         return await self._send_file_reply(chat_id, file_path, caption, reply_to, kwargs, None, file_name)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, **kwargs: Any) -> SendResult:
         return await self._send_file_reply(chat_id, audio_path, caption, reply_to, kwargs, "audio/ogg")
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, **kwargs: Any) -> SendResult:
         return await self._send_file_reply(chat_id, video_path, caption, reply_to, kwargs, "video/mp4")
 
+    @single_attempt_transport
     async def send_animation(
         self, chat_id: str, animation_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -1506,6 +1548,9 @@ class GoogleChatAdapter(BasePlatformAdapter):
         filename = override_filename or os.path.basename(path) or "upload.bin"
         mime = mime_hint or "application/octet-stream"
         chat_api, identity = await self._acquire_user_chat_api(self._last_sender_by_chat.get(chat_id))
+        if strict_transport():
+            from .strict_delivery import send_file
+            return await send_file(self, chat_api, identity, chat_id, path, filename, mime, caption, thread_id)
         if chat_api is None:
             return await self._post_attachment_fallback(chat_id, path, filename, caption, thread_id)
         try:

@@ -24,7 +24,7 @@ def test_real_run_ledger_and_incident_match_actual_presentation(tmp_path, monkey
         f"display: {{suppress_warning_notifications: {str(suppress).lower()}}}\n"
     )
     config = GatewayConfig()
-    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True)
+    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True, token='loopback-only')
     monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
     sent = []
 

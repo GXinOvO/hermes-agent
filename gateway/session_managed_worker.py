@@ -625,7 +625,40 @@ async def admit_managed(authority, ref, row, policy):
         result = workspace_unavailable_result(policy)
         authority.pending_results[row['admission_id']] = {'result': result, 'usage': {}}
         return result['final_response']
-    return await execute_managed(authority, ref, row, policy)
+    from gateway.session_runtime_workers import track_mutation, tracked_write
+    from hermes_state_managed_result_capacity import reserve_capacity, release_capacity
+    _mark_spawning(authority, ref, row)
+    reservation = track_mutation(authority, asyncio.to_thread(reserve_capacity, authority, row['admission_id']))
+    try:
+        await asyncio.shield(reservation)
+    except RuntimeStoreError as exc:
+        authority._managed_spawning.pop(ref.session_id, None)
+        if exc.reason != 'managed_result_capacity':
+            raise
+        authority.pending_results[row['admission_id']] = {'result': {
+            'failed': True, 'completed': False, 'final_response': '', 'messages': [],
+            'failure_reason': 'managed_result_capacity', 'local_viewer': True}, 'usage': {}}
+        return ''
+    except asyncio.CancelledError:
+        async def release_late():
+            try:
+                await reservation
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('Cancelled managed capacity reservation failed')
+                return
+            await asyncio.to_thread(release_capacity, authority, row['admission_id'])
+        track_mutation(authority, release_late())
+        authority._managed_spawning.pop(ref.session_id, None)
+        return _interrupted_before_bootstrap(authority, row, _latched_stop_cause(
+            authority, ref.session_id, row['generation']))
+    except BaseException:
+        authority._managed_spawning.pop(ref.session_id, None)
+        raise
+    try:
+        return await execute_managed(authority, ref, row, policy)
+    finally:
+        await tracked_write(authority, partial(release_capacity, authority, row['admission_id']))
 
 
 async def _finalize_managed_refusal(authority, session_id, accepted):
@@ -711,6 +744,13 @@ async def execute_managed(authority, ref, row, policy):
                     accepted, usage = accept_result(frame['result'])
                 except ValueError as exc:
                     raise RuntimeStoreError('invalid_worker_result') from exc
+                from hermes_state_managed_results import seal_result
+                captured = {'result': {**accepted, 'local_viewer': True}, 'usage': usage,
+                    **await asyncio.to_thread(_settled_session_usage, authority, scope['session_id'],
+                                              accepted, scope['execution_id'])}
+                await tracked_write(authority, partial(seal_result, authority, row=row, scope=scope,
+                                                      raw_result=frame['result'], captured=captured,
+                                                      stop_cause=worker.stop_cause))
                 authority.sessions[ref.session_id].controls.snapshot(ref.session_id, None)
                 await asyncio.to_thread(worker.send, {'type': 'finish'})
                 continue

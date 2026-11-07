@@ -473,10 +473,8 @@ async def test_unclean_restart_resumes_only_the_turn_left_in_flight(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unclean_restart_delivers_a_persisted_unledgered_reply_instead_of_regenerating(tmp_path):
-    """Killed after the reply was persisted but before it reached the delivery ledger: the stored
-    reply is ledgered for this boot's sweep (marked, it may already be on screen), not resumed."""
-    from gateway.delivery_ledger import sweep_recoverable
+async def test_unclean_restart_quarantines_unproven_reply_instead_of_regenerating(tmp_path):
+    from gateway import delivery_ledger as dl
 
     runner, store = _db_runner(tmp_path)
     source = _turn(store, "replied", marked=True, reply="the stored answer")
@@ -485,9 +483,12 @@ async def test_unclean_restart_delivers_a_persisted_unledgered_reply_instead_of_
 
     entry = _entry_for(store, source)
     assert (entry.resume_pending, entry.active_turn_token) == (False, None)
-    rows = sweep_recoverable(deliverable_platforms={"discord"})
-    assert [(r["content"], r["needs_marker"], r["chat_id"], r["thread_id"]) for r in rows] == [
-        ("the stored answer", True, "replied", "thread-1")]
+    assert dl.sweep_recoverable(deliverable_platforms={"discord"}) == []
+    assert dl.sweep_recoverable(deliverable_platforms={"discord"}) == []
+    with dl._connect() as conn:
+        rows = conn.execute('SELECT content,state,chat_id,thread_id,attempts,last_error FROM delivery_obligations').fetchall()
+    assert rows == [("the stored answer", 'unknown', "replied", "thread-1", 0,
+                     'legacy_delivery_unproven: reconciliation required')]
     _close_store_db(store)
 
 
@@ -504,11 +505,7 @@ _WAKE = {"display_kind": "internal_notification"}
     ("NO_REPLY", {"display_metadata": {"reply_expected": False}}, []),
 ])
 async def test_unclean_restart_never_redelivers_a_reply_live_delivery_suppressed(tmp_path, reply, prompt, owed):
-    """A crash-left reply is owed exactly what live delivery would have sent: nothing for a silence
-    marker on a machinery turn, a muted diagnostic wake or a message the adapter reported as not
-    addressed to the bot (and the finished turn is not resumed), the unexpected-silence notice for
-    any other human turn, never the raw marker."""
-    from gateway.delivery_ledger import sweep_recoverable
+    from gateway import delivery_ledger as dl
 
     (Path(os.environ["HERMES_HOME"]) / "config.yaml").write_text("display: {suppress_warning_notifications: true}\n", encoding="utf-8")
     runner, store = _db_runner(tmp_path)
@@ -518,7 +515,10 @@ async def test_unclean_restart_never_redelivers_a_reply_live_delivery_suppressed
 
     entry = _entry_for(store, source)
     assert (entry.resume_pending, entry.active_turn_token) == (False, None)
-    assert [r["content"] for r in sweep_recoverable(deliverable_platforms={"discord"})] == owed
+    assert dl.sweep_recoverable(deliverable_platforms={"discord"}) == []
+    with dl._connect() as conn:
+        rows = conn.execute('SELECT content,state,attempts FROM delivery_obligations').fetchall()
+    assert rows == [(content, 'unknown', 0) for content in owed]
     _close_store_db(store)
 
 

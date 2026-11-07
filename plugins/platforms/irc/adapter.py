@@ -213,6 +213,9 @@ class IRCAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None):
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            return SendResult(success=False, error="strict IRC has no server acceptance ACK")
         if not self._writer or self._writer.is_closing():
             return SendResult(success=False, error="Not connected")
         for line in self._split_message(content, chat_id):

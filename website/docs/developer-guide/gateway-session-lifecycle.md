@@ -324,7 +324,7 @@ Gateway starts
        ▼
 ┌───────────────────────────────┐
 │ _recover_unclean_sessions()   │── Marked turn with a persisted reply
-│                               │   → delivery ledger (sent, marked);
+│                               │   → sealed result or unknown ledger;
 │                               │   marked turn without one →
 │                               │   resume_pending (once)
 └───────────────────────────────┘
@@ -363,13 +363,17 @@ ledger (the adapter releases it right after `record_delivery_obligation`), or un
 more is owed (streamed reply, suppressed or empty response). So a marker left at startup means
 one of two things:
 
-- **The reply was persisted but never ledgered.** The stored transcript reply is recorded as
-  an unowned ledger row and the marker is cleared; the boot sweep delivers it once with the
-  "Recovered reply" notice. The turn is not regenerated. The reply is judged the way live
+- **The reply was persisted but never ledgered.** A trusted pending-final descriptor retains
+  its exact admission, destination, payload and send phase. A definitely-unsent part may be
+  delivered; an attempted part without a durable ACK stays `unknown`. Historical transcripts
+  without that evidence are retained as `unknown` with `legacy_delivery_unproven` and require
+  reconciliation; they are not automatically resent, even with a possible-duplicate marker.
+  The active-turn marker is cleared and the turn is not regenerated. The reply is judged the way live
   delivery would have judged it: a bare silence marker (`[SILENT]`, `NO_REPLY`, ...) on an
   internal turn, or the reply to a diagnostic wake the chat's policy mutes, is owed nothing
-  (the marker is cleared, nothing is sent or resumed). A human turn's bare silence marker
-  becomes the same "returned only a silence marker" notice the live path sends.
+  (the marker is cleared, nothing is sent or resumed). A reply-needed bare silence marker
+  is retained as the same "returned only a silence marker" notice; without provenance,
+  that notice is quarantined rather than automatically sent.
 - **No reply was persisted.** `recover_interrupted_turns()` sets `resume_pending=True`,
   `resume_reason="restart_interrupted"`, and the turn auto-resumes once.
 
@@ -378,8 +382,10 @@ in a different local zone (DST change, container vs. unit `TZ`) neither drops a 
 as stale nor adopts the previous turn's reply as this one's. A marker written by an older
 build (naive local time) is read as host-local time.
 
-A turn already in the ledger is redelivered by the ledger sweep, which also clears any
-`resume_pending` for that session, so it is never both delivered and re-answered.
+A turn already in the ledger follows its recorded policy: a proven unsent obligation may
+make its first attempt, a trusted ordinary human reply retains its marked retry policy,
+and strict or unproven attempted deliveries stay `unknown`. Recovery does not regenerate
+a completed answer to replace an uncertain delivery.
 
 ### Stuck-Loop Detection (`_suspend_stuck_loop_sessions`)
 

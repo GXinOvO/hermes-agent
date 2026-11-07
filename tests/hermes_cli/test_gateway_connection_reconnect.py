@@ -84,7 +84,7 @@ class Gateway:
     def hang_up(self, conn):
         """The current life goes away (``gateway restart``); the loop thread ends with it."""
         thread = conn._thread
-        conn.loop.call_soon_threadsafe(self.lives[-1].events.put_nowait, GatewayClientError("Gateway disconnected"))
+        conn.loop.call_soon_threadsafe(conn.client.events.put_nowait, GatewayClientError("Gateway disconnected"))
         thread.join(5)
         assert not thread.is_alive()
 
@@ -329,13 +329,21 @@ def test_bg_and_btw_after_a_hang_up_run_on_the_gateway_not_in_this_process(gatew
     assert gateway_side.connection_for(_cli(store)) is conn
     task_id, _wait = gateway_side.start(conn, SID, "background", "later")
     assert task_id == "task-2" and gateway.lives[1].calls[-1][0] == "prompt.background"
+    # Finish the synthetic owner socket; no background result/thread is abandoned by this test.
+    owner = next(cell.cell_contents for cell in _wait.wait.__closure__
+                 if isinstance(cell.cell_contents, GatewayConnection))
+    gateway.hang_up(owner)
+    with pytest.raises(RuntimeError, match="outcome is unknown"):
+        _wait()
 
 
 def test_a_side_answer_lost_to_a_restart_fails_instead_of_waiting_forever(gateway, conn):
     """The task died with the old gateway; another thread's redial must not make the wait endless."""
     from hermes_cli import gateway_side
     _task, wait = gateway_side.start(conn, SID, "btw", "q")
-    gateway.hang_up(conn)
+    owner = next(cell.cell_contents for cell in wait.wait.__closure__
+                 if isinstance(cell.cell_contents, GatewayConnection))
+    gateway.hang_up(owner)
     conn.call("status")
     outcome = []
     waiter = threading.Thread(target=lambda: outcome.append(pytest.raises(RuntimeError, wait)), daemon=True)
@@ -348,16 +356,16 @@ def test_a_redial_between_admission_and_the_waiter_still_ends_the_wait(gateway, 
     """Another caller redials after the old gateway admitted the task but before its waiter exists:
     the wait belongs to the admitting life, not to whatever epoch is current by then."""
     from hermes_cli import gateway_side
-    register = conn.side_waiter
+    register = GatewayConnection.side_waiter
 
-    def redial_first(task_id):
-        gateway.hang_up(conn)
-        conn.call("status")
-        return register(task_id)
+    def redial_first(owner, task_id):
+        gateway.hang_up(owner)
+        owner.call("status")
+        return register(owner, task_id)
 
-    monkeypatch.setattr(conn, "side_waiter", redial_first)
+    monkeypatch.setattr(GatewayConnection, "side_waiter", redial_first)
     task, wait = gateway_side.start(conn, SID, "btw", "q")
-    assert task == "task-1" and conn.epoch == 2
+    assert task == "task-2" and conn.epoch == 1
     outcome = []
     waiter = threading.Thread(target=lambda: outcome.append(pytest.raises(RuntimeError, wait)), daemon=True)
     waiter.start()

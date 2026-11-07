@@ -892,17 +892,10 @@ def _resume_response(
     status: str = "idle", hydrating: bool | None = None, started_at=None, auto_continue=None,
 ) -> dict:
     """Common resume payload; omit_messages counts ``count_source`` (client still learns the stored size)."""
-    if messages is None:
-        messages = ctx.messages(display)
-    if message_count is None:
-        message_count = len(count_source) if ctx.omit_messages else len(messages)
-    payload = {"session_id": sid, "resumed": ctx.target, "message_count": message_count, "messages": messages,
-               **({"messages_omitted": ctx.omit_messages} if hydrating is None else {"hydrating": hydrating}),
-               "info": info, "inflight": None, "running": running, "session_key": ctx.target,
-               "started_at": record["created_at"] if started_at is None else started_at, "status": status}
-    if auto_continue is not None:
-        payload["auto_continue"] = auto_continue
-    return _ok(ctx.rid, _attach_todo_state(payload, record))
+    from tui_gateway.side_background_results import resume_response
+    return resume_response(ctx, sid, record, info=info, display=display, count_source=count_source,
+                           messages=messages, message_count=message_count, running=running, status=status,
+                           hydrating=hydrating, started_at=started_at, auto_continue=auto_continue)
 
 
 def _resume_lazy(ctx: _Resume) -> dict:

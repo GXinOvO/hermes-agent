@@ -55,6 +55,7 @@ HttpRequest = HttpResponse = HttpRouteHandler = AdaptiveCard = ExecuteAction = T
 HttpMethod = str  # type: ignore[assignment,misc]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms.helpers import MessageDeduplicator
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt, SendResult, cache_image_from_url, cache_media_bytes_async,
@@ -612,7 +613,11 @@ class TeamsAdapter(BasePlatformAdapter):
         """Send ``activity`` through the cached ConversationReference, else ``App.send(fallback)``."""
         conv_ref = self._conv_refs.get(chat_id)
         if conv_ref:
-            result = await self._app.activity_sender.send(activity, conv_ref)
+            if strict_transport():
+                from microsoft_teams.apps.activity_send import send_or_update_activity
+                result = await send_or_update_activity(self._app.api, activity, conv_ref)
+            else:
+                result = await self._app.activity_sender.send(activity, conv_ref)
         else:
             result = await self._app.send(chat_id, fallback)
         self._remember_sent(result)
@@ -716,6 +721,7 @@ class TeamsAdapter(BasePlatformAdapter):
             logger.error("[teams] send_exec_approval failed: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e), retryable=True)
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None
     ) -> SendResult:
@@ -728,6 +734,8 @@ class TeamsAdapter(BasePlatformAdapter):
                     try:
                         result = await self._app.reply(chat_id, reply_to, chunk)
                     except Exception as reply_err:
+                        if strict_transport():
+                            raise
                         # Group chats 400 on threaded sends; the SDK has no typed HTTP errors → fall back on any.
                         logger.debug("Teams reply() failed, falling back to flat send: %s", reply_err)
                         result = await self._app.send(chat_id, chunk)
@@ -774,22 +782,54 @@ class TeamsAdapter(BasePlatformAdapter):
             logger.error("[teams] send_%s failed: %s", media_label, e, exc_info=True)
             return SendResult(success=False, error=str(e), retryable=True)
 
+    @single_attempt_transport
+    async def send_animation(self, chat_id, animation_url, caption=None, reply_to=None, metadata=None):
+        return await self.send_image(chat_id, animation_url, caption=caption, reply_to=reply_to, metadata=metadata)
+
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from gateway.strict_transport import require_strict_transport
+        from urllib.request import url2pathname
+        calls = []
+        for url, caption in images:
+            if url.startswith("file://"):
+                method, kwargs = "send_image_file", {"image_path": url2pathname(url[7:])}
+            elif self._is_animation_url(url):
+                method, kwargs = "send_animation", {"animation_url": url}
+            else:
+                method, kwargs = "send_image", {"image_url": url}
+            require_strict_transport(self, method)
+            calls.append((method, dict(kwargs, caption=caption or None)))
+        result = SendResult(success=False, error="no images to send")
+        for method, kwargs in calls:
+            result = await getattr(self, method)(chat_id=chat_id, metadata=metadata, **kwargs)
+            if not result.success:
+                break
+        return result
+
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
                          metadata: Optional[dict[str, Any]] = None) -> SendResult:
         return await self._send_media_attachment(chat_id, image_url, "image/png", caption=caption, media_label="image")
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self.send_image(chat_id=chat_id, image_url=image_path, caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
                          metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         return await self._send_media_attachment(chat_id, video_path, "video/mp4", caption=caption, media_label="video")
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
                          metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         return await self._send_media_attachment(chat_id, audio_path, "audio/mpeg", caption=caption, media_label="voice")
 
+    @single_attempt_transport
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
                             reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
         return await self._send_media_attachment(

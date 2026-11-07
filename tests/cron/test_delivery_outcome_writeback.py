@@ -17,7 +17,7 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 def test_drained_delivery_outcome_is_written_back(tmp_path, monkeypatch, transport_ok, drain_timing):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     config = GatewayConfig()
-    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True)
+    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True, token='loopback-only')
     monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
     sent = []
 

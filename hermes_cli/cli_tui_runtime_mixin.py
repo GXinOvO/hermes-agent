@@ -320,6 +320,9 @@ class CLITuiRuntimeMixin:
 
         if self._resumed and self._preload_resumed_session():
             self._display_resumed_history()
+        if self._resumed:
+            from hermes_cli.cli_background_results import display_results
+            display_results(self)
 
         _welcome_skin = None  # stays None when the skin engine failed
         _welcome_text = t("cli.tui.welcome")

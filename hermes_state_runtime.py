@@ -243,7 +243,8 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
 
 
 def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, outcome: str,
-                         result: dict | None = None, _transfers=None, _terminal_write=None) -> dict:
+                         result: dict | None = None, _transfers=None, _terminal_write=None,
+                         _recovery_write=None) -> dict:
     """``_terminal_write(conn, row)`` is the owner's same-transaction effect (a transcript notice,
     ``gateway.session_results.finish_result``); like ``resolve_unknown_session_input``'s it must
     not commit, may run again on SQLite retry, and raising rolls the settlement back."""
@@ -252,6 +253,8 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
     from hermes_state_terminal import compact_result, encode_result
     def write(conn):
         _epoch(conn, epoch)
+        if _recovery_write is not None:
+            _recovery_write(conn)
         row = _admission(conn, admission_id)
         session = _session(conn, row['target_session_id'])
         if (row['status'] != 'started' or row['owner_epoch'] != epoch
@@ -268,6 +271,8 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, encoded))
         conn.execute("UPDATE session_admissions SET status='terminal',outcome=? WHERE admission_id=?", (outcome, admission_id))
+        from hermes_state_managed_results import retire_result
+        retire_result(conn, admission_id)
         settle_steer_transfers(conn, epoch=epoch, generation=generation, transfers=_transfers, outcome=outcome)
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (row['target_session_id'],))
         return _row(_admission(conn, admission_id))
@@ -1001,5 +1006,8 @@ def apply_worker_receipt(db, *, epoch, execution_id, session_id, generation, seq
         if operation == 'execution.finish':
             from hermes_state_runtime_workers import compact_terminal_receipts
             compact_terminal_receipts(conn, execution_id)
+            from hermes_state_managed_results import complete_result
+            complete_result(conn, execution_id=execution_id, session_id=session_id, epoch=epoch,
+                            generation=generation, sequence=sequence)
         return result
     return db._execute_write(write, patience_s=db._TRANSCRIPT_WRITE_PATIENCE_S)

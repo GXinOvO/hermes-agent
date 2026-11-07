@@ -26,6 +26,7 @@ from gateway.platforms.base import (
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.media_cache import ext_for_mime
 from gateway.platforms.helpers import compile_mention_patterns, strip_markdown
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from utils import TRUTHY_STRINGS
 
 # Historical BlueBubbles mime→ext maps, preserved verbatim as overrides for the shared dispatch in
@@ -175,6 +176,8 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         try:
             res = await self._api_post(path, payload)
             data = res.get("data") or {}
+            if strict_transport() and (res.get("status", 200) != 200 or not (data.get("guid") or data.get("messageGuid"))):
+                return SendResult(success=False, error="BlueBubbles message ACK missing")
             msg_id = str(data.get("guid") or data.get("messageGuid") or "ok")
             return SendResult(success=True, message_id=msg_id, raw_response=res)
         except Exception as exc:
@@ -360,6 +363,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         # Base splitter minus "(1/3)" pagination suffixes — iMessage bubbles flow naturally.
         return [_PAGINATION_SUFFIX_RE.sub("", c) for c in BasePlatformAdapter.truncate_message(content, max_length)]
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
         text = self.format_message(content)
@@ -374,7 +378,15 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             guid = await self._resolve_chat_guid(chat_id)
             if not guid:
                 if self._private_api_enabled and ("@" in chat_id or _ADDRESS_RE.match(chat_id)):  # address → new chat
-                    return await self._create_chat_for_handle(chat_id, chunk)
+                    last = await self._create_chat_for_handle(chat_id, chunk)
+                    if not strict_transport() or not last.success:
+                        return last
+                    raw = (last.raw_response or {}).get('data') or {}
+                    guid = raw.get('chatGuid') or next((c.get('guid') for c in raw.get('chats', []) if c.get('guid')), None)
+                    if not guid:
+                        return SendResult(success=False, error="BlueBubbles new-chat routing ACK missing")
+                    self._guid_cache[chat_id] = guid
+                    continue
                 return SendResult(success=False, error=f"BlueBubbles chat not found for target: {chat_id}")
             payload: dict[str, Any] = {"chatGuid": guid, "tempGuid": _temp_guid(), "message": chunk}
             if reply_to and self._private_api_enabled and self._helper_connected:
@@ -407,8 +419,14 @@ class BlueBubblesAdapter(BasePlatformAdapter):
                                          files={"attachment": (fname, payload, "application/octet-stream")})
             res.raise_for_status()
             result = res.json()
+            if strict_transport():
+                rdata = result.get("data") or {}
+                if result.get("status") != 200 or not isinstance(rdata, dict) or not rdata.get("guid"):
+                    return SendResult(success=False, error="BlueBubbles attachment ACK missing")
             if caption:
-                await self.send(chat_id, caption)
+                caption_result = await self.send(chat_id, caption)
+                if strict_transport() and not caption_result.success:
+                    return caption_result
             if result.get("status") == 200:
                 rdata = result.get("data") or {}
                 return SendResult(success=True, message_id=rdata.get("guid") if isinstance(rdata, dict) else None,
@@ -417,25 +435,49 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         except Exception as e:
             return SendResult(success=False, error=str(e))
 
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0) -> SendResult:
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from urllib.request import url2pathname
+        result = SendResult(success=False, error="no images to send")
+        for url, caption in images:
+            if url.startswith('file://'):
+                result = await self.send_image_file(chat_id, url2pathname(url[7:]), caption=caption, metadata=metadata)
+            else:
+                result = await self.send_image(chat_id, url, caption=caption, metadata=metadata)
+            if not result.success:
+                return result
+        return result
+
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         try:
             from gateway.platforms.base import cache_image_from_url
-            return await self._send_attachment(chat_id, await cache_image_from_url(image_url), caption=caption)
-        except Exception:
+            path = await cache_image_from_url(image_url, retries=0) if strict_transport() else await cache_image_from_url(image_url)
+            return await self._send_attachment(chat_id, path, caption=caption)
+        except Exception as exc:
+            if strict_transport():
+                logger.exception("BlueBubbles strict image delivery failed")
+                return SendResult(success=False, error=str(exc) or type(exc).__name__)
             return await super().send_image(chat_id, image_url, caption, reply_to)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kw) -> SendResult:
         return await self._send_attachment(chat_id, image_path, caption=caption)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, is_voice=None, **kw) -> SendResult:
         # is_voice=False is a plain audio MEDIA file (music, a sound effect): a normal attachment,
         # never an iMessage voice memo.
         return await self._send_attachment(chat_id, audio_path, caption=caption, is_audio_message=is_voice is not False)
 
+    @single_attempt_transport
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, **kw) -> SendResult:
         return await self._send_attachment(chat_id, video_path, caption=caption)
 
+    @single_attempt_transport
     async def send_document(self, chat_id, file_path, caption=None, file_name=None, reply_to=None, **kw) -> SendResult:
         return await self._send_attachment(chat_id, file_path, filename=file_name, caption=caption)
 

@@ -9,7 +9,7 @@ from pydantic import RootModel
 from .base import JsonValue, Params, Result
 from .common import ProfileParams, TranscriptMessage
 from .connectors_operation import ConnectionRequestPayload
-from .sessions import OpenRequestEntry, TodoState
+from .sessions import BackgroundResult, OpenRequestEntry, TodoState
 from .canonical import AdmissionStatus, CanonicalSessionRef, PromptResponseResult, SessionInventoryFields
 from .registry import canonical_method
 
@@ -155,6 +155,7 @@ class CanonicalSnapshot(Result):
     pending: list[CanonicalPendingAdmission]
     prompts: list[CanonicalPendingPrompt]
     info: CanonicalSnapshotInfo
+    background_results: list[BackgroundResult] | None = None
     # The open ``manage_connections`` card, so a resume restores it while the tool waits.
     pending_connection: ConnectionRequestPayload | None = None
     # The session's todo snapshot (its transcript's newest todo result); null when it has none.

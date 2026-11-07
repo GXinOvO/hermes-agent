@@ -1,12 +1,11 @@
-"""A Bot Chat cron delivery whose target owner is not running is parked, never booked failed:
-a later tick admits it to the owner once, under the same delivery id."""
+"""Unsealed deferred Bot output remains explicit unknown evidence without a fresh consumer."""
 from unittest.mock import Mock
 
 from cron import scheduler_delivery as delivery
 from tools import bot_live_delivery as mailbox
 
 
-def test_bot_chat_target_without_live_owner_is_parked_and_admitted_later(tmp_path, monkeypatch):
+def test_bot_chat_target_without_seal_is_kept_unknown_without_a_consumer(tmp_path, monkeypatch):
     from cron import jobs
     from cron.bot_chat_legacy import drain_legacy_pending
     from gateway import config
@@ -34,4 +33,7 @@ def test_bot_chat_target_without_live_owner_is_parked_and_admitted_later(tmp_pat
     drain_legacy_pending()
     drain_legacy_pending()
     key = job["_bot_chat_delivery_receipts"]["bot-chat:(own)"]["delivery_id"]
-    assert [(k, "the report" in m) for k, m in admitted] == [(key, True)]
+    assert admitted == []
+    import json
+    path = tmp_path / 'cron' / 'bot_chat_pending' / (key + '.json')
+    assert json.loads(path.read_text())['status'] == 'ambiguous'

@@ -1203,7 +1203,10 @@ def test_managed_gateway_restart_preserves_active_worker_and_single_side_effect(
     sent = []
     adapter = Mock()
 
-    async def send(_chat_id, content, metadata=None):
+    from gateway.strict_transport import single_attempt_transport
+
+    @single_attempt_transport
+    async def send(chat_id, content, metadata=None):
         sent.append((content, metadata))
         return {"success": True, "message_id": "restart-delivery-1"}
 

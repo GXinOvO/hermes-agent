@@ -93,6 +93,8 @@ def reserve_admission_worker(authority, *, admission_id, process, principal_id, 
             raise RuntimeStoreError('admission_conflict')
         if conn.execute("SELECT 1 FROM worker_executions WHERE session_id=? AND status!='terminal'", (sid,)).fetchone():
             raise RuntimeStoreError('stale_generation')
+        from hermes_state_managed_result_capacity import reserve_slot
+        reserve_slot(conn, admission=admission, epoch=authority.epoch, profile_id=authority.profile_id)
         # The private worker fence follows its physical assignment; admission/FIFO
         # generation and identity remain on the logical owner.
         conn.execute('UPDATE sessions SET runtime_generation=? WHERE id=?', (generation, sid))
@@ -130,5 +132,7 @@ def lose_admission_worker(authority, row, scope):
         from hermes_state_runtime_workers import compact_terminal_receipts
         compact_terminal_receipts(conn, scope['execution_id'])
         conn.execute("UPDATE session_admissions SET status='unknown' WHERE admission_id=?", (row['admission_id'],))
+        from hermes_state_managed_result_capacity import release_slot
+        release_slot(conn, row['admission_id'])
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (current['target_session_id'],))
     authority.db._execute_write(write)

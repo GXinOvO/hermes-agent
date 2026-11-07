@@ -13,6 +13,7 @@ import pytest
 from gateway.config import Platform
 from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
+from gateway.strict_transport import single_attempt_transport
 
 def _make_event(text="/bg", platform=Platform.TELEGRAM,
                 user_id="12345", chat_id="67890"):
@@ -69,6 +70,7 @@ class TestRunBackgroundTask:
 
         runner = _make_runner()
         adapter = AsyncMock()
+        single_attempt_transport(adapter.send)
         adapter.toolsets_for_source = MagicMock(return_value=None)
         adapter.extract_media = lambda text: ([], text)
         adapter.extract_images = lambda text: ([], text)
@@ -109,7 +111,7 @@ class TestRunBackgroundTask:
         """When the agent completes successfully, the result is sent."""
         runner = _make_runner()
         mock_adapter = AsyncMock()
-        mock_adapter.send = AsyncMock()
+        mock_adapter.send = single_attempt_transport(AsyncMock())
         mock_adapter.extract_media = MagicMock(return_value=([], "Hello from background!"))
         mock_adapter.extract_images = MagicMock(return_value=([], "Hello from background!"))
         runner.adapters[Platform.TELEGRAM] = mock_adapter

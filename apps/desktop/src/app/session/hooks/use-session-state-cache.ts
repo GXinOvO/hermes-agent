@@ -36,6 +36,7 @@ import {
 import type { ClientSessionState } from '../../types'
 import { SessionStateCache } from '../session-state-cache'
 
+import { preserveBackgroundResults } from './background-results'
 import {
   invalidatePersistedDisplayTranscriptAuthority,
   suppressTranscriptForView,
@@ -420,13 +421,25 @@ export function useSessionStateCache({
       updater: (state: ClientSessionState) => ClientSessionState,
       storedSessionId?: string | null
     ) => {
+      const bindingChanged = storedSessionId !== undefined &&
+        sessionStateCache.get(sessionId)?.storedSessionId !== storedSessionId
+
       const previous = ensureSessionState(sessionId, storedSessionId)
       // Give the updater the raw previous state so it can return the same
       // reference when nothing changed (the caller sees a no-op). Previously
       // the param was always a fresh spread, so every call looked like a
       // change — including periodic ~1/s session.info heartbeats that churn
       // $sessionStates and its computed atoms on every tick.
-      const next = updater(previous)
+      const updated = updater(previous)
+
+      // Stored history never contains sealed side-task display rows. Preserve
+      // them only within this runtime's same durable binding, including REST
+      // refreshes and replay reconciliation after the attach snapshot.
+      const messages = !bindingChanged && updated.storedSessionId === previous.storedSessionId
+        ? preserveBackgroundResults(updated.messages, previous.messages)
+        : updated.messages
+
+      const next = messages === updated.messages ? updated : { ...updated, messages }
 
       // If the updater returned the same reference, nothing changed for this
       // session — skip the store write, publishSessionState, and view sync.

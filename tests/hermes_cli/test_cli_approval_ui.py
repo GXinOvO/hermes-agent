@@ -34,6 +34,7 @@ def _make_cli_stub():
 
 def _make_background_cli_stub():
     cli = _make_cli_stub()
+    cli.session_id = "parent-cli-session"
     cli._background_task_counter = 0
     cli._background_tasks = {}
     cli._ensure_runtime_credentials = MagicMock(return_value=True)

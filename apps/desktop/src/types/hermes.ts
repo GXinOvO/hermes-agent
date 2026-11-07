@@ -1,4 +1,4 @@
-import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } from '@hermes/shared'
+import type { BackgroundResult, ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } from '@hermes/shared'
 
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
@@ -818,6 +818,8 @@ export interface SessionMessagesResponse {
 }
 
 export interface SessionResumeResult {
+  /** Sealed side-task results for display, separate from the parent model transcript. */
+  background_results?: BackgroundResult[] | null
   /** Present when the backend found a fresh crash-interrupted turn and
    *  scheduled its automatic continuation; the turn arrives as a normal
    *  message.start stream right after this resume. */

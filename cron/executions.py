@@ -234,15 +234,8 @@ def touch_execution_progress(execution_id: str) -> bool:
 
 
 def _prune_unlocked(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """DELETE FROM executions WHERE id IN (
-             SELECT id FROM executions
-             WHERE status IN ('completed','failed','unknown','cancelled','missed')
-             ORDER BY julianday(finished_at) DESC, finished_at DESC,
-                      julianday(claimed_at) DESC, claimed_at DESC, id DESC LIMIT -1 OFFSET ?
-           )""",
-        (max(0, int(MAX_TERMINAL_EXECUTIONS)),),
-    )
+    from cron.execution_retention import prune_history
+    prune_history(conn, MAX_TERMINAL_EXECUTIONS)
 
 
 def create_execution(

@@ -1,9 +1,14 @@
 """Validated webhook destinations live in the owner's admitted input, not a TTL cache."""
 from copy import deepcopy
+import asyncio
 import hashlib
 import json
+import os
+import subprocess
 
 from hermes_state_runtime import RuntimeStoreError
+
+GITHUB_API = 'https://api.github.com'
 
 
 def route_digest(adapter, chat_id):
@@ -66,6 +71,72 @@ def snapshot_destination(adapter, delivery):
             raise RuntimeStoreError('not_found')
         result['deliver_extra']['chat_id'] = home.chat_id
     return result
+
+
+async def prepare_strict_delivery(adapter, delivery, content=''):
+    from gateway.config import Platform
+    from gateway.platforms.webhook import WebhookAdapter
+    from gateway.strict_transport import prepare_strict_transport
+    kind = delivery['deliver']
+    if kind == 'log':
+        return
+    if kind == 'github_comment':
+        await asyncio.to_thread(_github_credentials, adapter, delivery)
+        return
+    target = adapter._find_adapter(Platform(kind), delivery.get('profile'))
+    if target is None or isinstance(target, WebhookAdapter):
+        raise RuntimeError('strict webhook destination unavailable')
+    with adapter._profile_scope(delivery.get('profile')):
+        chat_id = delivery['deliver_extra'].get('chat_id')
+        if not chat_id:
+            home = adapter._delivery_config(delivery.get('profile')).get_home_channel(Platform(kind))
+            if home is None:
+                raise RuntimeError('strict webhook destination missing')
+            chat_id = home.chat_id
+        thread_id = delivery['deliver_extra'].get('message_thread_id') or delivery['deliver_extra'].get('thread_id')
+        await prepare_strict_transport(target, 'send', chat_id=chat_id, content=content,
+            metadata={'thread_id':thread_id} if thread_id else None)
+
+
+def _github_credentials(adapter, delivery):
+    from gateway.platforms.webhook import _GH_TOKEN_VARS
+    with adapter._profile_scope(delivery.get('profile')):
+        env = adapter._github_env(delivery.get('profile'))
+        env = os.environ if env is None else env
+        host = env.get('GH_HOST', 'github.com')
+        if host != 'github.com':
+            raise RuntimeError('strict enterprise GitHub host unverified')
+        token = next((env.get(name) for name in _GH_TOKEN_VARS if env.get(name)), None)
+        if not token:
+            try:
+                result = subprocess.run(['gh', 'auth', 'token', '--hostname', host], env=dict(env),
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10, check=False)
+                token = result.stdout.strip() if result.returncode == 0 else None
+            except (OSError, subprocess.TimeoutExpired):
+                token = None
+        if not token:
+            raise RuntimeError('strict GitHub authentication unavailable')
+        return {'Authorization':'Bearer ' + token, 'Accept':'application/vnd.github+json',
+            'User-Agent':'hermes-webhook', 'X-GitHub-Api-Version':'2022-11-28'}
+
+
+async def send_github_comment(adapter, content, delivery):
+    import aiohttp
+    from gateway.platforms.base import SendResult
+    extra = delivery['deliver_extra']
+    try:
+        headers = await asyncio.to_thread(_github_credentials, adapter, delivery)
+        url = f"{GITHUB_API}/repos/{extra['repo']}/issues/{int(extra['pr_number'])}/comments"
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), trust_env=True) as session:
+            async with session.post(url, json={'body':content}, headers=headers, allow_redirects=False) as response:
+                if response.status != 201:
+                    return SendResult(success=False, error=f'GitHub comment ACK missing: HTTP {response.status}')
+                data = await response.json()
+                if type(data.get('id')) is not int or data['id'] <= 0:
+                    return SendResult(success=False, error='GitHub comment ACK invalid')
+                return SendResult(success=True, message_id=str(data['id']))
+    except (aiohttp.ClientError, TimeoutError, OSError, ValueError, TypeError, KeyError) as exc:
+        return SendResult(success=False, error='GitHub comment ACK missing: ' + type(exc).__name__)
 
 
 def retained_destination(adapter, chat_id):

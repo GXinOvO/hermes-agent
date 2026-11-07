@@ -123,6 +123,8 @@ class GatewayStreamConsumer(StreamTransportMixin, StreamFallbackMixin, StreamThi
         initial_reply_to_id: Optional[str] = None,
         run_still_current: Optional[Callable[[], bool]] = None):
         self.adapter = adapter
+        from gateway.session_delivery_policy import current_claim
+        self._automation_final_claim = current_claim()
         self.chat_id = chat_id
         self.cfg = config or StreamConsumerConfig()
         self.metadata = metadata
@@ -554,6 +556,8 @@ class GatewayStreamConsumer(StreamTransportMixin, StreamFallbackMixin, StreamThi
 
     async def run(self) -> None:
         """Async task that drains the queue and edits the platform message."""
+        if self._automation_final_claim is not None:
+            return await self._drain_automation_final()
         self._len_fn, self._safe_limit = self._resolve_length_budget()
         await self._start_transports()
         try:
@@ -634,6 +638,22 @@ class GatewayStreamConsumer(StreamTransportMixin, StreamFallbackMixin, StreamThi
             self._wake_flush_waiters()
 
     # ── run() collaborators ─────────────────────────────────────────────
+
+    async def _drain_automation_final(self):
+        """Buffer strict automation until settlement; set no streamed-delivery flags."""
+        try:
+            while self._run_still_current():
+                tick = self._drain_queue()
+                self._signal_flush(tick.flush_event)
+                if tick.approval_boundary is not None:
+                    future, _ = tick.approval_boundary
+                    if hasattr(future, 'set_result') and not future.done():
+                        future.set_result(True)
+                if tick.got_done:
+                    return
+                await asyncio.sleep(0.05)
+        finally:
+            self._wake_flush_waiters()
 
     def _resolve_length_budget(self) -> tuple[Callable[[str], int], int]:
         """Per-chat length function (relay adapters differ per chat, e.g. utf16) + budget.

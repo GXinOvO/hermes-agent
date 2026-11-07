@@ -223,6 +223,7 @@ class AuthorityConnection:
                     'slash.exec': self.slash_exec, 'command.dispatch': self.command_dispatch,
                     'session.list': self.list_sessions, 'session.info': self.info,
                     'session.mutate': self.mutate, 'bot_relay.deliver': self.bot_deliver,
+                    'bot_relay.prepare': self.bot_prepare,
                     'bot_relay.settle': self.bot_settle, 'bot_relay.cancel': self.bot_cancel,
                     'bot_relay.roster.sync': self.bot_roster, 'bot_relay.outbox.drain': self.bot_outbox,
                     'bot_relay.reply': self.bot_reply, 'a2a.forward': self.a2a_forward,
@@ -420,6 +421,11 @@ class AuthorityConnection:
     async def bot_deliver(self, ref, params):
         from gateway.session_bot import deliver
         return await deliver(self, params)
+
+    async def bot_prepare(self, ref, params):
+        from cron.sealed_bot_result import prepare
+        from gateway.session_runtime_workers import track_mutation
+        return await asyncio.shield(track_mutation(self.authority, prepare(self, params)))
 
     async def bot_settle(self, ref, params):
         from gateway.session_bot import settle
@@ -695,6 +701,8 @@ class AuthorityConnection:
             info = await snapshot_info(self.authority, snapshot.handle.ref)
         from gateway.session_connections import pending_connection
         from gateway.session_server_requests import open_requests
+        from gateway.session_background_results import read_snapshot
+        saved_background = await read_snapshot(self.authority, ref)
         history, display = list(snapshot.history), {}
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
@@ -708,7 +716,7 @@ class AuthorityConnection:
                 'subscription_id': snapshot.subscription_id, 'revision': snapshot.handle.revision,
                 'execution_generation': snapshot.handle.execution_generation,
                 'pending': [asdict(r) for r in snapshot.pending],
-                'prompts': list(snapshot.prompts), 'info': info,
+                'prompts': list(snapshot.prompts), 'info': info, 'background_results': saved_background,
                 'pending_connection': pending_connection(self.authority, ref.session_id),
                 # Still-waiting server→client requests: the event ring cannot say "still open".
                 'open_requests': open_requests(self.authority.sessions[snapshot.handle.ref.session_id].event_stream,

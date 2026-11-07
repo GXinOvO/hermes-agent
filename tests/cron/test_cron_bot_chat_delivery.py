@@ -202,10 +202,9 @@ def test_delivery_targets_include_local_profiles():
 
 # ── legacy cron/bot_chat_pending upgrade path ────────────────────────────────
 
-def test_tick_hands_legacy_pending_records_to_the_live_owner_once(tmp_path, monkeypatch):
-    """Records the retired CLI lane left in cron/bot_chat_pending are never orphaned: a queued
-    (never-started) record is admitted to the live owner under its own id; a claimed one (an
-    uncertain CLI turn) is never resent; the files stay as evidence."""
+def test_tick_keeps_legacy_pending_result_unknown_without_reconsuming(tmp_path, monkeypatch):
+    """An old result has no producer seal. Both queued and claimed files remain evidence
+    without granting a new consumption turn to a later owner."""
     import json
 
     import cron.jobs as J
@@ -241,7 +240,6 @@ def test_tick_hands_legacy_pending_records_to_the_live_owner_once(tmp_path, monk
     S.tick(verbose=False)
     S.tick(verbose=False)
 
-    assert [(key, category) for key, _, category in admitted] == [(queued, "diagnostic")]
-    assert 'Cronjob "Digest" output' in admitted[0][1] and "the report" in admitted[0][1]
-    assert json.loads((root / f"{queued}.json").read_text())["status"] == "transferred"
+    assert admitted == []
+    assert json.loads((root / f"{queued}.json").read_text())["status"] == "ambiguous"
     assert json.loads((root / f"{claimed}.json").read_text())["status"] == "claimed"

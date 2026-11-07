@@ -144,6 +144,7 @@ import type {
 
 import { navigateToWorkspacePage, NEW_CHAT_ROUTE, sessionRoute, SETTINGS_ROUTE } from '../../../routes'
 import type { ClientSessionState, SidebarNavItem } from '../../../types'
+import { restoreBackgroundResults } from '../background-results'
 import {
   pinStoredSessionForOwner,
   releaseStoredSessionPins,
@@ -175,6 +176,7 @@ import {
   recoveredTurnFields,
   rereadPageAfterResumeBarrier
 } from './resume-barrier-reread'
+import { projectResumedDisplay } from './resume-display'
 import { clearResumeLatches, clearResumeToasts, notifyResumeFailed, type ResumeAttemptOptions } from './resume-latches'
 import {
   ambientResumeConnectionId,
@@ -1834,7 +1836,10 @@ export function useSessionActions({
                 // shiki re-highlight per row, seconds of main-thread work).
                 // Keep the existing array when the content is unchanged —
                 // same guard the cold-resume path uses below.
-                const messages = preserveEquivalentTranscript(state.messages, visibleActivatedMessages)
+                const messages = preserveEquivalentTranscript(
+                  state.messages,
+                  restoreBackgroundResults(visibleActivatedMessages, activated.background_results, state.messages)
+                )
 
                 return {
                   ...state,
@@ -2261,28 +2266,10 @@ export function useSessionActions({
 
         patchSessionWorkspace(storedSessionId, runtimeInfo?.cwd)
 
-        const pendingClarifyProjection = pendingClarify
-          ? restorePendingClarifyToolCall(messagesForView, pendingClarifyToolPayload(pendingClarify))
-          : null
-
-        const clearedClarifyProjection = clarifyAuthoritativelyAbsent
-          ? settlePendingClarifyToolCall(
-              messagesForView,
-              pendingClarifyState.cleared ? pendingClarifyToolPayload(pendingClarifyState.cleared) : {},
-              resumedRunning
-            )
-          : null
-
-        const pendingConnectionProjection = projectPendingConnection(
-          pendingClarifyProjection?.messages ?? clearedClarifyProjection?.messages ?? messagesForView,
-          pendingConnection
+        const { pendingClarifyProjection, clearedClarifyProjection, pendingConnectionProjection, visibleMessagesForView } = projectResumedDisplay(
+          messagesForView, resumed, currentRuntimeMessages, pendingClarifyState,
+          clarifyAuthoritativelyAbsent, pendingConnection, resumedRunning
         )
-
-        const visibleMessagesForView =
-          pendingConnectionProjection?.messages ??
-          pendingClarifyProjection?.messages ??
-          clearedClarifyProjection?.messages ??
-          messagesForView
 
         // The eagerly painted REST page is persisted-display authority: stamp
         // its provenance so the next warm switch to this session paints it

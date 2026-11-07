@@ -686,7 +686,7 @@ _CHUNKED_ROUTES = {
 _MEDIA_PLATFORMS_NOTE = "telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp, slack and qqbot"
 
 
-async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None,
+async def _send_to_platform_legacy(platform, pconfig, chat_id, message, thread_id=None, media_files=None,
                             force_document=False, mentions=None, args=None):
     """Route to the platform sender, chunking long text with the adapters' splitter. Order matters:
     Weixin first (its native helper must not be blocked by unrelated optional imports such as
@@ -746,3 +746,16 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             and not last_result.get("media_delivered")):
         last_result["warnings"] = [*last_result.get("warnings", []), warning]
     return last_result
+
+
+async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None,
+                            force_document=False, mentions=None, args=None, *, prepared_plan=None,
+                            execution_id=None, claim_id=None):
+    from gateway.strict_transport import strict_transport
+    if strict_transport():
+        from tools.send_message_strict import send
+        return await send(platform, pconfig, chat_id, message, media_files=media_files,
+            thread_id=thread_id, force_document=force_document, mentions=mentions,
+            prepared_plan=prepared_plan, execution_id=execution_id, claim_id=claim_id)
+    return await _send_to_platform_legacy(platform, pconfig, chat_id, message, thread_id=thread_id,
+        media_files=media_files, force_document=force_document, mentions=mentions, args=args)

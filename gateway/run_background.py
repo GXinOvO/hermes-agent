@@ -1,13 +1,13 @@
 """Finite background tasks launched by the gateway /bg command."""
 
 from contextlib import suppress
+import asyncio
 import logging
-import os
 from typing import Optional
 
 from agent.i18n import t
 from gateway.media_repair import repair_explicit_computer_use_media_paths
-from gateway.platforms.base import BasePlatformAdapter
+
 from gateway.session import SessionSource
 
 logger = logging.getLogger("gateway.run")
@@ -49,8 +49,12 @@ class GatewayBackgroundMixin:
             logger.warning("No adapter for platform %s in background task %s", source.platform, task_id)
             return
         _thread_metadata = self._thread_metadata_for_source(source, event_message_id)
+        from gateway import background_messaging_results as durable
+        durable_context = None
+        delivery_started = False
 
         try:
+            durable_context = await durable.prepare(self, prompt, source, task_id, media_urls, media_types)
             user_config = _load_gateway_config()
             model, runtime_kwargs = self._resolve_session_agent_runtime(source=source, user_config=user_config)
             if not runtime_kwargs.get("api_key"):
@@ -126,44 +130,29 @@ class GatewayBackgroundMixin:
 
             preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
             header = t("gateway.background.complete_header", preview=preview)
-            images, media_files, text_content = [], [], ""
-            if response:
-                media_files, response = adapter.extract_media(response)
-                media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
-                images, text_content = adapter.extract_images(response)
-            if text_content:
-                await adapter.send(chat_id=source.chat_id, content=header + text_content, metadata=_thread_metadata)
-            elif not images and not media_files:
-                await adapter.send(
-                    chat_id=source.chat_id, content=header + t("gateway.background.no_response"), metadata=_thread_metadata,
-                )
-            for image_url, alt_text in (images or []):
-                with suppress(Exception):
-                    await adapter.send_image(
-                        chat_id=source.chat_id, image_url=image_url, caption=alt_text, metadata=_thread_metadata,
-                    )
-            # Route each media file by type (voice bubble / video / image / document), as the
-            # streaming + kanban paths do.
-            from gateway.platforms.base import should_send_media_as_audio as _should_send_media_as_audio
-            from gateway.run_notifications import _IMAGE_EXTS, _VIDEO_EXTS
-            for media_path, _is_voice in (media_files or []):
-                _ext = os.path.splitext(media_path)[1].lower()
-                with suppress(Exception):
-                    if _should_send_media_as_audio(source.platform, _ext, _is_voice):
-                        await adapter.send_voice(
-                            chat_id=source.chat_id, audio_path=media_path, metadata=_thread_metadata,
-                            is_voice=_is_voice,
-                        )
-                    else:
-                        sender, key = (
-                            (adapter.send_video, "video_path") if _ext in _VIDEO_EXTS
-                            else (adapter.send_image_file, "image_path") if _ext in _IMAGE_EXTS
-                            else (adapter.send_document, "file_path")
-                        )
-                        await sender(chat_id=source.chat_id, metadata=_thread_metadata, **{key: media_path})
+            await durable.seal(durable_context, task_id, response, header, _thread_metadata)
+            payload = {'text':response, 'header':header, 'metadata':_thread_metadata}
+            try:
+                plan = durable.delivery_plan(adapter, source, payload)
+                await durable.prepare_plan(adapter, plan)
+            except RuntimeError:
+                logger.warning('Background task %s result saved; transport unavailable', task_id, exc_info=True)
+                return
+            await durable.claim(durable_context, task_id)
+            delivery_started = True
+            await durable.deliver_plan(adapter, plan)
+            await durable.finish(durable_context, task_id, 'delivered')
 
+        except asyncio.CancelledError:
+            if durable_context is not None and delivery_started:
+                await asyncio.shield(durable.finish(durable_context, task_id, 'unknown'))
+            raise
         except Exception:
+            if durable_context is not None and delivery_started:
+                await durable.finish(durable_context, task_id, 'unknown')
             logger.exception("Background task %s failed", task_id)
+            if delivery_started:
+                return
             # Automatic failure diagnostic (the task produced no requested result to deliver).
             from gateway.bot_peer_notices import automatic_notices_allowed
             with suppress(Exception):
@@ -173,3 +162,5 @@ class GatewayBackgroundMixin:
                         t("gateway.background.failed", preview=_bg_prompt_preview(prompt)),
                         metadata=_thread_metadata, logical_platform=source.platform,
                     )
+        finally:
+            durable.close(durable_context)

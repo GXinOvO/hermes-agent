@@ -713,17 +713,12 @@ def bot_chat_message(job: dict, content: str) -> str:
 
 def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
                          for_failure: bool = False) -> Optional[str]:
-    """Admit job output to the target profile's authority as a real inbound Bot Chat turn.
+    """Admit output as a Bot turn; return None only for a settled or suppressed receipt.
 
-    None means the target's durable receipt is settled (or a failure notice was recorded as
-    ``suppressed`` — a durable disposition, never a send — and flagged on the job); anything
-    else is an explicit unverified status string so Optional[str] callers cannot misreport
-    admission as delivery. ``profile`` is ``""`` for the job's own profile. There is no
-    second-writer fallback: a target whose authority is not ready gets the payload parked under
-    the same delivery id (``cron.bot_chat_legacy.defer``) and admitted by a later tick.
+    Other states are explicitly unverified. An absent target parks a never-admitted
+    result under the same id for a later tick; uncertain consumption is never replayed.
     """
-    import hashlib
-    import json
+    from cron.sealed_bot_result import delivery_identity, producer_reference
     import uuid
     from hermes_constants import get_hermes_home
     from hermes_cli.profiles import get_profile_dir
@@ -747,10 +742,7 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
         run_id = job.get("execution_id")
         if not run_id:
             run_id = job.setdefault("_bot_chat_run_id", uuid.uuid4().hex)
-        key = hashlib.sha256(json.dumps(
-            [str(source_home), job_id, str(run_id), str(home)],
-            ensure_ascii=False, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        key = delivery_identity(source_home, job_id, run_id, home)
         # Read BEFORE discovery: the previous owner may have exited after accepting.
         receipt = read_delivery_result(home, key)
         target = f"bot-chat:{profile_label}"
@@ -773,8 +765,12 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
             if owner is None:
                 return f"bot-chat delivery to profile '{profile_label}' unverified: no canonical Bot Chat"
             # A failure notice rides as ``diagnostic`` so the target's reply stays muted.
+            sealed = producer_reference(job, content, home, owner)
             receipt = deliver_to_live_owner(home, owner, message, delivery_id=key,
-                **({"notification_category": "diagnostic"} if for_failure else {}))
+                **({"sealed_cron_result_v1": sealed} if sealed is not None else {}),
+                notification_category="diagnostic" if for_failure else "result")
+        from cron.sealed_bot_result import verify_receipt
+        verify_receipt(job, receipt)
         if (receipt["message"] != message
                 or receipt.get("notification_category", "result") != ("diagnostic" if for_failure else "result")):
             raise ValueError("delivery id already belongs to a different payload")
@@ -1515,7 +1511,7 @@ def _deliver_via_live_adapter(
     return delivered
 
 
-def _standalone_send(
+def _standalone_send_legacy(
     t: _TargetDelivery, content: str, media_files: list) -> tuple[Any, Optional[str]]:
     """Run the standalone sender for one target: ``(result, None)`` or ``(None, error)`` (already
     logged — WARNING for a shutdown race, ERROR with traceback otherwise)."""
@@ -1582,6 +1578,14 @@ def _standalone_send(
         return _failed(e)
 
 
+def _standalone_send(t, content, media_files):
+    from gateway.strict_transport import strict_transport
+    if strict_transport():
+        from cron.strict_delivery import standalone_send
+        return standalone_send(t, content, media_files)
+    return _standalone_send_legacy(t, content, media_files)
+
+
 def _queue_for_live_reconnect(t: _TargetDelivery, content: str, media_files: list, delivery_errors: list) -> None:
     """Hand a payload the live lane rejected as reconnect-only (``send_path_degraded``) and the
     standalone lane then failed to send to the delivery ledger, as a failed reconnect-only row
@@ -1632,7 +1636,9 @@ def _deliver_standalone(
         delivery_errors.extend(target_errors)
         # A satellite profile's worker has no platform token, so standalone cannot stand in for a
         # live adapter that is only waiting to reconnect: keep the payload for that adapter.
-        _queue_for_live_reconnect(t, content, media_files, delivery_errors)
+        from gateway.strict_transport import strict_transport
+        if not strict_transport():
+            _queue_for_live_reconnect(t, content, media_files, delivery_errors)
         return
     # Standalone senders report per-file attachment failures in ``warnings`` while returning
     # success; surface them so a vanished attachment doesn't mark the run ok.
@@ -1650,7 +1656,7 @@ def _deliver_standalone(
 
 def _prepare_target_delivery(
     job: dict, target: dict, *, adapters, loop, config, notify_delivery: bool, mirror_enabled: bool,
-    mirror_text: str, delivery_errors: list,
+    mirror_text: str, delivery_errors: list, open_thread=True,
 ) -> Optional[_TargetDelivery]:
     """Per-target prologue of ``_deliver_result``: origin/mirror/in_channel gates, transport
     resolution, continuable-thread open. None (error noted in ``delivery_errors``) if unservable."""
@@ -1736,6 +1742,7 @@ def _prepare_target_delivery(
     if (
         mirror_this_target
         and not in_channel_surface
+        and open_thread
         and runtime_adapter is not None
         and loop is not None
         and not thread_id  # never override an explicit origin thread/topic
@@ -1777,7 +1784,7 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
     return msg
 
 
-def _deliver_result(
+def _deliver_legacy_result(
     job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False
 ) -> Optional[str]:
     """Deliver job output to the configured target(s). With ``adapters``/``loop`` (gateway
@@ -1941,6 +1948,13 @@ def _deliver_result(
         delivery_errors.extend(policy_drop_errors)
     _record_delivery_verification(job, unverified_targets)
     return "; ".join(delivery_errors) if delivery_errors else None
+
+
+def _deliver_result(job, content, adapters=None, loop=None, *, for_failure=False):
+    from cron.strict_delivery import active, deliver
+    if active():
+        return deliver(job, content, for_failure)
+    return _deliver_legacy_result(job, content, adapters, loop, for_failure=for_failure)
 
 
 # Late-bound origin namespace (see module docstring). Imported LAST so this module is fully

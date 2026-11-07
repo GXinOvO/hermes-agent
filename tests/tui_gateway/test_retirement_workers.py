@@ -26,7 +26,7 @@ def test_side_workers_hold_admission_through_cleanup_and_preserve_profile_scope(
     monkeypatch.setattr(server, "_emit", lambda *a: emitted.put(a))
     set_multiplex_active(True)
     try:
-        for home in [homes[0], homes[1], homes[0]]:
+        for index, home in enumerate([homes[0], homes[1], homes[0]]):
             entered, release, cleaning, release_cleanup = (threading.Event() for _ in range(4))
             observed = []
 
@@ -40,10 +40,11 @@ def test_side_workers_hold_admission_through_cleanup_and_preserve_profile_scope(
                 cleaning.set()
                 assert release_cleanup.wait(10)
 
-            session = {"profile_home": str(home), "cwd": str(tmp_path)}
+            session = {"profile_home": str(home), "cwd": str(tmp_path), "session_key": f"parent-{index}"}
+            task_id = f"side-{index}"
             try:
-                result = server._spawn_side_agent("r", session, "side", "parent", "background.complete", body, cleanup=cleanup)
-                assert result["result"]["task_id"] == "side"
+                result = server._spawn_side_agent("r", session, task_id, "parent", "background.complete", body, cleanup=cleanup)
+                assert result["result"]["task_id"] == task_id
                 assert entered.wait(10)
                 assert fence.prepare() == {"ok": False, "idle": False}
                 assert observed == [(home, home.name, "inherited")]
@@ -55,7 +56,7 @@ def test_side_workers_hold_admission_through_cleanup_and_preserve_profile_scope(
                 release_cleanup.set()
                 # The cleanup event happens before the admission finalizer: join the real worker.
                 for thread in threading.enumerate():
-                    if thread.name == "side-agent-side":
+                    if thread.name == f"side-agent-{task_id}":
                         thread.join(10)
             emitted.get(timeout=10)
             token = fence.prepare()["token"]

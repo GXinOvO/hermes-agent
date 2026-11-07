@@ -44,12 +44,19 @@ async def bot(tmp_path, monkeypatch):
     errors = []
 
     async def execute(authority, ref, row):
-        error = errors.pop(0) if errors else None
-        if error is None:
-            return 'pong'
-        authority.pending_results[row['admission_id']] = {
-            'result': {'final_response': '', 'messages': [], 'failed': True, 'error': error}, 'usage': {}}
-        return ''
+        # Exercise the production runtime witness around this provider-only fake. Empty
+        # model messages alone do not prove that an earlier tool had no side effects.
+        from gateway.platforms.event import MessageEvent
+        from gateway.session_delivery_policy import automation_delivery_scope, arm_tool_witness
+        event = MessageEvent(text='provider fake', source=authority.sessions[ref.session_id].source)
+        async with automation_delivery_scope(authority, row, event):
+            arm_tool_witness(SimpleNamespace(tool_start_callback=None))
+            error = errors.pop(0) if errors else None
+            if error is None:
+                return 'pong'
+            authority.pending_results[row['admission_id']] = {
+                'result': {'final_response': '', 'messages': [], 'failed': True, 'error': error}, 'usage': {}}
+            return ''
 
     monkeypatch.setattr('gateway.session_finite.execute_finite_admission', execute)
     try:

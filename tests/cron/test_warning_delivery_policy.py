@@ -11,7 +11,7 @@ from cron.scheduler_delivery import _deliver_result
 def configured_transport():
     from gateway.config import GatewayConfig, Platform, PlatformConfig
     config = GatewayConfig()
-    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True)
+    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True, token='loopback-only')
     with patch("gateway.config.load_gateway_config", return_value=config):
         yield
 
@@ -24,7 +24,7 @@ def test_failure_queue_settles_without_claiming_a_suppressed_send(tmp_path, monk
     job = {"id": "fixture", "name": "fixture", "deliver": "telegram:chat", "execution_id": "run"}
     delivery_queue.enqueue("run", job, "arbitrary diagnostic", for_failure=True)
     (tmp_path / "config.yaml").write_text(f"display: {{suppress_warning_notifications: {str(suppress).lower()}}}\n")
-    with patch("cron.scheduler_delivery._deliver_standalone") as send:
+    with patch("cron.strict_delivery.standalone_send", return_value=({"success": True}, None)) as send:
         assert scheduler.drain_delivery_queue({}, None) == 1
     row = delivery_queue.get_status("run")
     assert row["status"] == ("suppressed" if suppress else "delivered")
@@ -48,7 +48,7 @@ def test_mixed_target_queue_is_not_reported_wholly_suppressed(tmp_path, monkeypa
     (tmp_path / "config.yaml").write_text("display:\n  suppress_warning_notifications: true\n  platforms:\n    telegram:\n      suppress_warning_notifications: false\n")
     job = {"id": "fixture", "deliver": ["slack:muted", "telegram:allowed"]}
     delivery_queue.enqueue("mixed", job, "diagnostic", for_failure=True)
-    with patch("cron.scheduler_delivery._deliver_standalone") as send:
+    with patch("cron.strict_delivery.standalone_send", return_value=({"success": True}, None)) as send:
         assert scheduler.drain_delivery_queue({}, None) == 1
     assert send.call_count == 1
     assert delivery_queue.get_status("mixed")["status"] == "delivered"

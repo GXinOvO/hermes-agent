@@ -13,6 +13,7 @@ import collections
 import contextvars
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -50,6 +51,7 @@ _DEFAULT_MAX_ASYNC_CHILDREN = 3
 _MAX_RETAINED_COMPLETED = 50
 _DURABLE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _MAX_DURABLE_PENDING = 1000
+_MAX_DURABLE_IDENTITIES = 65536
 # Cap retried deliveries so an unroutable row converges to terminal 'dropped'.
 _MAX_DELIVERY_ATTEMPTS = 8
 # Pending completions older than this are dropped on restart replay instead of
@@ -172,7 +174,7 @@ def _capture_routing_origin() -> dict[str, Any]:
         return {}
 
 
-def _persist_dispatch(record: dict[str, Any]) -> None:
+def _persist_dispatch(record: dict[str, Any]) -> Optional[dict[str, Any]]:
     if remote := worker_ledger():
         return remote.dispatch(record)
     now = time.time()
@@ -190,6 +192,7 @@ def _persist_dispatch(record: dict[str, Any]) -> None:
     except OSError:
         pass
     with _DB_LOCK, _transaction() as conn:
+        check_durable_capacity(conn)
         conn.execute("""INSERT OR REPLACE INTO async_delegations
                (delegation_id, origin_session, origin_ui_session_id,
                 parent_session_id, state, dispatched_at, updated_at,
@@ -202,30 +205,27 @@ def _persist_dispatch(record: dict[str, Any]) -> None:
     _prune_durable_records()
 
 
+def check_durable_capacity(conn) -> None:
+    from hermes_state_runtime import RuntimeStoreError
+    total, pending = conn.execute("SELECT COUNT(*),COALESCE(SUM(delivery_state='pending'),0) "
+                                  "FROM async_delegations").fetchone()
+    if total >= _MAX_DURABLE_IDENTITIES or pending >= _MAX_DURABLE_PENDING:
+        raise RuntimeStoreError('delegation_result_capacity')
+
+
 def _prune_durable_records() -> None:
-    """Bound terminal history, preferring delivered records for deletion."""
+    """Release acknowledged payloads without removing delivery identity fences."""
     require_ledger_owner()
     cutoff = time.time() - _DURABLE_RETENTION_SECONDS
     with _DB_LOCK, _transaction() as conn:
-        conn.execute(
-            "DELETE FROM async_delegations WHERE delivery_state='delivered' AND updated_at < ?", (cutoff,))
-        terminal_count = conn.execute(
-            "SELECT COUNT(*) FROM async_delegations WHERE state NOT IN ('running','finalizing')").fetchone()[0]
-        if terminal_count > _MAX_RETAINED_COMPLETED:
-            conn.execute("""DELETE FROM async_delegations WHERE delegation_id IN (
-                     SELECT delegation_id FROM async_delegations
-                     WHERE state NOT IN ('running','finalizing')
-                     ORDER BY CASE delivery_state WHEN 'delivered' THEN 0 ELSE 1 END,
-                              updated_at ASC LIMIT ?
-                   )""", (terminal_count - _MAX_RETAINED_COMPLETED,))
-        pending_count = conn.execute("""SELECT COUNT(*) FROM async_delegations
-               WHERE state NOT IN ('running','finalizing') AND delivery_state='pending'""").fetchone()[0]
-        if pending_count > _MAX_DURABLE_PENDING:
-            conn.execute("""DELETE FROM async_delegations WHERE delegation_id IN (
-                     SELECT delegation_id FROM async_delegations
-                     WHERE state NOT IN ('running','finalizing') AND delivery_state='pending'
-                     ORDER BY updated_at ASC LIMIT ?
-                   )""", (pending_count - _MAX_DURABLE_PENDING,))
+        conn.execute("""UPDATE async_delegations SET event_json=NULL,result_json=NULL,task_json=NULL
+            WHERE delivery_state='delivered' AND state NOT IN ('running','stalling','finalizing')
+              AND (updated_at < ? OR delegation_id IN (
+                SELECT delegation_id FROM async_delegations
+                WHERE delivery_state='delivered' AND state NOT IN ('running','stalling','finalizing')
+                  AND (event_json IS NOT NULL OR result_json IS NOT NULL OR task_json IS NOT NULL)
+                ORDER BY updated_at DESC,delegation_id DESC LIMIT -1 OFFSET ?))""",
+            (cutoff, max(0, _MAX_RETAINED_COMPLETED)))
 
 
 def _persist_completion(event: dict[str, Any], result: dict[str, Any]) -> None:
@@ -234,11 +234,13 @@ def _persist_completion(event: dict[str, Any], result: dict[str, Any]) -> None:
         return remote.complete(event, result)
     now = time.time()
     with _DB_LOCK, _transaction() as conn:
-        conn.execute("""UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
+        changed = conn.execute("""UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
                event_json=?, result_json=?, delivery_state='pending'
                WHERE delegation_id=?""",
             (event.get("status", "completed"), event.get("completed_at", now), now,
              json.dumps(event), json.dumps(result), event["delegation_id"]))
+        if changed.rowcount != 1:
+            raise RuntimeError('delegation completion identity missing')
 
 
 def record_unit_child(delegation_id: str, entry: dict[str, Any]) -> None:
@@ -266,10 +268,15 @@ def record_unit_child(delegation_id: str, entry: dict[str, Any]) -> None:
 
 def _recovered_results(task: dict[str, Any], result_json: Optional[str], error: str) -> Optional[list[dict[str, Any]]]:
     """Per-task results for an abandoned unit: recorded children as they finished, the rest ``unknown``."""
-    partial = json.loads(result_json or "{}") or {}
+    partial = json.loads(result_json or "{}")
+    if not isinstance(partial, dict):
+        raise ValueError('invalid partial delegation result')
+    if 'results' in partial and (not isinstance(partial['results'], list) or any(not isinstance(r, dict)
+            or type(r.get('task_index')) is not int or r['task_index'] < 0 for r in partial['results'])):
+        raise ValueError('invalid partial delegation children')
     if not (task.get("is_batch") and partial.get("partial") and partial.get("results")):
         return None
-    recorded = {r["task_index"]: r for r in partial["results"] if isinstance(r.get("task_index"), int)}
+    recorded = {r["task_index"]: r for r in partial["results"]}
     indexes = task.get("task_indexes") or list(range(len(task.get("goals") or [])))
     return [recorded.get(i) or {"task_index": i, "status": "unknown", "summary": None, "error": error} for i in indexes]
 
@@ -283,8 +290,12 @@ def _owner_liveness() -> Optional[Callable[[Any, Any], bool]]:
         return None
 
     def alive(pid, started) -> bool:
-        return bool(pid) and _pid_exists(int(pid)) and (
-            started is None or start_time_fingerprints_match(started, get_process_start_time(int(pid)) or 0))
+        if not pid or not _pid_exists(int(pid)):
+            return False
+        if started is None:
+            return True
+        current = get_process_start_time(int(pid))
+        return current is None or start_time_fingerprints_match(started, current)
     return alive
 
 
@@ -303,23 +314,36 @@ def recover_abandoned_delegations() -> int:
                FROM async_delegations WHERE state IN ('running','finalizing')""").fetchall()
         for row in rows:
             delegation_id, session_key, origin_ui, parent_id, dispatched_at, pid, started, task_json, origin_sid, result_json, last_state = row
-            if alive(pid, started):
-                continue
-            task = json.loads(task_json or "{}")
             error = "Delegation owner exited before recording a terminal result; outcome unknown."
-            recovered_results = _recovered_results(task, result_json, error)
+            try:
+                if (pid is not None and (type(pid) is not int or pid <= 0)
+                        or started is not None and (type(started) not in (int, float) or not math.isfinite(started))):
+                    raise ValueError('invalid delegation ownership')
+                if alive(pid, started):
+                    continue
+                task = json.loads(task_json or "{}")
+                if (not isinstance(task, dict) or task.get('task_indexes') is not None
+                        and (not isinstance(task['task_indexes'], list) or any(type(i) is not int or i < 0 for i in task['task_indexes']))
+                        or task.get('goals') is not None and not isinstance(task['goals'], list)
+                        or task.get('owner_cwd') is not None and (not isinstance(task['owner_cwd'], str) or '\0' in task['owner_cwd'])
+                        or task.get('task_transcripts') is not None and (not isinstance(task['task_transcripts'], dict)
+                            or any(not isinstance(path, str) or '\0' in path for path in task['task_transcripts'].values()))):
+                    raise ValueError('invalid delegation task')
+                recovered_results = _recovered_results(task, result_json, error)
+                diagnostics = {"last_known_status": last_state, "task_transcripts": task.get("task_transcripts") or {}}
+                from tools.async_delegation_recovery_hints import git_state_hint, transcript_tails
+                if tails := transcript_tails(diagnostics["task_transcripts"]):
+                    diagnostics["transcript_tails"] = tails
+                if hint := git_state_hint(task.get("owner_cwd")):
+                    diagnostics["git_state_hint"] = hint
+            except (OSError, TypeError, ValueError, KeyError, OverflowError):
+                logger.warning('Async delegation %s has unreadable recovery input; preserve for reconciliation', delegation_id)
+                continue
             if recovered_results:
                 done = sum(1 for r in recovered_results if r.get("status") != "unknown")
                 error = (f"Delegation owner exited before the unit finished; {done}/{len(recovered_results)} child "
                          "results were recorded and are included below, the rest are unknown.")
-            diagnostics = {"last_known_status": last_state, "task_transcripts": task.get("task_transcripts") or {}}
-            # Verbatim transcript tails + a git snapshot of the owner's cwd, so the parent can
-            # continue or re-dispatch from the event alone instead of opening files (#116000).
-            from tools.async_delegation_recovery_hints import git_state_hint, transcript_tails
-            if tails := transcript_tails(diagnostics["task_transcripts"]):
-                diagnostics["transcript_tails"] = tails
-            if hint := git_state_hint(task.get("owner_cwd")):
-                diagnostics["git_state_hint"] = hint
+
             event = {
                 "type": "async_delegation", "delegation_id": delegation_id, "session_key": session_key,
                 "origin_ui_session_id": origin_ui, "origin_session_id": origin_sid or "",
@@ -392,9 +416,14 @@ def _replay_pending(conn, rows, target_queue, now: float, *, startup: bool = Fal
                 # The owner's explicit startup replay and the first-consume replay
                 # (process_registry.restore_completions) may both run: offer once.
                 continue
-        evt = json.loads(payload)
-        if isinstance(evt, dict):
+        try:
+            evt = json.loads(payload)
+            if not isinstance(evt, dict):
+                raise ValueError('invalid completion envelope')
             evt = redact_completion_event(evt)
+        except (TypeError, ValueError):
+            logger.warning('Async delegation %s has an unreadable completion; preserve for reconciliation', delegation_id)
+            continue
         with _orphan_lock:
             if startup:
                 _startup_replayed.add(delegation_id)
@@ -961,7 +990,16 @@ def _dispatch_admitted(
             return {"status": "rejected", "error": capacity_error}
         _records[delegation_id] = record
         live_units = sum(1 for r in _records.values() if r.get("status") in _LIVE_STATES)
-    _persist_dispatch(record)
+    try:
+        refusal = _persist_dispatch(record)
+    except BaseException:
+        with _records_lock:
+            _records.pop(delegation_id, None)
+        raise
+    if isinstance(refusal, dict) and refusal.get('status') == 'rejected':
+        with _records_lock:
+            _records.pop(delegation_id, None)
+        return refusal
     # Units of one call share a slot, so live units can exceed slots: size the pool by units or a
     # unit queues behind a full pool and the stale monitor kills it before its child ever starts.
     executor = _get_executor(max(max_async_children, live_units))
@@ -1141,9 +1179,11 @@ def _push_completion_event(record: dict[str, Any], result: dict[str, Any], statu
         **({} if is_batch else {"exit_reason": result.get("exit_reason")}),
         **{k: record[k] for k in _ROUTING_KEYS if record.get(k)},
         **{k: result[k] for k in _STALL_META_KEYS if k in result}}
+    evt['result_durability'] = 'persisted'
     try:
         _persist_completion(evt, result)
     except Exception as exc:
+        evt['result_durability'] = 'failed'
         logger.error(f"Async delegation{label} %s: durable completion write failed; delivering in-memory "
                      "only (a restart may report this unit as unknown): %s", record.get("delegation_id"), exc)
     try:

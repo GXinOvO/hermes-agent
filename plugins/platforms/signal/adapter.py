@@ -24,6 +24,7 @@ from urllib.parse import quote, unquote
 import httpx
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from agent.i18n import t
 from gateway.platforms.base import (
     BasePlatformAdapter, SendResult, cache_image_from_bytes_async,
@@ -637,6 +638,8 @@ class SignalAdapter(BasePlatformAdapter):
 
     def _validate_send_result(self, result: Any) -> tuple[bool, Optional[str]]:
         """Validate signal-cli send response results. Returns (success, error_message)."""
+        if strict_transport() and (not isinstance(result, dict) or not result.get('timestamp')):
+            return False, 'Signal send ACK missing timestamp'
         results = result.get("results") if isinstance(result, dict) else None
         for r in results if isinstance(results, list) else ():
             if not isinstance(r, dict):
@@ -703,6 +706,7 @@ class SignalAdapter(BasePlatformAdapter):
         self._track_sent_timestamp(result)
         return result, None
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a text message with native Signal formatting."""
@@ -768,7 +772,7 @@ class SignalAdapter(BasePlatformAdapter):
             file_path = unquote(image_url[7:])
         else:
             try:
-                file_path = await cache_image_from_url(image_url)
+                file_path = await cache_image_from_url(image_url, retries=0) if strict_transport() else await cache_image_from_url(image_url)
             except Exception as e:
                 return None, "download", e
         if not file_path or not Path(file_path).exists():
@@ -777,6 +781,7 @@ class SignalAdapter(BasePlatformAdapter):
             return None, "oversize", file_size
         return file_path, None, None
 
+    @single_attempt_transport
     async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
                                    metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:
         """Send a batch of images via chunked Signal RPC calls. Alt texts are dropped (one shared body
@@ -784,6 +789,7 @@ class SignalAdapter(BasePlatformAdapter):
         Returns success when at least one batch was accepted, so media-only turns report SUCCESS."""
         if not images:
             return SendResult(success=False, error="no images to send")
+        from gateway.strict_transport import strict_transport
         scheduler = get_scheduler()
         logger.info("Signal send_multiple_images: received %d image(s) for %s — scheduler state: %s", len(images),
                     chat_id[:30], scheduler.state())
@@ -801,6 +807,8 @@ class SignalAdapter(BasePlatformAdapter):
             logger.error("Signal: no valid images in batch of %d (download=%d missing=%d oversize=%d)", len(images),
                          skipped["download"], skipped["missing"], skipped["oversize"])
             return SendResult(success=False, error="no valid images in batch")
+        if strict_transport() and len(attachments) != len(images):
+            return SendResult(success=False, error="strict attachment bundle incomplete")
         logger.info("Signal send_multiple_images: %d/%d images valid, sending in chunks", len(attachments), len(images))
         base_params = await self._with_target({"account": self.account, "message": ""}, chat_id)
         per = SIGNAL_MAX_ATTACHMENTS_PER_MSG
@@ -811,11 +819,13 @@ class SignalAdapter(BasePlatformAdapter):
             n = len(att_batch)
             estimated = scheduler.estimate_wait(n)
             logger.debug("Signal batch %d/%d: %d attachments, estimated wait=%.1fs", idx, n_batches, n, estimated)
-            if estimated >= SIGNAL_BATCH_PACING_NOTICE_THRESHOLD:
+            if estimated >= SIGNAL_BATCH_PACING_NOTICE_THRESHOLD and not strict_transport():
                 await self._notify_batch_pacing(chat_id, idx, n_batches, estimated)
             if await self._send_attachment_batch(scheduler, dict(base_params, attachments=att_batch), n,
                                                  f"{idx}/{n_batches}"):
                 delivered = True
+            elif strict_transport():
+                return SendResult(success=False, error="Signal attachment ACK missing")
         return SendResult(
             success=delivered,
             error=None if delivered else "all Signal attachment batches failed")
@@ -825,6 +835,8 @@ class SignalAdapter(BasePlatformAdapter):
         deducted only on validated success (None = server never accepted it); 429s feed the scheduler.
         Returns True when the server accepted the batch."""
         send_timeout, max_attempts = _signal_send_timeout(n), SIGNAL_RATE_LIMIT_MAX_ATTEMPTS
+        from gateway.strict_transport import strict_transport
+        max_attempts = 1 if strict_transport() else max_attempts
         for attempt in range(1, max_attempts + 1):
             await scheduler.acquire(n)
             t0 = time.monotonic()
@@ -865,6 +877,7 @@ class SignalAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.warning("Signal: failed to send pacing notice: %s", e)
 
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, **kwargs) -> SendResult:
         """Send an image. Supports http(s):// and file:// URLs."""
         await self._stop_typing_indicator(chat_id)
@@ -896,17 +909,21 @@ class SignalAdapter(BasePlatformAdapter):
             return SendResult(success=False, error=f"{media_label} too large ({file_size} bytes)")
         return await self._send_file(chat_id, file_path, caption, f"RPC send {media_label.lower()} failed")
 
+    @single_attempt_transport
     async def send_document(self, chat_id, file_path, caption=None, filename=None, **kwargs) -> SendResult:
         return await self._send_attachment(chat_id, file_path, "File", caption)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         """Native Signal attachment for the gateway MEDIA: delivery path."""
         return await self._send_attachment(chat_id, image_path, "Image", caption)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         """Audio attachment — Signal has no distinct voice-message API."""
         return await self._send_attachment(chat_id, audio_path, "Audio", caption)
 
+    @single_attempt_transport
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_attachment(chat_id, video_path, "Video", caption)
 

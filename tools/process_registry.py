@@ -38,7 +38,8 @@ from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_ownership import ProcessOwnershipMixin
 from tools.process_registry_termination import ProcessTerminationMixin
-from tools.process_registry_results import load_completed_results, save_completed_result
+from tools.process_registry_results import load_completed_results, restored_event_owned, result_visible, save_completed_result
+from tools.process_registry_result_recovery import ProcessResultRecoveryMixin
 from tools.process_registry_env_log import log_delta_command
 from tools.process_registry_wsl import _is_wsl_launcher_command
 
@@ -585,6 +586,14 @@ class ProcessSession:
     parent_session_id: str = ""
     notify_on_complete: bool = False            # Queue agent notification on exit
     completion_output_chars: int = 0            # Output chars the completion carries; 0 = COMPLETION_OUTPUT_CHARS
+    result_durability: str = "pending"          # pending|persisted|failed; exit status is independent
+    result_verification: str = "unverified"
+    source_fingerprint: str = ""
+    result_fingerprint: str = ""
+    _result_profile_home: str = field(default="", repr=False)
+    _result_recovered: bool = field(default=False, repr=False)
+    _result_consumed: bool = field(default=False, repr=False)
+    _result_persist_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     watch_patterns: list[str] = field(default_factory=list)
     heartbeat_seconds: int = 0                  # 0 = off; else a "heartbeat" event every N s while running
     total_output_chars: int = 0                 # Chars ever ingested (the buffer is a rolling tail)
@@ -674,7 +683,7 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
+class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -1557,8 +1566,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             if was_running:
                 session._finish_claimed = True
                 session.exited_at = time.time()
-                # Keep the session tracked until its result is durable. A finite
-                # parent must not observe completion and exit during this write.
+                # Complete the persistence attempt before publishing; disk failure
+                # remains explicit in result_durability and never changes the exit.
                 save_completed_result(session)
                 self._running.pop(session.id)
             self._finished[session.id] = session
@@ -1585,31 +1594,10 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         self._release_finished_handles(session)
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
-            notification = {
-                "type": "completion",
-                "session_id": session.id,
-                "session_key": session.session_key,
-                "task_id": session.task_id,
-                "owner_task_id": session.owner_task_id,
-                "command": session.command,
-                **({"handoff_note": session.handoff_note} if session.handoff_note else {}),
-                **self._exit_fields(session),
-                # A consumer that relays the output (a bot DM's reply) must know it is not whole.
-                **_completion_output(session),
-                # Stable producer identity across checkpoint recovery (unlike a
-                # consumer-observed completion timestamp).
-                "started_at": session.started_at,
-            }
+            notification = self._completion_notification(session)
             _redact_process_result(notification)
             self.completion_queue.put(notification)
 
-    @staticmethod
-    def _exit_fields(session: ProcessSession) -> dict:
-        return {
-            "exit_code": session.exit_code,
-            "completion_reason": session.completion_reason,
-            "termination_source": session.termination_source,
-        }
 
     def _release_finished_handles(self, session: ProcessSession):
         """Close a finished session's OS handles (Popen pipes / PTY master).
@@ -1787,6 +1775,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     @staticmethod
     def _owns_event(evt: dict, session_key: str, owns_event, is_async_delegation: bool) -> bool:
         """Routing verdict for one drained event (see drain_notifications); False = requeue."""
+        if not restored_event_owned(evt, checked_owner=owns_event is not None):
+            return False
         evt_session_key = str(evt.get("session_key") or "")
         requires_positive_proof = is_async_delegation or bool(evt_session_key or evt.get("origin_ui_session_id"))
         if owns_event is not None and requires_positive_proof:
@@ -1798,7 +1788,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             return evt_session_key == session_key
         # Restored payloads from a previous process: an unfiltered drain cannot prove
         # ownership, so leave them for the owner.
-        return not (is_async_delegation and evt.get("restored"))
+        return not evt.get("restored")
 
     def restore_completions(self) -> int:
         """Rehydrate durable delegation completions from the LAUNCH profile's ledger, once per
@@ -1991,7 +1981,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     def poll(self, session_id: str) -> dict:
         """Check status and get new output for a background process."""
         session = self.get(session_id)
-        if session is None or self._uncollected_gone(session):
+        if session is None or not result_visible(session) or self._uncollected_gone(session):
             return _not_found(session_id)
         self._reconcile_local_exit(session)  # orphaned-pipe reader guard
         # Read with the preview under the lock the reader appends and exits under, so the
@@ -2019,7 +2009,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         from tools.ansi_strip import strip_ansi
 
         session = self.get(session_id)
-        if session is None:
+        if session is None or not result_visible(session):
             return _not_found(session_id)
         with session._lock:
             full_output = strip_ansi(session.output_buffer)
@@ -2041,7 +2031,9 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             **self._status_head(session), "output": "\n".join(selected),
             "total_lines": total_lines, "showing": f"{len(selected)} lines"}
         if exited and observed_completion_output and not finalizing:
-            self._completion_consumed.add(session_id)
+            self._record_completion_consumed(session)
+        if exited:
+            result.update(self._exit_fields(session))
         return result
 
     def wait(self, session_id: str, timeout: int | None = None) -> dict:
@@ -2065,7 +2057,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             effective_timeout = max_timeout
             timeout_note = f"Requested wait of {timeout}s was clamped to configured limit of {max_timeout}s"
         session = self.get(session_id)
-        if session is None:
+        if session is None or not result_visible(session):
             return _not_found(session_id)
         deadline = time.monotonic() + effective_timeout
         while time.monotonic() < deadline:
@@ -2075,7 +2067,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             self._reconcile_local_exit(session)  # orphaned-pipe reader guard
             result = None
             if session.exited and not self._reader_finalizing(session):
-                self._completion_consumed.add(session_id)
+                self._record_completion_consumed(session)
                 result = self._exit_snapshot(session, "exited")
             elif _is_interrupted():
                 result = {
@@ -2131,7 +2123,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         completion notification — except abandoned-turn reaping (``kill_started_since``),
         which passes true so a killed abandoned process can't revive stopped work."""
         session = self.get(session_id)
-        if session is None:
+        if session is None or not result_visible(session):
             return _not_found(session_id)
         if session.exited:
             # A double-forked descendant may still be alive in the systemd scope even
@@ -2151,7 +2143,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             # Only suppress the autonomous turn after its output is present in
             # the explicit kill result, matching wait/log consumption.
             if consume_output and not finalizing:
-                self._completion_consumed.add(session_id)
+                self._record_completion_consumed(session)
+                result.update(self._result_fields(session))
             return result
         try:
             early = self._signal_kill(session, session_id, consume_output)
@@ -2200,7 +2193,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             with session._lock:
                 output = _completion_output(session)
                 if consume_output:
-                    self._completion_consumed.add(session_id)
+                    self._record_completion_consumed(session, persist=False)
                 session.exited = True
                 session.exit_code = -15  # SIGTERM
                 session.completion_reason = "killed"
@@ -2214,7 +2207,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             self._write_checkpoint()
             return {
                 "status": "killed", "session_id": session.id, "completion_reason": session.completion_reason,
-                "termination_source": session.termination_source, **output}
+                "termination_source": session.termination_source, **self._result_fields(session), **output}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -2256,7 +2249,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 with session._lock:
                     output = _completion_output(session)
                 if consume_output:
-                    self._completion_consumed.add(session_id)
+                    self._record_completion_consumed(session)
                 # No waitable handle, so this is not a collected exit. Close the
                 # entry without queueing a completion, and do not signal a PID
                 # whose start time does not match.
@@ -2284,7 +2277,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         """``pty_op(pty)`` under PTY mode, else ``pipe_op(stdin)`` on the Popen pipe; *ok* on success."""
         from tools.process_registry_stdin import already_exited_error, stdin_unavailable_error
         session = self.get(session_id)
-        if session is None:
+        if session is None or not result_visible(session):
             return _not_found(session_id)
         if session.exited:
             return {"status": "already_exited", "error": already_exited_error(session)}
@@ -2382,6 +2375,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             ]
         result = []
         for s in all_sessions:
+            if not result_visible(s):
+                continue
             # List-only refreshes must observe child exit even while descendants
             # keep the capture pipe open; retain the existing completion owner.
             self._reconcile_local_exit(s)
@@ -2411,6 +2406,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             if s.persist_on_release:
                 entry["persist_on_release"] = True
             if s.exited:
+                entry.update(self._result_fields(s))
                 entry["exit_code"] = s.exit_code
                 entry["exited_at"] = s.exited_at
                 entry["completion_reason"] = s.completion_reason
@@ -2574,7 +2570,7 @@ PROCESS_SCHEMA = {
     "description": (
         "Poll, wait on, send input to, or kill terminal(background=true) processes. "
         "Completed results remain retrievable by session_id when resuming their owning conversation "
-        "(up to 7 days, newest 64 results per profile; rolling output tail). "
+        "(up to 7 days; newest 64 consumed results per profile, plus unconsumed results; rolling output tail). "
         "poll: status + new output. log: full output, paged. wait: block "
         "until exit or timeout (partial output on timeout). write vs "
         "submit: submit appends Enter — use it to answer prompts; write "

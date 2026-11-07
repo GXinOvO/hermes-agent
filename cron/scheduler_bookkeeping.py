@@ -63,8 +63,7 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
     mark_kwargs: dict = {"delivery_error": d.delivery_error}
     from cron.scheduler_authority import journal_path
     journal = journal_path(job['id'], execution_id)
-    if not job.get('no_agent'):
-        mark_kwargs['execution_id'] = execution_id
+    mark_kwargs['execution_id'] = execution_id
     if not d.success and job.pop("_model_unreachable", False):
         # Never-reached-the-model failure: schedule the Cowork-style bounded re-run
         # (cron/unreachable_retry.py) inside the same fenced store write.
@@ -111,6 +110,10 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
     if delivery_outcome in ("delivered", "not_configured") and not d.success:
         # Failure ping left the process (or had a configured target): mark the incident alerted.
         scheduler._mark_incident_alerted(d.failure_incident_id)
+    # The result is sealed and mark_job_run has committed this execution's consumption.
+    # Save the monitor acknowledgement before the terminal row can retire its journal.
+    from cron.monitor import settle_observation
+    settle_observation(job, execution_id, success=d.success, delivery_outcome=delivery_outcome)
     from functools import partial
     from cron.executions import FIRER_FINISHED_STATES, get_execution, recover_receipted_execution
     finish = partial(recover_receipted_execution, job_id=job['id']) if recovered else scheduler.finish_execution

@@ -28,6 +28,7 @@ from gateway.platforms._shared import (
     env_is_connected as _env_is_connected, get_scoped_secret as _get_scoped_secret, send_error
 )
 from gateway.platforms.send_targets import StandaloneSendPolicy
+from gateway.strict_transport import single_attempt_transport, strict_transport
 
 try:
     import aiohttp
@@ -160,6 +161,7 @@ class SmsAdapter(BasePlatformAdapter):
 
     # -- Outbound ------------------------------------------------------------
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
@@ -168,8 +170,11 @@ class SmsAdapter(BasePlatformAdapter):
 
         async def _send_one(chunk: str) -> SendResult:
             try:
-                async with session.post(url, data=_twilio_form(self._from_number, chat_id, chunk), headers=headers) as resp:
+                async with session.post(url, data=_twilio_form(self._from_number, chat_id, chunk), headers=headers,
+                                        **({'allow_redirects': False} if strict_transport() else {})) as resp:
                     body = await resp.json()
+                    if strict_transport() and (resp.status >= 300 or not body.get("sid")):
+                        return SendResult(success=False, error="Twilio message ACK missing")
                     if resp.status >= 400:
                         error_msg = body.get("message", str(body))
                         logger.error("[sms] send failed to %s: %s %s", redact_phone(chat_id), resp.status, error_msg)

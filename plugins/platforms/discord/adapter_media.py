@@ -53,6 +53,10 @@ def _ogg_opus_duration(data: bytes) -> Optional[float]:
     return secs if secs > 0 else None
 
 
+from gateway.strict_transport import single_attempt_transport, strict_transport
+from plugins.platforms.discord.strict_delivery import strict_images_transport
+
+
 class DiscordMediaMixin:
     @staticmethod
     def _discord_upload_limit_bytes(channel: Any) -> int:
@@ -160,6 +164,7 @@ class DiscordMediaMixin:
         return SendResult(success=True, message_id=str(msg.id))
 
 
+    @strict_images_transport
     async def send_multiple_images(
         self, chat_id: str, images: list[tuple[str, str]],
         metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0,
@@ -306,6 +311,7 @@ class DiscordMediaMixin:
         return SendResult(success=delivered, error=None if delivered else "all images failed to send")
 
 
+    @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
@@ -316,6 +322,12 @@ class DiscordMediaMixin:
         its real name, which Discord renders with an inline player. Voice intent (``True`` from
         ``[[audio_as_voice]]``, or no flag: auto-TTS and voice replies) becomes a native voice
         message, which Discord only plays as Ogg/Opus."""
+        if strict_transport():
+            if is_voice is not False:
+                from plugins.platforms.discord.strict_delivery import send_voice
+                return await send_voice(self, chat_id, audio_path, reply_to, metadata)
+            from plugins.platforms.discord.strict_delivery import send_file
+            return await send_file(self, chat_id, audio_path, caption, reply_to, metadata)
         if is_voice is False:
             return await self._send_local_file(
                 chat_id, audio_path, caption, not_found="Audio file not found", kind="audio",
@@ -424,11 +436,15 @@ class DiscordMediaMixin:
             return SendResult(success=False, error=str(e))
 
 
+    @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send a local image file natively as a Discord file attachment."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_file
+            return await send_file(self, chat_id, image_path, caption, reply_to, metadata)
         return await self._send_local_file(
             chat_id, image_path, caption, not_found="Image file not found", kind="local image",
             metadata=metadata,
@@ -475,11 +491,15 @@ class DiscordMediaMixin:
             return await fallback(error_metadata)
 
 
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send an image natively as a Discord file attachment."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_url
+            return await send_url(self, chat_id, image_url, caption, reply_to, metadata)
         from plugins.platforms.discord.adapter import _prompt_target_id, _image_ext_from_content_type
 
         return await self._send_url_media(
@@ -490,11 +510,15 @@ class DiscordMediaMixin:
         )
 
 
+    @single_attempt_transport
     async def send_animation(
         self, chat_id: str, animation_url: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send an animated GIF natively as a Discord file attachment."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_url
+            return await send_url(self, chat_id, animation_url, caption, reply_to, metadata)
         return await self._send_url_media(
             chat_id, animation_url, caption, kind="animation", filename_for=lambda _h: "animation.gif",
             fallback=lambda md: super(DiscordMediaMixin, self).send_animation(chat_id, animation_url, caption, reply_to, metadata=md),
@@ -502,23 +526,31 @@ class DiscordMediaMixin:
         )
 
 
+    @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send a local video file natively as a Discord attachment."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_file
+            return await send_file(self, chat_id, video_path, caption, reply_to, metadata)
         return await self._send_local_file(
             chat_id, video_path, caption, not_found="Video file not found", kind="local video",
             metadata=metadata,
         )
 
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None,
         file_name: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send an arbitrary file natively as a Discord attachment."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_file
+            return await send_file(self, chat_id, file_path, caption, reply_to, metadata, file_name=file_name)
         return await self._send_local_file(
             chat_id, file_path, caption, file_name=file_name, not_found="File not found", kind="document",
             metadata=metadata,

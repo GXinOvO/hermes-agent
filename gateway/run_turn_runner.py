@@ -529,6 +529,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             agent.stream_delta_callback = None
             agent.interim_assistant_callback = None
             agent.thinking_progress = False
+        from gateway.session_delivery_policy import arm_tool_witness
+        arm_tool_witness(agent)
         ctx.agent_holder[0] = agent  # interrupt support
         if self._approval_owner is not None:
             authority, owner_id, generation = self._approval_owner

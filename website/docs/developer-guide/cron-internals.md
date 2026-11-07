@@ -104,7 +104,7 @@ Desktop routine inspector) maps each literal explicitly — a consumer must neve
 
 ### Queued delivery lifecycle and write-back
 
-An agent run with a delivery target and an `execution_id` does not send inline: it
+A run (agent, monitor, or script-only) with a delivery target and an `execution_id` does not send inline: it
 hands the content to `cron/delivery_queue.py` (the profile's `cron/deliveries.db`,
 keyed by `execution_id`) and books `last_status = "delivery_queued"` with ledger
 `delivery_outcome = "queued"`. A gateway's housekeeping tick drains the queue through
@@ -129,6 +129,35 @@ attempt and latest recorded completion), so the call is idempotent and never rew
 later run's status; the ledger only ever moves `queued` to a terminal outcome. Until a
 gateway drains the row, `last_status` stays `delivery_queued` and `hermes cron list`
 shows "finished; delivery is still in progress".
+
+### Completed result recovery
+
+`scheduler_results.py` checkpoints the real `(success, output, response, error)` return value in
+the existing profile-local `cron/admissions/` journal before output saving, delivery or run marking.
+Script-only jobs write a prepared record before execution because they have no session admission;
+agent jobs retain their existing admission receipt. `scheduler_authority.reconcile_pending` consumes
+completed records even on a headless tick (`allow_connect=False`), using the same save/delivery/mark
+tail without calling a script, monitor source or agent again. The journal binds the profile home,
+job definition and execution ID; new records also bind script bytes and resolved delivery addresses
+(including indirect home channels). Changed/deleted definitions or changed bindings retain the
+receipt without delivery. Consumers serialize on the existing per-job fire lock and reread the
+journal inside it, so competing readers cannot both consume the same tail. The queue drain checks
+the binding again before sending.
+
+The execution ledger still fences live owners and already-failed/cancelled attempts. A prepared
+script without a completed tuple is uncertain and pauses for review. Save/mark failures after a
+completed receipt defer the tail instead of replacing the result with a new failure notice. Every
+run passes its execution ID to `mark_job_run`, including `no_agent`, so retrying after a committed
+mark does not consume repeat budget twice. Direct `run_job` callers without an execution ID keep
+their tuple-only API; the scheduler owns result recovery for production fires.
+
+Monitor detection still advances `monitor_state.last_output_hash` before analysis; recovery never
+rolls that hash back. `observation` links the latest detected hash to its analysis execution,
+`observations` retains unresolved executions, and `processed` acknowledges a successful consumed
+analysis. An unchanged tick reports the linked analysis status and never consumes that observation.
+Owner loss without a sealed analysis remains `unknown`, `consumed: false`. A sealed result updates
+its own observation during bookkeeping before terminalizing its ledger row, without rerunning the
+monitor source. Detection deduplication alone is not proof that analysis finished or was delivered.
 
 ### Job Lifecycle States
 

@@ -87,9 +87,8 @@ async def test_a_transient_refusal_leaves_the_same_id_resendable(bot, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_a_cron_report_parked_across_a_drain_is_delivered_on_the_next_tick(bot, monkeypatch):
-    """``cron/bot_chat_legacy`` keeps a record queued when the door raises and replays the same id
-    next tick: a drain during a gateway restart must not turn into a transferred refusal."""
+async def test_unsealed_cron_report_across_a_drain_stays_unknown(bot, monkeypatch):
+    """Old deferred outputs lack producer provenance; a later owner never infers a new consumer."""
     import asyncio
     import json
     from cron.bot_chat_legacy import drain_legacy_pending
@@ -107,13 +106,13 @@ async def test_a_cron_report_parked_across_a_drain_is_delivered_on_the_next_tick
                                     content='the report', home=str(bot.home), for_failure=False, sequence=1)))
     refusing = _refuse(monkeypatch, 'runtime_draining')
     await asyncio.to_thread(drain_legacy_pending)
-    assert json.loads(path.read_text())['status'] == 'queued'
+    assert json.loads(path.read_text())['status'] == 'ambiguous'
     refusing.clear()
     await asyncio.to_thread(drain_legacy_pending)
     record = json.loads(path.read_text())
-    assert record['status'] == 'transferred' and record['receipt_status'] != 'failed', record
+    assert record['status'] == 'ambiguous', record
     rows = list_session_admissions(bot.authority.db, session_id=bot.chat, pending_only=False)
-    assert [row['request_id'] for row in rows] == ['bot:' + KEY]
+    assert rows == []
 
 
 def _rpc_connection(bot):

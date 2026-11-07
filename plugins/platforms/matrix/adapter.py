@@ -71,6 +71,8 @@ except ImportError:
         "PRIVATE": "private_chat", "PUBLIC": "public_chat", "TRUSTED_PRIVATE": "trusted_private_chat"})
     TrustState = type("_TrustStateStub", (), {"UNVERIFIED": 0, "VERIFIED": 1})  # type: ignore[misc,assignment]
 
+from gateway.strict_transport import strict_transport
+from plugins.platforms.matrix.strict_delivery import strict_matrix_method
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt,
@@ -1382,14 +1384,17 @@ class MatrixAdapter(BasePlatformAdapter):
             self._client = None
         logger.info("Matrix: disconnected")
 
+    @strict_matrix_method
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         if not content:
             return SendResult(success=True)
+        chunks = self.truncate_message(self.format_message(content), self.max_message_length, len_fn=self.message_len_fn)
+        if strict_transport() and len(chunks) != 1:
+            return SendResult(success=False, error="strict Matrix requires one complete event")
         last_event_id = None
-        for chunk in self.truncate_message(
-                self.format_message(content), self.max_message_length, len_fn=self.message_len_fn):
+        for chunk in chunks:
             msg_content = self._build_text_message_content(chunk)
             self._apply_relation_metadata(msg_content, reply_to=reply_to, metadata=metadata)
             try:
@@ -1498,17 +1503,22 @@ class MatrixAdapter(BasePlatformAdapter):
             msg_content["body"] = f"* {fallback}…"
         return await self._send_content_event(chat_id, msg_content)
 
+    @strict_matrix_method
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         from tools.url_safety import is_safe_url
         if not is_safe_url(image_url):
+            if strict_transport():
+                return SendResult(success=False, error="strict Matrix image URL refused")
             logger.warning("Matrix: blocked unsafe image URL (SSRF protection)")
             return await super().send_image(chat_id, image_url, caption, reply_to, metadata=metadata)
         try:
             data, ct, fname = await self._download_external_media_with_cap(image_url)
         except Exception as exc:
             logger.warning("Matrix: failed to download image %s: %s", _redact_url_for_log(image_url), exc)
+            if strict_transport():
+                return SendResult(success=False, error=str(exc))
             fallback = t("platform.matrix.media.image_download_failed")
             return await self.emit_media_warning(chat_id, fallback, caption=caption, reply_to=reply_to, metadata=metadata)
         return await self._upload_and_send(chat_id, data, fname, ct, "m.image", caption, reply_to, metadata)
@@ -1575,6 +1585,7 @@ class MatrixAdapter(BasePlatformAdapter):
                         resp, resp.aiter_bytes(), resp.headers.get("content-type", "application/octet-stream"))
                     return data, ct, fname
 
+    @strict_matrix_method
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
@@ -1583,6 +1594,8 @@ class MatrixAdapter(BasePlatformAdapter):
     async def send_multiple_images(
         self, chat_id: str, images: list[tuple[str, str]], metadata: Optional[dict[str, Any]] = None,
         human_delay: float = 0.0) -> SendResult:
+        if strict_transport():
+            return SendResult(success=False, error="strict Matrix image batches require per-item dispatcher claims")
         if not images:
             return SendResult(success=False, error="no images to send")
         from urllib.parse import unquote as _unquote
@@ -1602,11 +1615,13 @@ class MatrixAdapter(BasePlatformAdapter):
             delivered = delivered or result.success
         return SendResult(success=delivered, error=None if delivered else "all images failed to send")
 
+    @strict_matrix_method
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         return await self._send_local_file(chat_id, file_path, "m.file", caption, reply_to, file_name, metadata)
 
+    @strict_matrix_method
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, is_voice: Optional[bool] = None) -> SendResult:
@@ -1634,6 +1649,7 @@ class MatrixAdapter(BasePlatformAdapter):
                 with suppress(OSError):
                     os.unlink(converted_path)
 
+    @strict_matrix_method
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
@@ -1840,6 +1856,8 @@ class MatrixAdapter(BasePlatformAdapter):
         is_voice: bool = False) -> SendResult:
         p = Path(file_path).expanduser()
         if not p.exists():
+            if strict_transport():
+                return SendResult(success=False, error="strict Matrix media file missing")
             # file_path is host-local; never echo it into chat.
             logger.warning("[%s] upload fallback: media file not found for %s", self.name, file_path)
             text = t("platform.shared.media.attachment_failed")

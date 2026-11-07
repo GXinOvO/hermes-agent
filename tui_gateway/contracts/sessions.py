@@ -4,6 +4,7 @@ listing/browsing stored rows, spawn-tree snapshots, event replay and the statele
 """
 
 from __future__ import annotations
+from typing import Literal
 
 from pydantic import Field
 
@@ -11,6 +12,7 @@ from .base import JsonValue, Params, Result, WireEnum
 from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
                      UndoRollbackHint, Usage)
 from .connectors_operation import ConnectionRequestPayload
+from .events import SideAgentCompletePayload
 from .registry import method
 
 
@@ -70,6 +72,11 @@ class LiveSessionStatus(WireEnum):
     resuming = "resuming"  # deferred hydration in flight
 
 
+class BackgroundResult(Result):
+    event_type: Literal['background.complete', 'btw.complete', 'preview.restart.complete']
+    payload: SideAgentCompletePayload
+
+
 class LiveSessionSnapshot(Result):
     """Union of ``server._live_session_payload``, ``methods_session._resume_response`` and the
     live-unpersisted resume path; keys only some paths produce are optional."""
@@ -78,6 +85,7 @@ class LiveSessionSnapshot(Result):
     message_count: int
     messages: list[TranscriptMessage]
     info: SessionLiveInfo
+    background_results: list[BackgroundResult] | None = None
     stored_session_id: str | None = None
     resumed: str | None = None
     session_key: str | None = None

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone, UTC
@@ -38,6 +39,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None  # type: ignore[assignment]
 
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, ExecApprovalPrompt, SendResult,
@@ -148,6 +150,8 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         extra = config.extra or {}
         self._app_id = str(extra.get("app_id") or _resolve_qq_secret("QQ_APP_ID", "")).strip()
         self._client_secret = str(extra.get("client_secret") or _resolve_qq_secret("QQ_CLIENT_SECRET", "")).strip()
+        from .routes import ChatRoutes
+        self._chat_routes = ChatRoutes(self._app_id)
         self._markdown_support = bool(extra.get("markdown_support", True))
         self._dm_policy = str(extra.get("dm_policy", "pairing")).strip().lower()
         self._allow_from = _coerce_list(extra.get("allow_from") or extra.get("allowFrom"))
@@ -840,6 +844,11 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             return
 
         self._chat_type_map[chat_id] = qq_chat_type
+        if self._app_id:
+            try:
+                await asyncio.to_thread(self._chat_routes.remember, chat_id, qq_chat_type)
+            except (OSError, ValueError, sqlite3.Error):
+                logger.exception("QQ destination kind could not be persisted")
         event = MessageEvent(
             source=self.build_source(chat_id=chat_id,** source_kwargs), text=text,
             message_type=self._detect_message_type(image_urls, image_media_types), raw_message=d,
@@ -1294,9 +1303,15 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         client = self._require_http_client()
         headers = await self._auth_headers()
         try:
-            resp = await client.request(method, f"{API_BASE}{path}", headers=headers, json=body, timeout=timeout)
-            data = resp.json()
-            if resp.status_code >= 400:
+            if strict_transport():
+                # A fresh factory client keeps SSRF/proxy policy and stock zero-retry HTTPX transport.
+                async with platform_http_client(follow_redirects=False, trust_env=gateway_trust_env()) as single:
+                    resp = await single.request(method, f"{API_BASE}{path}", headers=headers, json=body,
+                                                timeout=timeout, follow_redirects=False)
+            else:
+                resp = await client.request(method, f"{API_BASE}{path}", headers=headers, json=body, timeout=timeout)
+            data = resp.json() if resp.content else {}
+            if resp.status_code >= (300 if strict_transport() else 400):
                 raise RuntimeError(f"QQ Bot API error [{resp.status_code}] {path}: {data.get('message', data)}")
             return data
         except httpx.TimeoutException as exc:
@@ -1304,6 +1319,8 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     async def _auth_headers(self) -> dict[str, str]:
         """JSON REST headers with a fresh bot token."""
+        if strict_transport() and not self._token_fresh():
+            raise RuntimeError("strict QQ requires an already refreshed access token")
         token = await self._ensure_token()
         return {"Authorization": f"QQBot {token}", "Content-Type": "application/json", "User-Agent": build_user_agent()}
 
@@ -1323,7 +1340,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             try:
                 return await self._api_request("POST", path, body, timeout=FILE_UPLOAD_TIMEOUT)
             except RuntimeError as exc:
-                if attempt == 2 or any(kw in str(exc) for kw in ("400", "401", "Invalid", "timeout", "Timeout")):
+                if strict_transport() or attempt == 2 or any(kw in str(exc) for kw in ("400", "401", "Invalid", "timeout", "Timeout")):
                     raise
                 await asyncio.sleep(1.5 * (attempt + 1))
 
@@ -1354,6 +1371,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         """True when connected now or after waiting for the listener to reconnect."""
         return self.is_connected or await self._wait_for_reconnection()
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
@@ -1365,6 +1383,8 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             return SendResult(success=True)
 
         chunks = self.truncate_message(self.format_message(content), self.MAX_MESSAGE_LENGTH)
+        if strict_transport() and len(chunks) != 1:
+            return SendResult(success=False, error="strict QQ requires one complete message")
         last_result = SendResult(success=False, error="No chunks")
         for chunk in chunks:
             last_result = await self._send_chunk(chat_id, chunk, reply_to)
@@ -1377,7 +1397,10 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     async def _send_chunk(self, chat_id: str, content: str, reply_to: Optional[str] = None) -> SendResult:
         last_exc: Optional[Exception] = None
-        sender = self._text_sender(self._guess_chat_type(chat_id))
+        try:
+            sender = self._text_sender(self._guess_chat_type(chat_id))
+        except (RuntimeError, ValueError, sqlite3.Error) as exc:
+            return SendResult(success=False, error=str(exc))
         if sender is None:
             return SendResult(success=False, error=f"Unknown chat type for {chat_id}")
         for attempt in range(3):
@@ -1385,7 +1408,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                 return await sender(chat_id, content, reply_to)
             except Exception as exc:
                 last_exc = exc
-                if any(k in str(exc).lower() for k in self._PERMANENT_SEND_ERRORS + ("bad request",)):
+                if strict_transport() or any(k in str(exc).lower() for k in self._PERMANENT_SEND_ERRORS + ("bad request",)):
                     break  # permanent — don't retry
                 if attempt < 2:
                     delay = 1.0 * (2 ** attempt)
@@ -1410,6 +1433,8 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
     async def _post_message(self, path: str, body: dict[str, Any]) -> SendResult:
         """POST a message body and wrap the response as a successful SendResult."""
         data = await self._api_request("POST", path, body)
+        if strict_transport() and not data.get("id"):
+            return SendResult(success=False, error="QQ message ACK missing id")
         return SendResult(success=True, message_id=str(data.get("id", uuid.uuid4().hex[:12])), raw_response=data)
 
     async def _send_text_to(
@@ -1518,27 +1543,32 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     # ── Native media sending ──
 
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an image natively via QQ Bot API upload; URL sources fall back to text."""
         del metadata
         result = await self._send_media(chat_id, image_url, MEDIA_TYPE_IMAGE, "image", caption, reply_to)
-        if result.success or not self._is_url(image_url):
+        if result.success or strict_transport() or not self._is_url(image_url):
             return result
         logger.warning("[%s] Image send failed, falling back to text: %s", self._log_tag, result.error)
         fallback = f"{caption}\n{image_url}" if caption else image_url
         return await self.send(chat_id=chat_id, content=fallback, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, image_path, MEDIA_TYPE_IMAGE, "image", caption, reply_to)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, audio_path, MEDIA_TYPE_VOICE, "voice", caption, reply_to)
 
+    @single_attempt_transport
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, video_path, MEDIA_TYPE_VIDEO, "video", caption, reply_to)
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id, file_path, caption=None, file_name=None, reply_to=None, **kwargs
     ) -> SendResult:
@@ -1553,7 +1583,10 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         (prepare / PUT parts / complete), up to the platform's ~100 MB per-file limit."""
         if not await self._ensure_connected():
             return self._NOT_CONNECTED
-        chat_type = self._guess_chat_type(chat_id)
+        try:
+            chat_type = self._guess_chat_type(chat_id)
+        except (RuntimeError, ValueError, sqlite3.Error) as exc:
+            return SendResult(success=False, error=str(exc))
         if chat_type == "guild":
             return SendResult(success=False, error="Guild media send not supported via this path")
 
@@ -1608,7 +1641,13 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                 raise ValueError(f"Invalid media source (looks like a placeholder): {media_source!r}")
             raise FileNotFoundError(f"Media file not found: {local_path}")
 
-        uploader = ChunkedUploader(api_request=self._api_request, http_put=client.put, log_tag=self._log_tag)
+        async def put(*args, **kwargs):
+            if strict_transport():
+                async with platform_http_client(follow_redirects=False, trust_env=gateway_trust_env()) as single:
+                    return await single.put(*args, **kwargs, follow_redirects=False)
+            return await client.put(*args, **kwargs)
+
+        uploader = ChunkedUploader(api_request=self._api_request, http_put=put, log_tag=self._log_tag)
         return await uploader.upload(
             chat_type=chat_type, target_id=chat_id, file_path=str(local_path), file_type=file_type,
             file_name=file_name or local_path.name)
@@ -1652,6 +1691,15 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     def _guess_chat_type(self, chat_id: str) -> str:
         """Determine chat type from stored inbound metadata, fallback to 'c2c'."""
+        if strict_transport():
+            if self._chat_routes.account != self._app_id:
+                raise RuntimeError("strict QQ account changed")
+            kind = self._chat_routes.get(chat_id)
+            if kind not in {"c2c", "group", "guild"}:
+                raise RuntimeError("strict QQ destination kind is not durably bound")
+            if chat_id in self._chat_type_map and self._chat_type_map[chat_id] != kind:
+                raise RuntimeError("strict QQ destination kind changed")
+            return kind
         return self._chat_type_map.get(chat_id, "c2c")
 
     @staticmethod

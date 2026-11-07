@@ -1275,6 +1275,9 @@ class PhotonAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            return SendResult(success=False, error="strict Photon spectrum sidecar retries unverified")
         return await self._sidecar_send(chat_id, self.format_message(content))
 
     async def send_clarify(self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,

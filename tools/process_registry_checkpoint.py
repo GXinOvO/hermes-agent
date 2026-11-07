@@ -1,13 +1,67 @@
 """Running-process checkpoint persistence and PID-safe recovery."""
 
+import hashlib
 import json
 import logging
+import math
 import time
 from typing import Any, Dict, List, Optional
 
 from agent.redact import redact_sensitive_text
 
 logger = logging.getLogger("tools.process_registry")
+
+
+def _checkpoint_field_valid(name, value, default):
+    if name == "pid":
+        return value is None or type(value) is int and value >= 0
+    if name == "host_start_time":
+        return value is None or _checkpoint_number_valid(value)
+    if name == "cwd":
+        return value is None or isinstance(value, str)
+    if name == "watch_patterns":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return _checkpoint_number_valid(value)
+    return isinstance(value, str)
+
+
+def _checkpoint_number_valid(value):
+    return (type(value) is int and value >= 0
+            or type(value) is float and math.isfinite(value) and value >= 0)
+
+
+def _checkpoint_entry_valid(entry):
+    from tools.process_registry import _CHECKPOINT_DEFAULTS
+
+    return (isinstance(entry, dict) and isinstance(entry.get("session_id"), str)
+            and bool(entry["session_id"])
+            and all(_checkpoint_field_valid(name, entry[name], default)
+                    for name, default in _CHECKPOINT_DEFAULTS.items() if name in entry))
+
+
+def _checkpoint_entries(path):
+    """Preserve exact damaged input before any writer replaces the checkpoint."""
+    from utils import atomic_write_bytes
+
+    raw = path.read_bytes()
+    try:
+        entries = json.loads(raw.decode("utf-8-sig"))
+        if not isinstance(entries, list):
+            raise ValueError("checkpoint must contain a list")
+        valid = [entry for entry in entries if _checkpoint_entry_valid(entry)]
+        damaged = len(valid) != len(entries)
+    except (ValueError, TypeError, UnicodeError):
+        valid, damaged = [], True
+    if damaged:
+        digest = hashlib.sha256(raw).hexdigest()
+        preserved = path.with_name(f"{path.name}.corrupt-{digest}")
+        if not preserved.exists() or preserved.read_bytes() != raw:
+            atomic_write_bytes(preserved, raw, mode=0o600, fsync_dir=True)
+        logger.warning("Damaged process checkpoint preserved at %s; skipping invalid entries", preserved)
+    return valid
 
 
 class ProcessCheckpointMixin:
@@ -61,10 +115,10 @@ class ProcessCheckpointMixin:
         from pathlib import Path
         from tools.process_registry_output_log import _exit_path, adoptable_log
         try:
-            on_disk = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
+            on_disk = _checkpoint_entries(path)
+        except FileNotFoundError:
             return []
-        return [entry for entry in on_disk if isinstance(entry, dict) and entry.get("session_id") not in known
+        return [entry for entry in on_disk if entry.get("session_id") not in known
                 and (log := adoptable_log(entry.get("output_log"))) and Path(log).exists()
                 and (_exit_path(log).exists() or self._detached_host_fate(
                     entry.get("pid"), entry.get("host_start_time")) == "running")]
@@ -85,8 +139,9 @@ class ProcessCheckpointMixin:
         if not checkpoint_path.exists():
             return 0
         try:
-            entries = json.loads(checkpoint_path.read_text(encoding="utf-8-sig"))
-        except Exception:
+            entries = _checkpoint_entries(checkpoint_path)
+        except OSError:
+            logger.warning("Could not read or preserve process checkpoint; leaving it unchanged", exc_info=True)
             return 0
         recovered = 0
         unresolved_scope_entries: list[dict[str, Any]] = []

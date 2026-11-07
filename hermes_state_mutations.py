@@ -87,6 +87,14 @@ def _valid_compress_payload(payload):
 
 
 def apply_action(db, conn, session_id, operation, payload, *, prepared=None):
+    result = _apply_action(db, conn, session_id, operation, payload, prepared=prepared)
+    if operation in {'delete', 'rewind', 'reset'}:
+        from hermes_state_background import invalidate_target
+        invalidate_target(conn, session_id)
+    return result
+
+
+def _apply_action(db, conn, session_id, operation, payload, *, prepared=None):
     if operation == 'compress':
         from hermes_state_mutation_compress import compress_in_transaction
         return compress_in_transaction(db, conn, session_id, payload, prepared)

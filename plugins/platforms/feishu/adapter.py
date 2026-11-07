@@ -93,6 +93,8 @@ from gateway.platforms.base import (
 )
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from plugins.platforms.feishu.adapter_choice_cards import FeishuChoiceCardsMixin
+from plugins.platforms.feishu.outbound import FeishuOutboundMixin
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.status import acquire_scoped_lock
 from gateway.status_scoped_locks import release_scoped_lock
 from hermes_constants import get_hermes_home
@@ -1285,7 +1287,7 @@ def _sdk_build(request_cls: Any, **fields: Any) -> Any:
     return builder.build()
 
 
-class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
+class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAdapter):
     """Feishu/Lark bot adapter."""
     # Answers /p/<profile>/... on the default listener for a served secondary (shared_ingress).
     serves_profile_prefix: bool = True
@@ -1475,6 +1477,10 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
         profile HERMES_HOME override / secret scope (multiplexed dedup flush, thread lookup).
         """
         loop = asyncio.get_running_loop()
+        if strict_transport():
+            from plugins.platforms.feishu.strict_delivery import submit
+            return await loop.run_in_executor(
+                self._get_sdk_executor(), contextvars.copy_context().run, submit, func, *args)
         return await loop.run_in_executor(
             self._get_sdk_executor(), contextvars.copy_context().run, func, *args)
 
@@ -1653,58 +1659,6 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             self._webhook_site = None
 
     # --- Outbound — send / edit / send_image / send_voice / … ---
-    async def send(
-        self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
-    ) -> SendResult:
-        """Send a Feishu message."""
-        if not self._client:
-            return SendResult(success=False, error="Not connected")
-
-        formatted = self.format_message(content)
-        chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
-        # Decide markdown-vs-text once for the whole message: a chunk of a long
-        # markdown reply may be plain prose that fails the per-chunk regex and would
-        # otherwise render as literal ``**bold`` / fences while other chunks render.
-        # Lock the markdown decision at the whole-message level so every chunk consistently uses ``post``.
-        # See #26841.
-        prefer_post = bool(_MARKDOWN_HINT_RE.search(formatted))
-        last_response = None
-
-        async def _send_plain(chunk: str) -> Any:
-            return await self._feishu_send_with_retry(
-                chat_id=chat_id,
-                msg_type="text",
-                payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
-                reply_to=reply_to,
-                metadata=metadata,
-            )
-
-        try:
-            for chunk in chunks:
-                msg_type, payload = self._build_outbound_payload(chunk, prefer_post=prefer_post)
-                try:
-                    response = await self._feishu_send_with_retry(
-                        chat_id=chat_id, msg_type=msg_type, payload=payload, reply_to=reply_to, metadata=metadata,
-                    )
-                except Exception as exc:
-                    if msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
-                        raise
-                    logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
-                    response = await _send_plain(chunk)
-                if (
-                    msg_type == "post"
-                    and not self._response_succeeded(response)
-                    and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))
-                ):
-                    logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
-                    response = await _send_plain(chunk)
-                last_response = response
-
-            return self._finalize_send_result(last_response, "send failed")
-        except Exception as exc:
-            logger.error("[Feishu] Send error: %s", exc, exc_info=True)
-            return SendResult(success=False, error=str(exc))
-
     async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
         """Edit a previously sent Feishu text/post message."""
         if not self._client:
@@ -1867,6 +1821,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
         tmp_path.write_text(answer, encoding="utf-8")
         tmp_path.replace(response_path)
 
+    @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, is_voice: Optional[bool] = None, **kwargs,
@@ -1897,6 +1852,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
                 except OSError:
                     pass
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs,
@@ -1907,6 +1863,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             caption=caption, file_name=file_name,
         )
 
+    @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs,
@@ -1917,6 +1874,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             caption=caption, outbound_message_type="media",
         )
 
+    @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs,
@@ -1953,6 +1911,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
         """Feishu bot API does not expose a typing indicator."""
         return
 
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -1962,6 +1921,8 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             image_path = await self._download_remote_image(image_url)
         except Exception as exc:
             logger.error("[Feishu] Failed to download image %s: %s", image_url, exc, exc_info=True)
+            if strict_transport():
+                return SendResult(success=False, error=str(exc))
             return await super().send_image(
                 chat_id=chat_id, image_url=image_url, caption=caption, reply_to=reply_to, metadata=metadata,
             )
@@ -1969,6 +1930,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             chat_id=chat_id, image_path=image_path, caption=caption, reply_to=reply_to, metadata=metadata,
         )
 
+    @single_attempt_transport
     async def send_animation(
         self, chat_id: str, animation_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -1980,6 +1942,8 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             )
         except Exception as exc:
             logger.error("[Feishu] Failed to download animation %s: %s", animation_url, exc, exc_info=True)
+            if strict_transport():
+                return SendResult(success=False, error=str(exc))
             return await super().send_animation(
                 chat_id=chat_id, animation_url=animation_url, caption=caption, reply_to=reply_to, metadata=metadata,
             )
@@ -2779,6 +2743,8 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
 
     async def _download_remote_image(self, image_url: str) -> str:
         ext = self._guess_remote_extension(image_url, default=".jpg")
+        if strict_transport():
+            return await cache_image_from_url(image_url, ext=ext, retries=0)
         return await cache_image_from_url(image_url, ext=ext)
 
     async def _download_remote_document(self, file_url: str, *, default_ext: str, preferred_name: str) -> tuple[str, str]:
@@ -3723,7 +3689,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
             )
             # Audio may fail with 99992402 under thread_id routing: retry as a reply to the
             # thread's last message, then fall back to a plain chat_id send.
-            if (not caption
+            if (not strict_transport() and not caption
                     and not self._response_succeeded(message_response)
                     and getattr(message_response, "code", None) == 99992402
                     and resolved_message_type == "audio"
@@ -3956,52 +3922,6 @@ class FeishuAdapter(FeishuChoiceCardsMixin, BasePlatformAdapter):
     def _build_lark_client(self, domain: Any) -> Any:
         return _build_lark_client(self._app_id, self._app_secret, domain)
 
-    async def _feishu_send_with_retry(
-        self, *, chat_id: str, msg_type: str, payload: str, reply_to: Optional[str], metadata: Optional[dict[str, Any]],
-    ) -> Any:
-        last_error: Optional[Exception] = None
-        active_reply_to = reply_to
-
-        async def _raw(reply_target: Optional[str]) -> Any:
-            return await self._send_raw_message(
-                chat_id=chat_id, msg_type=msg_type, payload=payload, reply_to=reply_target, metadata=metadata,
-            )
-
-        for attempt in range(_FEISHU_SEND_ATTEMPTS):
-            try:
-                response = await _raw(active_reply_to)
-                # Reply target withdrawn/missing → post a new message to the chat instead.
-                if active_reply_to and not self._response_succeeded(response):
-                    code = getattr(response, "code", None)
-                    if code in _FEISHU_REPLY_FALLBACK_CODES:
-                        if (metadata or {}).get("thread_id"):
-                            logger.warning(
-                                "[Feishu] Reply to %s failed in thread %s (code %s — message withdrawn/missing); "
-                                "skipping top-level fallback to avoid creating a new topic",
-                                active_reply_to, (metadata or {}).get("thread_id"), code,
-                            )
-                            return response
-                        logger.warning(
-                            "[Feishu] Reply to %s failed (code %s — message withdrawn/missing); "
-                            "falling back to new message in chat %s",
-                            active_reply_to, code, chat_id,
-                        )
-                        active_reply_to = None
-                        response = await _raw(None)
-                return response
-            except Exception as exc:
-                last_error = exc
-                if msg_type == "post" and _POST_CONTENT_INVALID_RE.search(str(exc)):
-                    raise
-                if attempt >= _FEISHU_SEND_ATTEMPTS - 1:
-                    raise
-                wait_seconds = 2 ** attempt
-                logger.warning(
-                    "[Feishu] Send attempt %d/%d failed for chat %s; retrying in %ds: %s",
-                    attempt + 1, _FEISHU_SEND_ATTEMPTS, chat_id, wait_seconds, exc,
-                )
-                await asyncio.sleep(wait_seconds)
-        raise last_error or RuntimeError("Feishu send failed")
 
     async def _release_app_lock(self) -> None:
         if not self._app_lock_identity:

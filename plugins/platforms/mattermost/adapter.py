@@ -20,6 +20,7 @@ from urllib.parse import unquote as _unquote
 from typing import Any, Dict, List, Optional, Tuple
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms.helpers import MessageDeduplicator
 from gateway.platforms.helpers import cancel_task
 from gateway.platforms.base import gateway_trust_env, BasePlatformAdapter, SendResult
@@ -63,7 +64,7 @@ def _channel_id_set(raw: Any) -> set:
 
 
 def _post_result(data: dict[str, Any], error: str) -> SendResult:
-    if not data or "id" not in data:
+    if not data or "id" not in data or strict_transport() and not data.get("id"):
         return SendResult(success=False, error=error)
     return SendResult(success=True, message_id=data["id"])
 
@@ -155,13 +156,15 @@ class MattermostAdapter(BasePlatformAdapter):
         kwargs: dict[str, Any] = {"headers": self._headers()}
         if payload is not None:
             kwargs["json"] = payload
+        if strict_transport():
+            kwargs["allow_redirects"] = False
         if method != "PUT":  # PUT relies on the session default timeout
             kwargs["timeout"] = aiohttp.ClientTimeout(total=30)
         try:
             async with getattr(self._session, method.lower())(url, **kwargs) as resp:
                 if is_post:
                     self._last_post_status = resp.status
-                if resp.status >= 400:
+                if resp.status >= (300 if strict_transport() else 400):
                     body = await resp.text()
                     if is_post:
                         self._last_post_error = body or ""
@@ -192,7 +195,7 @@ class MattermostAdapter(BasePlatformAdapter):
         self, chat_id: str, payload: dict[str, Any], metadata: _Metadata) -> dict[str, Any]:
         """Post once, optionally falling back flat for final notify content."""
         data = await self._api_post("posts", payload)
-        if (data or "root_id" not in payload or not (isinstance(metadata, dict) and metadata.get("notify"))
+        if (data or strict_transport() or "root_id" not in payload or not (isinstance(metadata, dict) and metadata.get("notify"))
                 or not self._last_post_failure_is_broken_thread_root()):
             return data
         flat_payload = {k: v for k, v in payload.items() if k != "root_id"}
@@ -229,14 +232,20 @@ class MattermostAdapter(BasePlatformAdapter):
         form = aiohttp.FormData()
         form.add_field("channel_id", channel_id)
         form.add_field("files", file_data, filename=filename, content_type=content_type)
-        async with self._session.post(f"{self._base_url}/api/v4/files", headers=self._auth_header(), data=form,
-                                      timeout=aiohttp.ClientTimeout(total=60)) as resp:
-            if resp.status >= 400:
-                body = await resp.text()
-                logger.error("MM file upload → %s: %s", resp.status, body[:200])
-                return None
-            infos = (await resp.json()).get("file_infos", [])
-            return infos[0]["id"] if infos else None
+        try:
+            async with self._session.post(f"{self._base_url}/api/v4/files", headers=self._auth_header(), data=form,
+                                          timeout=aiohttp.ClientTimeout(total=60),
+                                          **({'allow_redirects': False} if strict_transport() else {})) as resp:
+                if resp.status >= (300 if strict_transport() else 400):
+                    body = await resp.text()
+                    logger.error("MM file upload → %s: %s", resp.status, body[:200])
+                    return None
+                infos = (await resp.json()).get("file_infos", [])
+                return infos[0]["id"] if infos else None
+        except Exception:
+            if not strict_transport():
+                raise
+            return None
 
     # --- Required overrides ---
 
@@ -280,6 +289,7 @@ class MattermostAdapter(BasePlatformAdapter):
         data = await self._api_get(f"posts/{post_id}")
         return data["root_id"] if data and data.get("root_id") else post_id
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: _Metadata = None) -> SendResult:
         """Send a message (or multiple chunks) to a channel; reply_to / metadata["thread_id"] is the root post."""
@@ -308,23 +318,28 @@ class MattermostAdapter(BasePlatformAdapter):
         payload = _with_mentions_disabled({"message": self.format_message(content)})
         return _post_result(await self._api("PUT", f"posts/{message_id}/patch", payload), "Failed to edit post")
 
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: _Metadata = None) -> SendResult:
         return await self._send_url_as_file(chat_id, image_url, caption, reply_to, "image", metadata)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, metadata: _Metadata = None) -> SendResult:
         return await self._send_local_file(chat_id, image_path, caption, reply_to, metadata=metadata)
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: _Metadata = None) -> SendResult:
         return await self._send_local_file(chat_id, file_path, caption, reply_to, file_name, metadata)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: _Metadata = None, **kwargs: Any) -> SendResult:
         return await self._send_local_file(chat_id, audio_path, caption, reply_to, metadata=metadata)
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: _Metadata = None) -> SendResult:
         return await self._send_local_file(chat_id, video_path, caption, reply_to, metadata=metadata)
@@ -341,11 +356,21 @@ class MattermostAdapter(BasePlatformAdapter):
         from tools.url_safety import is_safe_url
 
         async def fallback() -> SendResult:
+            if strict_transport():
+                return SendResult(success=False, error="strict image upload/download failed")
             return await self.send(chat_id, f"{caption or ''}\n{url}".strip(), reply_to, metadata=metadata)
 
         if not is_safe_url(url):
             logger.warning("Mattermost: blocked unsafe URL (SSRF protection)")
             return await fallback()
+        if strict_transport():
+            from plugins.platforms.mattermost.strict_download import download
+            loaded = await download(url)
+            if loaded is None:
+                return await fallback()
+            file_data, ct = loaded
+            file_id = await self._upload_file(chat_id, file_data, _url_filename(url, f"{kind}.bin"), ct)
+            return await self._post_with_file(chat_id, file_id, caption, reply_to, metadata) if file_id else await fallback()
         import aiohttp
         for attempt in range(3):  # retry 5xx/429 and network errors twice with linear backoff
             try:
@@ -373,7 +398,8 @@ class MattermostAdapter(BasePlatformAdapter):
         p = Path(file_path)
         if not p.exists():
             logger.warning("Mattermost: local file not found, skipping: %s", file_path)
-            return SendResult(success=True, message_id=None)
+            return SendResult(success=not strict_transport(), message_id=None,
+                              error="File not found" if strict_transport() else None)
         fname = file_name or p.name
         file_id = await self._upload_file(chat_id, p.read_bytes(), fname,
                                           mimetypes.guess_type(fname)[0] or "application/octet-stream")
@@ -395,6 +421,13 @@ class MattermostAdapter(BasePlatformAdapter):
         if not is_safe_url(image_url):
             logger.warning("Mattermost: blocked unsafe image URL in batch")
             return None
+        if strict_transport():
+            from plugins.platforms.mattermost.strict_download import download
+            loaded = await download(image_url)
+            if loaded is None:
+                return None
+            file_data, ct = loaded
+            return file_data, _url_filename(image_url, f"image_{index}.png"), ct
         try:
             async with self._session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status >= 400:
@@ -406,10 +439,14 @@ class MattermostAdapter(BasePlatformAdapter):
             return None
         return file_data, _url_filename(image_url, f"image_{index}.png"), ct
 
+    @single_attempt_transport
     async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
                                    metadata: _Metadata = None, human_delay: float = 0.0) -> SendResult:
         """Send a batch of images as one post; chunked at Mattermost's 5-``file_ids`` cap, each chunk
         falling back to the base per-image loop on failure."""
+        if strict_transport():
+            from plugins.platforms.mattermost.strict_delivery import send_images
+            return await send_images(self, chat_id, images, metadata)
         if not images:
             return SendResult(success=False, error="no images to send")
         chunks = [images[i:i + 5] for i in range(0, len(images), 5)]  # Mattermost post file_ids cap

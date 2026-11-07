@@ -22,6 +22,7 @@ from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, FAILED_TURN_NOTICE
 from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.bot_peer_notices import automatic_notices_allowed
+from gateway.session_delivery_policy import current_claim
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.platforms.event import MessageEvent
@@ -829,7 +830,7 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             "tools": [],
             "history_offset": len(history),
             "session_id": session_id,
-            "response_previewed": _stream_consumer is not None and bool(full_response),
+            "response_previewed": _stream_consumer is not None and bool(full_response) and current_claim() is None,
         }
 
     async def _run_agent(
@@ -1139,6 +1140,8 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         # This avoids a cross-scope NameError: the outer interrupt / finalisation paths reference the
         # consumer via ``streaming_tts_consumer_holder[0]``. Gates: voice input, auto-TTS enabled for this
         # chat, adapter supports streaming, and a usable streaming TTS provider configured. See #60671.
+        if current_claim() is not None:
+            return
         _stts_adapter = self._delivery_adapter_for(source)
         _is_voice_input = (
             message_type is not None
@@ -1530,73 +1533,6 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             _mark_turn = getattr(adapter, "_mark_streaming_tts_completed_turn", None)
             if callable(_mark_turn):
                 _mark_turn(turn_ctx.session_key, turn_ctx.run_generation)
-
-    async def _run_agent_drain_pending(
-        self, result: Any, adapter: Any, source: SessionSource, session_key: Optional[str]
-    ) -> tuple[Any, Optional[str]]:
-        """Dequeue the adapter's pending / interrupt / leftover-steer follow-up as ``(pending_event, pending)``.
-
-        Keyed by session_key (not source.chat_id) to match the adapter's storage keys."""
-        from gateway.run import _build_media_placeholder, _dequeue_pending_event, _is_control_interrupt_message
-        from gateway.session_ingress import executing_admission
-        pending_event = None
-        pending = None
-        if result and adapter and session_key:
-            pending_event = _dequeue_pending_event(adapter, session_key)
-            if result.get("compression_exhausted") and pending_event is not None:
-                self._defer_past_exhaustion_reset(result, adapter, source, session_key, pending_event)
-                return None, None
-            # /queue overflow: promote the next queued event into the consumed "next-up" slot so the
-            # recursive drain sees it (keeps FIFO order; a mid-chain /queue can't jump the queue).
-            pending_event = self._promote_queued_event(session_key, adapter, pending_event)
-            if result.get("interrupted") and not pending_event and result.get("interrupt_message"):
-                interrupt_message = result.get("interrupt_message")
-                if _is_control_interrupt_message(interrupt_message):
-                    logger.info(
-                        "Ignoring control interrupt message for session %s: %s",
-                        session_key or "?", interrupt_message,
-                    )
-                else:
-                    # FIFO already has this send.
-                    pending = None if executing_admission.get() else interrupt_message
-            elif pending_event:
-                # Transcribe audio BEFORE it becomes the next user turn (real transcript, not a path).
-                _pending_text = pending_event.text or ""
-                if self._pending_event_audio_paths(pending_event):
-                    pending, _ = await self._transcribe_and_echo_pending_voice(
-                        pending_event, adapter, source, _pending_text, log_context="Voice-drain",
-                        metadata={"thread_id": source.thread_id} if source.thread_id else None,
-                    )
-                    pending = pending or _build_media_placeholder(pending_event)
-                else:
-                    pending = _pending_text or _build_media_placeholder(pending_event)
-                if pending:
-                    logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
-
-        # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
-        pending_event, pending = self._merge_leftover_steer(result, adapter, source, session_key, pending_event, pending)
-
-        # Safety net: a pending slash command is never passed to the agent as user input.
-        if pending and pending.strip().startswith("/"):
-            _pending_cmd_word = pending.strip().split(None, 1)[0][1:].lower()
-            if _pending_cmd_word:
-                with suppress(Exception):
-                    from hermes_cli.commands import resolve_command as _rc_pending
-                    if _rc_pending(_pending_cmd_word):
-                        logger.info(
-                            "Discarding command '/%s' from pending queue — "
-                            "commands must not be passed as agent input", _pending_cmd_word,
-                        )
-                        pending_event = None
-                        pending = None
-
-        if self._draining and getattr(pending_event, "_admitted_before_drain", False) is not True:
-            if pending_event or pending:
-                logger.info("Discarding pending follow-up for session %s during gateway %s", session_key or "?", self._status_action_label())
-            # Without a result the caller runs nothing next: leave the queue to the adapter.
-            pending_event = self._take_wake_admitted_before_drain(session_key, adapter) if result and adapter and session_key else None
-            pending = (pending_event.text or _build_media_placeholder(pending_event)) if pending_event is not None else None
-        return pending_event, pending
 
     async def _run_agent_deliver_first_response(
         self, turn_ctx: TurnContext, adapter: Any, response: Any, result: Any, stream_task: Any,

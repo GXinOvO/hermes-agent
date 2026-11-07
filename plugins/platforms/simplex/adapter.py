@@ -28,6 +28,7 @@ from gateway.platforms._shared import (
     decode_json_list_literal as _decode_json_list_literal, get_scoped_secret as _get_scoped_secret,
     platform_gate_env as _platform_gate_env, seed_extra_from_env as _seed_extra_from_env, send_error
 )
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.config import Platform, PlatformConfig
 from hermes_constants import hermes_home_key
 from gateway.platforms.base import BasePlatformAdapter, SendResult, cache_image_from_url
@@ -439,7 +440,8 @@ class SimplexAdapter(BasePlatformAdapter):
             logger.warning("SimpleX: command timed out: %s", command[:50])
         except Exception as e:
             logger.warning("SimpleX: command failed: %s — %s", command[:50], e)
-        self._pending_responses.pop(corr_id, None)
+        finally:
+            self._pending_responses.pop(corr_id, None)
         return None
 
     async def _send_fire_and_forget(self, command: str) -> None:
@@ -448,15 +450,27 @@ class SimplexAdapter(BasePlatformAdapter):
 
     async def _send_items(self, chat_id: str, items: list, error: str) -> SendResult:
         """Send a structured ``/_send`` payload and await the reply."""
+        if strict_transport():
+            result = await self._send_command(_send_cmd(chat_id, items),
+                                              timeout=getattr(self, "_strict_ack_timeout", 30.0))
+            acknowledged = (isinstance(result, dict) and result.get("type") in {"newChatItems", "newChatItem"}
+                            and bool(result.get("chatItems") or result.get("chatItem")))
+            return SendResult(success=True) if acknowledged else SendResult(success=False, error=error + ": ACK missing")
         result = await self._send_command(_send_cmd(chat_id, items))
         return SendResult(success=True) if result is not None else SendResult(success=False, error=error)
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         """Send text; ``MEDIA:<path>`` tags (TTS / audio tools) are stripped and sent as native voice
         notes or documents. The text send is fire-and-forget: the daemon doesn't always return a corrId
         reply for chat commands, and waiting would serialise all outbound traffic behind a 30s timeout."""
+        if strict_transport():
+            if not content or len(content) > self.MAX_MESSAGE_LENGTH or re.search(r"MEDIA:(\S+)", content):
+                return SendResult(success=False, error="strict SimpleX requires one complete text command")
+            return await self._send_items(chat_id, [{"msgContent": {"type": "text", "text": content}}],
+                                          "Failed to send text")
         media_paths = re.findall(r"MEDIA:(\S+)", content)
         if media_paths:
             content = re.sub(r"MEDIA:\S+", "", content).strip()
@@ -551,6 +565,7 @@ class SimplexAdapter(BasePlatformAdapter):
                 logger.warning("SimpleX: image conversion unavailable: %s", exc)
         return png_path, thumb_uri
 
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, **kwargs) -> SendResult:
         """Send an image. Supports ``file://`` URLs and ``http(s)://`` URLs."""
         if image_url.startswith("file://"):
@@ -572,15 +587,18 @@ class SimplexAdapter(BasePlatformAdapter):
         item = {"filePath": png_path, "msgContent": {"type": "image", "image": thumb_uri, "text": caption or ""}}
         return await self._send_items(chat_id, [item], "Failed to send image")
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self.send_image(chat_id, f"file://{image_path}", caption=caption, **kwargs)
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, **kwargs) -> SendResult:
         """Videos go as file attachments."""
         return await self.send_document(chat_id, video_path, caption=caption)
 
+    @single_attempt_transport
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None,
                             filename: Optional[str] = None, **kwargs) -> SendResult:
         if not Path(file_path).exists():
@@ -588,6 +606,7 @@ class SimplexAdapter(BasePlatformAdapter):
         item = {"filePath": file_path, "msgContent": {"type": "file", "text": caption or ""}}
         return await self._send_items(chat_id, [item], "Failed to send document")
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, duration: int = 0, **kwargs) -> SendResult:
         """Send an audio file as an inline SimpleX voice note (``msgContent.type == "voice"``)."""

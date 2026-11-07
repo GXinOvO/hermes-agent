@@ -16,6 +16,7 @@ import time
 import uuid
 from datetime import datetime, timezone, UTC
 from typing import Any, Dict, List, Optional
+from gateway.strict_transport import single_attempt_transport, strict_transport
 
 try:
     import httpx
@@ -271,6 +272,7 @@ class NtfyAdapter(BasePlatformAdapter):
 
     # -- Outbound messaging -------------------------------------------------
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
@@ -288,6 +290,8 @@ class NtfyAdapter(BasePlatformAdapter):
             resp = await self._http_client.post(
                 f"{self._server}/{publish_topic}", content=body, headers=headers, timeout=15.0)
             if resp.status_code < 300:
+                if strict_transport() and not resp.json().get("id"):
+                    return SendResult(success=False, error="ntfy publish ACK missing")
                 return SendResult(success=True, message_id=_response_message_id(resp))
             body_text = resp.text
             logger.warning("[%s] Send failed HTTP %d: %s", self.name, resp.status_code, body_text[:200])

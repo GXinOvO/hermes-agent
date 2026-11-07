@@ -123,7 +123,7 @@ def _abandoned(holder):
     return bool(abandoned and abandoned())
 
 
-def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None):
+def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None, identity=None):
     """Run ``body()`` on a daemon thread; publish its text (or ``error: <exc>``) on the session.
 
     The thread is owner work until it unwinds: the authority's ``_side_agents`` ledger is counted by
@@ -152,10 +152,14 @@ def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None):
                 field, detail = getattr(exc, 'field', None), getattr(exc, 'detail', None)
                 named = f' ({field}: {detail})' if field and detail else ''
                 text = f'error: {getattr(exc, "reason", None) or exc}{named}'
+            # A late result after profile retirement cannot publish stale work.
+            payload = {'task_id':task_id, **extra, 'text':str(text or '')}
+            if identity is not None and not _abandoned(holder):
+                from gateway.session_background_results import seal
+                payload = seal(authority, task_id, identity, payload)
             live = authority.sessions.get(ref.session_id)
-            if live is not None and not _abandoned(holder):
-                live.event_stream.publish(ref.session_id, {'task_id': task_id, **extra, 'text': str(text or '')},
-                                          event_type=event_type)
+            if live is not None and payload is not None and not _abandoned(holder):
+                live.event_stream.publish(ref.session_id, payload, event_type=event_type)
         finally:
             ledger.pop(thread, None)
             if loop is not None:
@@ -192,7 +196,9 @@ async def background(connection, ref, params):
                     agent.close()
         return _final_response_text(result)
 
-    return _spawn(authority, ref, task_id, 'background.complete', body, holder=holder)
+    from gateway.session_background_results import prepare
+    identity = await prepare(authority, ref, task_id, 'background.complete', policy, params)
+    return _spawn(authority, ref, task_id, 'background.complete', body, holder=holder, identity=identity)
 
 
 async def btw(connection, ref, params):
@@ -219,7 +225,9 @@ async def btw(connection, ref, params):
             return answer_side_question(text, history, parent_agent=agent, main_runtime=main_runtime,
                                         on_fork=handle.set_fork, should_stop=handle.stopped.is_set) or ''
 
-    return _spawn(authority, ref, task_id, 'btw.complete', body, extra={'question': text}, holder=[handle])
+    from gateway.session_background_results import prepare
+    identity = await prepare(authority, ref, task_id, 'btw.complete', policy, params)
+    return _spawn(authority, ref, task_id, 'btw.complete', body, extra={'question': text}, holder=[handle], identity=identity)
 
 
 class _SideQuestionStop:
@@ -297,4 +305,6 @@ async def preview_restart(connection, ref, params):
                     clear_task_env_overrides(task_id)
         return _final_response_text(result)
 
-    return _spawn(authority, ref, task_id, 'preview.restart.complete', body, holder=holder)
+    from gateway.session_background_results import prepare
+    identity = await prepare(authority, ref, task_id, 'preview.restart.complete', policy, params)
+    return _spawn(authority, ref, task_id, 'preview.restart.complete', body, holder=holder, identity=identity)

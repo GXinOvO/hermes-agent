@@ -501,6 +501,9 @@ def snapshot_automation(authority, adapter, event, identity):
         'timestamp': datetime.fromtimestamp(0, UTC).isoformat(),
         'event': {'message_id': identity}, 'provenance': provenance,
         'automation': {'identity': identity, 'owner': owner}}
+    from gateway.session_delivery_policy import recovery_descriptor
+    from cron.sealed_bot_result import event_descriptor
+    envelope['automation'].update(recovery_descriptor(event), **event_descriptor(event))
     envelope['automation'].update(notification)
     if getattr(event, '_heartbeat_session_id', None):
         envelope['automation']['heartbeat'] = event._heartbeat_session_id
@@ -550,6 +553,9 @@ def snapshot_local_automation(authority, adapter, event, identity, entry):
     ref, _live = _local_automation_owner(authority, adapter, event, entry)
     descriptor = {'identity': identity, 'owner': ref.session_id,
                   'route': entry.session_key, 'target': entry.session_id}
+    from gateway.session_delivery_policy import recovery_descriptor
+    from cron.sealed_bot_result import event_descriptor
+    descriptor.update(recovery_descriptor(event), **event_descriptor(event))
     descriptor.update(automation_notification_metadata(event.metadata))
     descriptor.update(automation_display_metadata(event.metadata))
     descriptor.update(_tick_metadata(event.metadata))
@@ -602,7 +608,7 @@ def restore_local_automation(authority, ref, row):
     return event
 
 
-async def admit_automation(authority, adapter, event, identity, replaces=None, fold=None):
+async def admit_automation(authority, adapter, event, identity, replaces=None, fold=None, *, _authorize_write=None):
     """``replaces``: a queued automation row of the same session this input supersedes (a liveness
     tick carrying the output of the one still waiting). Its cancellation commits in this admission's
     own transaction, so neither lands without the other. ``fold``: ``replaces`` is a completion this
@@ -627,12 +633,18 @@ async def admit_automation(authority, adapter, event, identity, replaces=None, f
             if replaced:  # the guard ran in the committed write; an exact replay runs no guard
                 authority._settle_cancelled(ref, replaces)
             return admitted(row)
+    replacement = replaces and (_replace_queued(replaces, ref.session_id, replaced) if fold is None
+                                else _fold_queued(replaces, ref.session_id, replaced, fold))
+
+    def authorize(conn):
+        if _authorize_write is not None:
+            _authorize_write(conn)
+        if replacement:
+            replacement(conn)
     return await tracked_write(authority, partial(
         admit_session_input, authority.db, epoch=authority.epoch, principal_id='automation:' + entry.session_key,
         session_id=ref.session_id, request_id=identity, payload=deepcopy(payload),
-        _authorize_write=authority._admission_gate(replaces and (
-            _replace_queued(replaces, ref.session_id, replaced) if fold is None
-            else _fold_queued(replaces, ref.session_id, replaced, fold)))),
+        _authorize_write=authority._admission_gate(authorize)),
         then=admitted, ordered=True, after=partial(authority._schedule_admitted, ref))
 
 
@@ -818,7 +830,7 @@ async def reset_and_rehome_messages(runner, session_key, old_session_id):
     return entry, release
 
 
-async def admit_route_wake(runner, adapter, source, text, producer, metadata=None):
+async def admit_route_wake(runner, adapter, source, text, producer, metadata=None, *, _authorize_write=None):
     """Commit a producer wake (Kanban push wake, /loop tick) for ``source``'s route into the
     authority FIFO, like heartbeats and process completions, instead of a classic turn that
     interrupts or races the admitted one. ``False`` when no authority serves the scope or the
@@ -847,7 +859,10 @@ async def admit_route_wake(runner, adapter, source, text, producer, metadata=Non
                              message_id=identity, metadata={'gateway_session_key': key,
                                                             'gateway_session_id': entry.session_id,
                                                             **(metadata or {})})
-        await authority.admit_automation(adapter, event, identity)
+        if _authorize_write is None:
+            await authority.admit_automation(adapter, event, identity)
+        else:
+            await admit_automation(authority, adapter, event, identity, _authorize_write=_authorize_write)
         return True
     from gateway.session_envelope import restore_native
     envelope = committed_route_envelope(authority, entry)

@@ -17,7 +17,7 @@ _EVENT_KEYS = _TASK_KEYS | set(_ROUTE) | {
     'type', 'delegation_id', 'status', 'completed_at', 'dispatched_at', 'summary', 'error',
     'api_calls', 'duration_seconds', 'total_duration_seconds', 'results', 'live_transcripts',
     'group', 'exit_reason', 'stalled_after_quiet_seconds', 'stall_threshold_seconds',
-    'stall_phase', 'stall_grace_seconds'}
+    'stall_phase', 'stall_grace_seconds', 'result_durability'}
 
 
 def _shape(payload, keys):
@@ -75,6 +75,13 @@ def _dispatch(db, conn, session_id, payload, *, execution_id, worker_pid, worker
         owner_started_at = get_process_start_time(worker_pid)
     except psutil.Error as exc:
         raise RuntimeStoreError('worker_not_live') from exc
+    from tools.async_delegation import check_durable_capacity
+    try:
+        check_durable_capacity(conn)
+    except RuntimeStoreError as exc:
+        if exc.reason != 'delegation_result_capacity':
+            raise
+        return {'value': {'status': 'rejected', 'error': exc.reason}}
     now = time.time()
     conn.execute('''INSERT INTO async_delegations
         (delegation_id,origin_session,origin_ui_session_id,parent_session_id,state,dispatched_at,
@@ -91,6 +98,7 @@ def _complete(db, conn, session_id, payload, *, execution_id):
     event = payload['event']
     if (not isinstance(event, dict) or set(event) - _EVENT_KEYS
             or not isinstance(payload['result'], dict) or event.get('type') != 'async_delegation'
+            or 'result_durability' in event and event['result_durability'] != 'persisted'
             or event.get('status') not in ('completed', 'success', 'error', 'interrupted', 'stalled', 'unknown')):
         raise RuntimeStoreError('invalid_params')
     row = _owned(conn, session_id, execution_id, event.get('delegation_id'))

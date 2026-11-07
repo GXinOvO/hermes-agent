@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events'
 
 import { CircularBuffer } from '../circular-buffer.js'
 import { canonicalEvent, canonicalRequest, canonicalResult, type CreationContract } from '../gateway-canonical.js'
+import type { BackgroundResult } from '../gateway-contract.generated.js'
 import type { GatewayEvent } from '../gateway-events.js'
 import { type GatewayText, gatewayText } from '../gateway-text.js'
 import type { AnyGatewayEvent } from '../gateway-types.js'
@@ -521,7 +522,13 @@ export class GatewayClient extends EventEmitter {
 
   hydrateSharedPrompts(snapshot: unknown) {
     const result = snapshot as { session_id: string; authority_epoch: number; prompts?: Array<Record<string, unknown>>;
+      background_results?: BackgroundResult[] | null;
       open_requests?: Array<{ id: string; method: string; params?: Record<string, unknown> }> | null }
+
+    for (const completion of result.background_results ?? []) {
+      this.publishLocalEvent({ type: completion.event_type, session_id: result.session_id,
+        payload: completion.payload } as AnyGatewayEvent)
+    }
 
     for (const prompt of this.isCanonical ? result.prompts ?? [] : []) {
       this.publishLocalEvent({ type: `${prompt.kind}.request`, session_id: result.session_id,

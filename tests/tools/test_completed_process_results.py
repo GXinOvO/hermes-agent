@@ -275,7 +275,7 @@ def test_receipts_are_bounded_redacted_and_session_scoped(tmp_path, monkeypatch)
             parent_session_id="owner-session",
             started_at=time.time() - receipts.RESULT_RETENTION_SECONDS * 2,
             output_buffer="x" * MAX_OUTPUT_CHARS + "\nréponse 世界\n" + secret,
-            exited=True, exit_code=index,
+            exited=True, exit_code=index, _result_consumed=True,
         )
         registry._running[session.id] = session
         registry._move_to_finished(session)

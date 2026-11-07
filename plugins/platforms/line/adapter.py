@@ -46,6 +46,7 @@ from gateway.platforms.base import (
 )
 from gateway.platforms.helpers import MessageDeduplicator, cancel_task
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.config import Platform
 
 logger = logging.getLogger(__name__)
@@ -236,10 +237,13 @@ class _LineClient:
 
     async def _post_messages(self, url: str, label: str, payload: dict[str, Any]) -> None:
         async with self._session(self._timeout) as session:
-            async with session.post(url, headers=self._headers, json=payload) as resp:
-                if resp.status >= 400:
+            async with session.post(url, headers=self._headers, json=payload,
+                                    allow_redirects=not strict_transport()) as resp:
+                if resp.status >= (300 if strict_transport() else 400):
                     body = await resp.text()
                     raise RuntimeError(f"LINE {label} {resp.status}: {body[:200]}")
+                if strict_transport():
+                    await resp.read()  # response headers alone do not acknowledge a truncated body
 
     async def reply(self, reply_token: str, messages: list[dict[str, Any]]) -> None:
         await self._post_messages(LINE_REPLY_URL, "reply", {"replyToken": reply_token, "messages": messages})
@@ -646,11 +650,21 @@ class LineAdapter(BasePlatformAdapter):
             logger.warning("LINE: failed to cache %s payload: %s", msg_type, exc)
             return None, ""
 
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None
     ) -> SendResult:
         if not self._client:
             return SendResult(success=False, error="LINE adapter not connected")
+        if strict_transport():
+            # A volatile postback cache is not a durable completion receipt.
+            plain = strip_markdown_preserving_urls(content)
+            if len(plain) > LINE_MAX_MESSAGES_PER_CALL * LINE_PER_BUBBLE_CHARS:
+                return SendResult(success=False, error="strict LINE text exceeds one complete batch")
+            # The human splitter deliberately truncates after five bubbles; strict must retain every byte.
+            messages = [_text_message(plain[i:i + LINE_PER_BUBBLE_CHARS])
+                        for i in range(0, len(plain), LINE_PER_BUBBLE_CHARS)]
+            return await self._send_messages(chat_id, messages, force_push=True, text=True)
         # A PENDING postback button caches the response for the tap — except interim /
         # system sends (progress heartbeats, busy-acks), which must land as visible
         # bubbles. Interim detection is purpose-first: the gateway marks every mid-turn
@@ -815,9 +829,21 @@ class LineAdapter(BasePlatformAdapter):
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
         return web.FileResponse(path, headers={"Content-Type": content_type})
 
+    @single_attempt_transport
+    async def send_image(self, chat_id: str, image_url: str, caption=None, reply_to=None, metadata=None) -> SendResult:
+        if not strict_transport():
+            return await super().send_image(chat_id, image_url, caption, reply_to, metadata)
+        if not image_url.lower().startswith("https://") or caption and len(caption) > LINE_PER_BUBBLE_CHARS:
+            return SendResult(success=False, error="strict LINE image URL/caption refused")
+        messages = [{"type": "image", "originalContentUrl": image_url, "previewImageUrl": image_url}]
+        return await self._send_messages(chat_id, messages + ([_text_message(caption)] if caption else []))
+
+    @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None, metadata: Optional[dict[str, Any]] = None
     ) -> SendResult:
+        if strict_transport() and caption and len(caption) > LINE_PER_BUBBLE_CHARS:
+            return SendResult(success=False, error="strict LINE image caption exceeds one bubble")
         path, err = self._check_media_file("image", image_path)
         if err:
             return err
@@ -827,6 +853,7 @@ class LineAdapter(BasePlatformAdapter):
         msgs: list[dict[str, Any]] = [{"type": "image", "originalContentUrl": url, "previewImageUrl": url}]
         return await self._send_messages(chat_id, msgs + ([_text_message(caption)] if caption else []))
 
+    @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, duration_ms: int = 1000, metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
@@ -837,6 +864,7 @@ class LineAdapter(BasePlatformAdapter):
         msg = {"type": "audio", "originalContentUrl": self._serve_file(path), "duration": int(duration_ms)}
         return await self._send_messages(chat_id, [msg])
 
+    @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, preview_path: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
@@ -870,6 +898,15 @@ class LineAdapter(BasePlatformAdapter):
         if not messages:
             return SendResult(success=True, message_id=None)
         n = LINE_MAX_MESSAGES_PER_CALL
+        if strict_transport():
+            if not messages or len(messages) > LINE_MAX_MESSAGES_PER_CALL:
+                return SendResult(success=False, error="strict LINE requires one complete message batch")
+            try:
+                await self._client.push(chat_id, messages)
+                return SendResult(success=True)
+            except Exception as exc:
+                logger.exception("LINE strict push ACK missing")
+                return SendResult(success=False, error=str(exc))
         batches = [messages[i:i + n] for i in range(0, len(messages), n)]
         token, used_reply = self._consume_reply_token(chat_id)
         start = 0

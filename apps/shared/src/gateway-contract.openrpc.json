@@ -5811,6 +5811,29 @@
         "title": "AutoReloadCardKind",
         "type": "string"
       },
+      "BackgroundResult": {
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "enum": [
+              "background.complete",
+              "btw.complete",
+              "preview.restart.complete"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/SideAgentCompletePayload"
+          }
+        },
+        "required": [
+          "event_type",
+          "payload"
+        ],
+        "title": "BackgroundResult",
+        "type": "object"
+      },
       "BatteryCategory": {
         "description": "``agent/battery.py::battery_category`` colour bucket.",
         "enum": [
@@ -8001,6 +8024,19 @@
             ],
             "default": null,
             "title": "Notification Category"
+          },
+          "sealed_cron_result_v1": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sealed Cron Result V1"
           }
         },
         "required": [
@@ -8125,6 +8161,19 @@
             ],
             "default": null,
             "title": "Target State"
+          },
+          "sealed_cron_result_v1": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sealed Cron Result V1"
           }
         },
         "required": [
@@ -8135,6 +8184,131 @@
           "message"
         ],
         "title": "CanonicalBotDeliverResult",
+        "type": "object"
+      },
+      "CanonicalBotPrepareParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Author"
+          },
+          "notification_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notification Category"
+          },
+          "sealed_cron_result_v1": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sealed Cron Result V1"
+          },
+          "create_missing": {
+            "default": false,
+            "title": "Create Missing",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message",
+          "id"
+        ],
+        "title": "CanonicalBotPrepareParams",
+        "type": "object"
+      },
+      "CanonicalBotPrepareResult": {
+        "additionalProperties": false,
+        "properties": {
+          "profile_home": {
+            "title": "Profile Home",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "live_session_id": {
+            "title": "Live Session Id",
+            "type": "string"
+          },
+          "lease_id": {
+            "title": "Lease Id",
+            "type": "string"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_home",
+          "session_id",
+          "live_session_id",
+          "lease_id",
+          "authority_epoch",
+          "principal_id"
+        ],
+        "title": "CanonicalBotPrepareResult",
         "type": "object"
       },
       "CanonicalConfigGetResult": {
@@ -10789,6 +10963,21 @@
           },
           "info": {
             "$ref": "#/components/schemas/CanonicalSnapshotInfo"
+          },
+          "background_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BackgroundResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Background Results"
           },
           "pending_connection": {
             "anyOf": [
@@ -35970,6 +36159,21 @@
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
           },
+          "background_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BackgroundResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Background Results"
+          },
           "stored_session_id": {
             "anyOf": [
               {
@@ -39425,6 +39629,21 @@
           },
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
+          },
+          "background_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BackgroundResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Background Results"
           },
           "stored_session_id": {
             "anyOf": [
@@ -48983,6 +49202,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/CanonicalBotDeliverResult"
+        }
+      }
+    },
+    {
+      "name": "bot_relay.prepare",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CanonicalBotPrepareParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalBotPrepareResult"
         }
       }
     },

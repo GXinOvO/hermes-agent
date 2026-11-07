@@ -990,6 +990,9 @@ def _is_transient_transport_error(e: BaseException) -> bool:
         and not is_permanent_tls_error)
 
 
+from gateway.strict_transport import single_attempt_transport, strict_transport
+
+
 class SlackAdapter(BasePlatformAdapter):
     """Slack bot adapter (Socket Mode).
     Needs SLACK_BOT_TOKEN (xoxb-, API calls) and SLACK_APP_TOKEN (xapp-, Socket Mode). DMs +
@@ -2207,10 +2210,18 @@ class SlackAdapter(BasePlatformAdapter):
                 return await getattr(client_fn(), method)(**retry_kwargs)
             raise
 
+    async def _prepare_strict_transport(self, method, **kwargs):
+        from plugins.platforms.slack.strict_delivery import prepare
+        prepare(self, method, **kwargs)
+
+    @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a message to a Slack channel or DM."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_text
+            return await send_text(self, chat_id, content, reply_to, metadata)
         blocked = self._outbound_blocked(chat_id, "outbound generic send to")
         if blocked:
             return blocked
@@ -2956,11 +2967,15 @@ class SlackAdapter(BasePlatformAdapter):
             return await self._send_failure_notice(
                 chat_id, caption, failure_notice, reply_to, metadata)
 
+    @single_attempt_transport
     async def send_multiple_images(
         self, chat_id: str, images: list[tuple[str, str]],
         metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:
         """Send a batch of images as one message via ``files_upload_v2(file_uploads=...)`` (10 per
         call, Slack cap) instead of N posts; falls back to the base per-image loop on failure."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_images
+            return await send_images(self, chat_id, images, metadata)
         if self._suppressed_ignored(chat_id, "multi-image upload in"):
             return SendResult(success=False, error="ignored_channel")
         if not self._app:
@@ -3427,10 +3442,14 @@ class SlackAdapter(BasePlatformAdapter):
             or user_id)
         return name, is_bot
 
+    @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a local image file to Slack by uploading it."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_file
+            return await send_file(self, chat_id, image_path, caption, reply_to, metadata)
         try:
             return await self._upload_file(chat_id, image_path, caption, reply_to, metadata)
         except FileNotFoundError:
@@ -3450,10 +3469,14 @@ class SlackAdapter(BasePlatformAdapter):
         return await self.emit_media_warning(chat_id, notice, caption=caption,
                                              reply_to=reply_to, metadata=metadata, shown_metadata=metadata)
 
+    @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an image to Slack by uploading the URL as a file."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_url
+            return await send_url(self, chat_id, image_url, caption, reply_to, metadata)
         if not self._app:
             return SendResult(success=False, error="Not connected")
         from tools.url_safety import create_ssrf_safe_async_client, is_safe_url
@@ -3490,11 +3513,15 @@ class SlackAdapter(BasePlatformAdapter):
             return await self.send(
                 chat_id=chat_id, content=text, reply_to=reply_to, metadata=metadata)
 
+    @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs,
     ) -> SendResult:
         """Send an audio file to Slack."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_file
+            return await send_file(self, chat_id, audio_path, caption, reply_to, metadata)
         try:
             return await self._upload_file(chat_id, audio_path, caption, reply_to, metadata)
         except FileNotFoundError:
@@ -3503,20 +3530,28 @@ class SlackAdapter(BasePlatformAdapter):
             logger.error("[Slack] Failed to send audio file %s: %s", audio_path, e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
+    @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a video file to Slack."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_file
+            return await send_file(self, chat_id, video_path, caption, reply_to, metadata)
         return await self._send_local_file(
             chat_id, video_path, caption, reply_to, metadata, "video", os.path.basename(video_path),
             f"Video file not found: {video_path}", t("platform.shared.media.video_failed"))
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None,
         file_name: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a document/file attachment to Slack.
         Only ``display_name`` (never the host-local path) goes in the failure notice."""
+        if strict_transport():
+            from plugins.platforms.slack.strict_delivery import send_file
+            return await send_file(self, chat_id, file_path, caption, reply_to, metadata, file_name=file_name)
         display_name = file_name or os.path.basename(file_path)
         return await self._send_local_file(
             chat_id, file_path, caption, reply_to, metadata, "document", display_name,

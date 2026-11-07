@@ -89,6 +89,23 @@ def _comparison_content(message: dict[str, Any]) -> Any:
     return SessionMessagesMixin._loaded_view_content(message.get("role"), _durable_content(message.get("content")))
 
 
+def retain_refused_in_transaction(db, conn, session_id, notice, plan):
+    from agent.turn_failure_copy import CONTENT_REFUSED_DISPLAY_KIND, CONTENT_REFUSED_METADATA_KEY
+    from hermes_state_mutation_transcript import rewind_in_transaction
+    target_row_id, preserve_handoff, expected_active_ids = plan
+    rewind_in_transaction(db, conn, session_id, target_row_id,
+        preserve_compaction_handoff=preserve_handoff, expected_active_ids=expected_active_ids)
+    row = conn.execute('SELECT display_metadata FROM messages WHERE id=? AND session_id=?',
+                       (target_row_id, session_id)).fetchone()
+    if row is None:
+        return False
+    meta = db._decode_display_metadata(row['display_metadata']) or {}
+    meta[CONTENT_REFUSED_METADATA_KEY] = {'notice':notice}
+    conn.execute('UPDATE messages SET compacted=1,display_kind=?,display_metadata=? WHERE id=? AND session_id=?',
+        (CONTENT_REFUSED_DISPLAY_KIND, db._encode_display_metadata(meta), target_row_id, session_id))
+    return True
+
+
 class SessionRewindMixin:
     """``SessionDB`` mixin: soft-delete from one user turn onward, validated against the warm history."""
 
@@ -114,11 +131,9 @@ class SessionRewindMixin:
 
         OWNER-side only (CLI/ACP direct store, and the gateway's async store); never a worker call.
         """
-        from agent.turn_failure_copy import CONTENT_REFUSED_DISPLAY_KIND, CONTENT_REFUSED_METADATA_KEY
         plan = self._plan_refused_retention(session_id, boundary_row_id)
         if plan is None:
             return False
-        target_row_id, preserve_handoff, expected_active_ids = plan
 
         # ONE write transaction for BOTH sides: a crash between the model-side soft-delete and the
         # display re-surface would otherwise drop the user's message from BOTH views with no restart
@@ -127,27 +142,8 @@ class SessionRewindMixin:
         # is one), then the SAME txn re-surfaces the target row into the display projection tagged
         # ``content_refused``: ``compacted = 1`` keeps it shown the way compaction-archived rows are,
         # ``active`` stays 0 so the model never sees it again.
-        def _do(conn) -> bool:
-            from hermes_state_mutation_transcript import rewind_in_transaction
-            rewind_in_transaction(
-                self, conn, session_id, target_row_id,
-                preserve_compaction_handoff=preserve_handoff,
-                expected_active_ids=expected_active_ids)
-            row = conn.execute(
-                "SELECT display_metadata FROM messages WHERE id = ? AND session_id = ?",
-                (target_row_id, session_id)).fetchone()
-            if row is None:
-                return False
-            meta = self._decode_display_metadata(row["display_metadata"]) or {}
-            meta[CONTENT_REFUSED_METADATA_KEY] = {"notice": notice}
-            conn.execute(
-                "UPDATE messages SET compacted = 1, display_kind = ?, display_metadata = ? "
-                "WHERE id = ? AND session_id = ?",
-                (CONTENT_REFUSED_DISPLAY_KIND, self._encode_display_metadata(meta),
-                 target_row_id, session_id))
-            return True
-
-        return bool(self._execute_write(_do))
+        return bool(self._execute_write(lambda conn:retain_refused_in_transaction(
+            self, conn, session_id, notice, plan)))
 
     def _plan_refused_retention(self, session_id: str, boundary_row_id: Optional[int]):
         """``(target_row_id, preserve_compaction_handoff, expected_active_ids)`` for the rewind that

@@ -1,5 +1,6 @@
 """Transport-only cron execution; output/delivery remain with the firing scheduler."""
 import asyncio
+from contextlib import ExitStack
 import hashlib
 import json
 import uuid
@@ -65,11 +66,15 @@ def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id
               'extra_prompt': extra_prompt}
     root = get_hermes_home() / 'cron' / 'admissions'
     journal = journal_path(params['job_id'], params['request_id'])
-    record = {'params': params, 'receipt': None}
+    from cron.scheduler_results import _home, result_binding, validate_binding, validate_record
+    record = {'params': params, 'receipt': None, 'home': _home(), 'job': dict(job),
+              'binding': result_binding(job)}
     if journal.exists():
         record = json.loads(journal.read_text(encoding='utf-8-sig'))
         if record['params'] != params:
             raise CronExecutionUnknown('cron admission identity conflict')
+        validate_record(record, job['id'], request_id)
+        validate_binding(record, job)
     attempted = journal.exists()
     owner = owner_for_home(get_hermes_home())
 
@@ -165,8 +170,12 @@ def reconcile_pending(*, allow_connect=True):
 
     root = get_hermes_home() / 'cron' / 'admissions'
     for journal in sorted(root.glob('*.json')):
+        recovery = ExitStack()
         try:
-            record = json.loads(journal.read_text(encoding='utf-8-sig'))
+            from cron.scheduler_results import recovery_record
+            record = recovery.enter_context(recovery_record(journal))
+            if record is None:
+                continue
             params = record['params']
             if journal != journal_path(params['job_id'], params['request_id']):
                 raise ValueError('cron journal identity conflict')
@@ -175,14 +184,16 @@ def reconcile_pending(*, allow_connect=True):
                 # output or re-marking the job on every tick would duplicate its side effects.
                 continue
             row = get_execution(params['request_id'])
+            if row is not None and row['job_id'] != params['job_id']:
+                raise ValueError('cron execution belongs to another job')
             if row is not None and row['job_id'] == params['job_id'] and row['status'] in FIRER_FINISHED_STATES:
                 # The firer booked this attempt's terminal outcome itself (ownership lost, shutdown
                 # interrupt, a crashed tail): the receipt is not a result to save or deliver again.
                 journal.unlink(missing_ok=True)
                 continue
-            if 'refusal' in record:
-                state = {'status': 'terminal', 'result': record['refusal'], 'job': record['job']}
-            else:
+            from cron.scheduler_results import local_recovery_state, recovery_job_matches
+            state = local_recovery_state(record, params, journal)
+            if state is None:
                 owner = owner_for_home(get_hermes_home())
                 if owner is None and not allow_connect:
                     continue
@@ -212,8 +223,13 @@ def reconcile_pending(*, allow_connect=True):
                     atomic_json_write(journal, record, mode=0o600, fsync_dir=True)
                 continue
             success, output, answer, error = state['result']
+            if not recovery_job_matches({'job': state['job']}, get_job(params['job_id'])):
+                logging.getLogger(__name__).warning('Cron terminal result retained after job definition changed: %s', journal)
+                continue
             job = dict(state['job'], **(state.get('job_flags') or {}))
             job['execution_id'] = params['request_id']
+            if record.get('binding') is not None:
+                job['_cron_result_binding'] = record['binding']
             # The same result verdicts as the ordinary tail: an agent-declared [CRON_FAILURE] and a
             # blank answer are failures, whichever process books them.
             success, error, declared = _apply_agent_failure_marker(job, success, error, answer)
@@ -228,3 +244,5 @@ def reconcile_pending(*, allow_connect=True):
                 _lift_pause(params['job_id'], record.get('pause_recorded'))
         except Exception:
             logging.getLogger(__name__).warning('Cron receipt recovery deferred: %s', journal, exc_info=True)
+        finally:
+            recovery.close()

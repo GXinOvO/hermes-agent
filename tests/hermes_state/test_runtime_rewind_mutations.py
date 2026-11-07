@@ -21,6 +21,22 @@ def test_rewind_has_existing_semantics_with_atomic_retry(tmp_path):
         assert db.get_session('s')['rewind_count'] == 1
 
 
+def test_rewind_invalidates_a_side_result_for_the_same_target(tmp_path):
+    from hermes_state_background import begin, complete, results
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        db.create_session('s', source='test')
+        db.append_messages_batch('s', [{'role': 'user', 'content': 'first'}, {'role': 'assistant', 'content': 'reply'},
+                                       {'role': 'user', 'content': 'target'}])
+        target = db.get_messages('s')[-1]['id']
+        binding = {'profile_id': str(tmp_path), 'parent_session_id': 's', 'event_type': 'background.complete'}
+        begin(db, 'bg_one', binding)
+        complete(db, 'bg_one', binding, {'task_id': 'bg_one', 'text': 'saved'})
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        rt.mutate_runtime_session(db, epoch=epoch, principal_id='human', session_id='s', request_id='rewind',
+            expected_revision=0, expected_generation=0, operation='rewind', payload={'target_message_id': target})
+        assert results(db, 's') == []
+
+
 def test_rewind_refuses_queued_work(tmp_path):
     with SessionDB(db_path=tmp_path / 'state.db') as db:
         db.create_session('s', source='test')

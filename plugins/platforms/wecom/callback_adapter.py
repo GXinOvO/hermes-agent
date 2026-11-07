@@ -32,6 +32,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.helpers import MessageDeduplicator, send_chunks
@@ -187,6 +188,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
             await self._http_client.aclose()
         self._http_client = None
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """One text message per MAX_MESSAGE_LENGTH-byte chunk; stops at the first failure."""
         app = self._resolve_app_for_chat(chat_id)
@@ -201,7 +203,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
                 resp = await self._http_client.post(f"{_SEND_URL}{token}", json=payload)
                 data = resp.json()
                 errcode = data.get("errcode")
-                if errcode in {40001, 42001} and _attempt == 0:  # token rejected — evict so the retry fetches a fresh one
+                if not strict_transport() and errcode in {40001, 42001} and _attempt == 0:  # token rejected — evict so the retry fetches a fresh one
                     logger.warning("[WecomCallback] Token rejected for app '%s' (errcode=%s), refreshing", app.get("name", "default"), errcode)
                     self._access_tokens.pop(app["name"], None)
                     continue

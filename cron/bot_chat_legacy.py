@@ -1,11 +1,7 @@
-"""``cron/bot_chat_pending``: Bot Chat outputs whose target owner was not running yet.
+"""Deferred sealed Bot results; old unsealed records remain explicit unknown evidence.
 
-``defer`` parks one (a cross-profile target whose gateway is down or still starting), and
-the retired CLI lane left records of the same shape behind. Each still-``queued`` record is handed,
-under its own id, to the target profile's live owner through the canonical
-``tools.bot_live_delivery.deliver_to_live_owner`` door (idempotent per id). Records are
-never deleted: they keep their final status as evidence, exactly as the old drain did.
-A ``claimed`` record was an uncertain CLI turn and is never resent.
+A queued sealed result may reach its owner once. Claimed/lost-ACK records are never
+resent. Records remain as evidence of their final disposition.
 """
 from __future__ import annotations
 
@@ -24,12 +20,14 @@ _warned: set[Path] = set()
 def defer(key: str, job: dict, content: str, home: Path, *, for_failure: bool) -> None:
     """Park one never-admitted output under its delivery id; a later tick hands it to the owner."""
     import time
+    from cron.sealed_bot_result import validate_defer
+    validate_defer(key, job, content, home, for_failure)
     root = get_hermes_home().resolve() / "cron" / "bot_chat_pending"
     make_user_dir(root, parents=True, exist_ok=True, mode=0o700)
     path = root / f"{key}.json"
     if not path.exists():  # an existing record (queued or already transferred) keeps its status
         atomic_json_write(path, dict(
-            id=key, status="queued", job={k: job[k] for k in ("id", "name") if k in job}, content=content,
+            id=key, status="queued", job=dict(job), content=content,
             home=str(home), for_failure=for_failure, sequence=time.time_ns()), fsync_dir=True, mode=0o600)
 
 
@@ -71,7 +69,15 @@ def _dispose(path: Path, record: dict) -> bool:
     if reason := _malformed(record):
         record.update(status="ambiguous", error=reason)
         return True
-    home = Path(record["home"]).resolve()
+    if not (record.get('job') or {}).get('_sealed_bot_result_v1'):
+        record.update(status='ambiguous', error='legacy result provenance unknown; not consumed again')
+        return True
+    from cron.sealed_bot_result import canonical_target_home
+    try:
+        home = canonical_target_home(record["home"])
+    except ValueError as exc:
+        record.update(status='ambiguous', error=str(exc))
+        return True
     for_failure = bool(record.get("for_failure"))
     if not (home / "state.db").is_file():
         record.update(status="ambiguous", error=f"bot-chat delivery target no longer exists: {home}")
@@ -86,16 +92,21 @@ def _dispose(path: Path, record: dict) -> bool:
         if owner is None:
             return False
         try:
+            from cron.sealed_bot_result import producer_reference
+            sealed = producer_reference(record['job'], record['content'], home, owner)
+            # Persist intent before the native door; an interrupted consumer stays unknown.
+            record.update(status='claimed')
+            atomic_json_write(path, record, fsync_dir=True, mode=0o600)
             receipt = deliver_to_live_owner(
                 home, owner, bot_chat_message(record.get("job") or {}, record["content"]),
-                delivery_id=record["id"], notification_category="diagnostic" if for_failure else "result")
+                delivery_id=record["id"], notification_category="diagnostic" if for_failure else "result",
+                sealed_cron_result_v1=sealed)
         except Exception as exc:
-            # The door is idempotent per id (a replay returns the existing receipt), so the
-            # record stays queued for the next tick; log loudly once, quietly after.
+            record.update(status='ambiguous', error=f'consumer admission unknown: {exc}; do not replay')
             logger.log(logging.DEBUG if path in _warned else logging.WARNING,
                        "Legacy Bot Chat pending record %s not handed off yet: %s", path, exc, exc_info=True)
             _warned.add(path)
-            return False
+            return True
         receipt_status = receipt.get("status") if isinstance(receipt, dict) else None
         record.update(status="transferred", error=None, receipt_status=receipt_status)
     return True

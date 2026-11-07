@@ -303,15 +303,46 @@ metrics = Metrics()
 
 
 class TaskStore:
-    """In-memory A2A tasks, kept after completion for tasks/get. Records carry agent slug +
+    """A2A tasks, optionally durable in the owning profile's existing state DB. Records carry agent slug +
     tenant; readers pass a scope and get not-found outside it (spec authz rule)."""
 
     _MAX_TERMINAL = 500
 
-    def __init__(self) -> None:
+    def __init__(self, home=None) -> None:
+        self._home = Path(home).resolve() if home is not None else None
         self._tasks: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._watchers: dict[str, list[Future]] = {}
         self._lock = threading.Lock()
+        self._refresh_locked()
+
+    def _refresh_locked(self, task_id=None):
+        if self._home is not None:
+            from .durable_tasks import load
+            records = load(self._home, task_id)
+            previous_records = dict(self._tasks)
+            if task_id is not None:
+                self._tasks.pop(task_id, None)
+            else:
+                self._tasks.clear()
+            for record in records:
+                previous = previous_records.get(record['task_id'])
+                if previous is not None:
+                    record['created_at'] = previous['created_at']  # immutable local orphan clock
+                self._tasks[record['task_id']] = record
+
+    def _persist_locked(self, task_id, fields, *, orphan=False):
+        if self._home is not None:
+            from .durable_tasks import update
+            self._tasks[task_id] = update(self._home, task_id, fields, orphan=orphan)
+
+    def published(self, record):
+        """Release current public subscriptions only after the durable publication commits."""
+        with self._lock:
+            self._tasks[record['task_id']] = record
+            watchers = self._watchers.pop(record['task_id'], [])
+        for future in watchers:
+            if not future.done():
+                future.set_result((record['state'], record['reply']))
 
     @staticmethod
     def _in_scope(rec: dict, agent_slug: str = "", tenant: str = "") -> bool:
@@ -335,17 +366,21 @@ class TaskStore:
                 "createdAt": rec.get("created_iso", ""), "pushNotificationConfig": {"url": rec.get("push_url") or ""}}
 
     def create(self, task_id: str, context_id: str, peer: str, agent_slug: str = "", tenant: str = "",
-               input_id: str = "") -> dict:
-        """``input_id``: the owner admission a forwarded task was sent as (empty for local tasks)."""
+               input_id: str = "", *, deduplicate: bool = False, ingress=None) -> dict:
+        """``input_id`` binds the upstream message; local resends can reuse the durable task."""
         rec = {"task_id": task_id, "context_id": context_id, "peer": peer, "agent_slug": agent_slug or "", "tenant": tenant or "",
                "input_id": input_id, "state": STATE_SUBMITTED, "reply": "", "created_at": time.time(), "created_iso": now_iso(), "push_url": "", "push_config_id": ""}
         with self._lock:
-            self._tasks[task_id] = rec
+            if self._home is not None:
+                from .durable_tasks import create
+                rec = create(self._home, rec, deduplicate=deduplicate, ingress=ingress)
+            self._tasks[rec['task_id']] = rec
         return dict(rec)
 
     def set_state(self, task_id: str, state: str) -> None:
         with self._lock:
             if (rec := self._tasks.get(task_id)) and rec["state"] not in TERMINAL_STATES:
+                self._persist_locked(task_id, {'state': state})
                 rec["state"] = state
 
     def set_push_config(self, task_id: str, url: str, agent_slug: str = "", tenant: str = "") -> Optional[dict]:
@@ -354,6 +389,7 @@ class TaskStore:
             if not (rec := self._scoped(task_id, agent_slug, tenant)):
                 return None
             rec["push_url"], rec["push_config_id"] = url, "cfg-" + uuid.uuid4().hex[:12]
+            self._persist_locked(task_id, {'push_url': rec['push_url'], 'push_config_id': rec['push_config_id']})
             return self._push_config_view(rec)
 
     def get_push_config(self, task_id: str, config_id: str = "", agent_slug: str = "", tenant: str = "") -> Optional[dict]:
@@ -369,6 +405,7 @@ class TaskStore:
             rec = self._push_rec(task_id, config_id, agent_slug, tenant)
             if rec:
                 rec["push_url"] = rec["push_config_id"] = ""
+                self._persist_locked(task_id, {'push_url': '', 'push_config_id': ''})
             return rec is not None
 
     def pop_push_url(self, task_id: str) -> str:
@@ -376,19 +413,29 @@ class TaskStore:
             rec = self._tasks.get(task_id)
             if rec:
                 url, rec["push_url"] = rec["push_url"], ""
+                self._persist_locked(task_id, {'push_url': ''})
             return url if rec else ""
 
     def get(self, task_id: str, agent_slug: str = "", tenant: str = "") -> Optional[dict]:
         with self._lock:
+            self._refresh_locked(task_id)
             return dict(rec) if (rec := self._scoped(task_id, agent_slug, tenant)) else None
 
-    def complete(self, task_id: str, state: str, reply: str = "") -> Optional[dict]:
+    def complete(self, task_id: str, state: str, reply: str = "", *, orphan=False) -> Optional[dict]:
         """Transition a task to a terminal state. Idempotent."""
         with self._lock:
+            self._refresh_locked(task_id)
             rec = self._tasks.get(task_id)
             if not rec or rec["state"] in TERMINAL_STATES:
                 return None
-            rec.update(state=state, reply=reply, completed_at=time.time())
+            fields = dict(state=state, reply=reply, completed_at=time.time())
+            self._persist_locked(task_id, fields, orphan=orphan)
+            if self._home is not None:
+                rec = self._tasks[task_id]
+                if rec['state'] != state:
+                    return None  # sealed final/live owner won the transaction
+            else:
+                rec.update(fields)
             watchers = self._watchers.pop(task_id, [])
             self._trim_locked()
             out = dict(rec)
@@ -399,6 +446,7 @@ class TaskStore:
 
     def watch(self, task_id: str, agent_slug: str = "", tenant: str = "") -> Optional[Future]:
         with self._lock:
+            self._refresh_locked(task_id)
             if not (rec := self._scoped(task_id, agent_slug, tenant)):
                 return None
             fut: Future = Future()
@@ -408,14 +456,38 @@ class TaskStore:
                 self._watchers.setdefault(task_id, []).append(fut)
             return fut
 
+    def refresh_watch(self, task_id, future, agent_slug='', tenant=''):
+        """Observe another owner's commit during an existing bounded HTTP wait."""
+        rec = self.get(task_id, agent_slug, tenant)
+        if rec and (rec.get('agent_slug', ''), rec.get('tenant', '')) == (agent_slug, tenant):
+            if rec['state'] in TERMINAL_STATES and not future.done():
+                future.set_result((rec['state'], rec.get('reply', '')))
+
+    def unwatch(self, task_id, future):
+        with self._lock:
+            waiting = self._watchers.get(task_id, [])
+            if future in waiting:
+                waiting.remove(future)
+            if not waiting:
+                self._watchers.pop(task_id, None)
+
+    def activate(self, task_id):
+        if self._home is not None:
+            import os
+            from gateway.delivery_ledger import _start_time
+            with self._lock:
+                self._persist_locked(task_id, {'owner_pid': os.getpid(), 'owner_started_at': _start_time(os.getpid())})
+
     def list(self, context_id: str = "", state: str = "", page_size: int = 50, offset: int = 0,
-             agent_slug: str = "", tenant: str = "", with_total: bool = False):
+             agent_slug: str = "", tenant: str = "", with_total: bool = False, exact_scope: bool = False):
         """Filtered task page (newest first) as ``(records, next_offset)``, or
         ``(records, next_offset, total)`` with ``with_total`` (v1.0 ListTasks totalSize)."""
         page_size = max(1, min(int(page_size or 50), 100))
         with self._lock:
+            self._refresh_locked()
             recs = [dict(r) for r in reversed(self._tasks.values())
-                    if self._in_scope(r, agent_slug, tenant)
+                    if (r.get('agent_slug', '') == agent_slug and r.get('tenant', '') == tenant
+                        if exact_scope else self._in_scope(r, agent_slug, tenant))
                     and (not context_id or r["context_id"] == context_id) and (not state or r["state"] == state)]
         total = len(recs)
         page = recs[offset:offset + page_size]
@@ -425,12 +497,18 @@ class TaskStore:
     def fail_orphans(self, timeout_seconds: float = 300, *, exclude: set[str] | None = None) -> list[str]:
         excluded = exclude or set()
         with self._lock:
+            if self._home is not None:
+                from .durable_tasks import maintain
+                for task_id in maintain(self._home):
+                    self._tasks.pop(task_id, None)
             stale = [tid for tid, rec in self._tasks.items()
                      if tid not in excluded and rec["state"] not in TERMINAL_STATES
                      and time.time() - rec["created_at"] > timeout_seconds]
-        return [tid for tid in stale if self.complete(tid, STATE_FAILED, "[task orphaned — no reply produced]")]
+        return [tid for tid in stale if self.complete(tid, STATE_FAILED, "[task orphaned — no reply produced]", orphan=True)]
 
     def _trim_locked(self) -> None:
+        if self._home is not None:
+            return  # Durable public results are retained; no memory cap may strand them.
         terminal = [tid for tid, rec in self._tasks.items() if rec["state"] in TERMINAL_STATES]
         for tid in terminal[:max(0, len(terminal) - self._MAX_TERMINAL)]:
             self._tasks.pop(tid, None)

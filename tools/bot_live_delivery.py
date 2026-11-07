@@ -79,7 +79,7 @@ def authority_settle(home, params):
     return _authority_rpc(home, 'bot_relay.settle', params)
 
 
-def _authority_rpc(home, method, params):
+def _authority_rpc(home, method, params, *, prepared=None):
     import asyncio
     from hermes_cli.gateway_runtime import discover_gateway_endpoint
     from hermes_cli.gateway_client import GATEWAY_WS_PROTOCOL, GatewayClient, _session_ticket, gateway_ws_target
@@ -90,12 +90,15 @@ def _authority_rpc(home, method, params):
 
     async def request():
         nonlocal rpc_started
-        discovery = await asyncio.to_thread(discover_gateway_endpoint, home, timeout=5)
-        if discovery.state != 'ready' or discovery.endpoint is None:
-            raise ValueError('profile authority is not ready')
-        endpoint = discovery.endpoint
-        ticket = await asyncio.to_thread(_session_ticket, home, endpoint)
-        url, protocols = gateway_ws_target(endpoint, ticket)
+        if prepared is None:
+            discovery = await asyncio.to_thread(discover_gateway_endpoint, home, timeout=5)
+            if discovery.state != 'ready' or discovery.endpoint is None:
+                raise ValueError('profile authority is not ready')
+            endpoint = discovery.endpoint
+            ticket = await asyncio.to_thread(_session_ticket, home, endpoint)
+            url, protocols = gateway_ws_target(endpoint, ticket)
+        else:
+            url, protocols = prepared
         # Loopback authority dial: never through HTTP(S)_PROXY (websockets>=14 honours it by default).
         async with connect(url, subprotocols=protocols, open_timeout=10, proxy=None) as ws:
             if ws.subprotocol != GATEWAY_WS_PROTOCOL:
@@ -274,7 +277,7 @@ def _write(path: Path, record: dict[str, Any]) -> None:
 def deliver_to_live_owner(
     profile_home: Path | str, owner: dict[str, Any], message: str,
     *, delivery_id: str | None = None, author: dict[str, Any] | None = None,
-    notification_category: str = "result",
+    notification_category: str = "result", sealed_cron_result_v1: dict | None = None,
 ) -> dict[str, Any]:
     """Return durable admission immediately, without waiting for the owner.
 
@@ -282,7 +285,7 @@ def deliver_to_live_owner(
     state. Reusing an id with a different payload is an error, never an overwrite.
     """
     return _door(authority_delivery, profile_home, owner, message, delivery_id=delivery_id, author=author,
-                 notification_category=notification_category)
+                 notification_category=notification_category, sealed_cron_result_v1=sealed_cron_result_v1)
 
 
 def settle_held_delivery(profile_home: Path | str, owner: dict[str, Any], message: str, *, delivery_id: str,
@@ -293,7 +296,7 @@ def settle_held_delivery(profile_home: Path | str, owner: dict[str, Any], messag
 
 
 def _door(call: Callable[[Path, dict], dict], profile_home, owner, message, *, delivery_id=None, author=None,
-          notification_category="result"):
+          notification_category="result", sealed_cron_result_v1=None):
     pinned = _owner(profile_home, owner)
     if not isinstance(message, str):
         raise ValueError("message must be a string")
@@ -306,7 +309,9 @@ def _door(call: Callable[[Path, dict], dict], profile_home, owner, message, *, d
     return {**call(home, dict(id=_delivery_id(delivery_id if delivery_id is not None else uuid.uuid4().hex),
         profile=home.name if home.parent.name == "profiles" else "default",
         message=message, **({"session_id": pinned["session_id"]} if pinned["session_id"] else {}),
-        **({"author": dict(author)} if author else {}), **category)), **category}
+        **({"author": dict(author)} if author else {}), **category,
+        **({"sealed_cron_result_v1": dict(sealed_cron_result_v1)} if sealed_cron_result_v1 is not None else {}))),
+        **category}
 
 
 def owner_holds_delivery(profile_home: Path | str, record: dict) -> bool:

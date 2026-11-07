@@ -839,6 +839,8 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         if refusal:
             return _cp(f"  {_gt('resume.switch_failed')} {target_id} ({refusal})")
         if target_id == self.session_id:
+            from hermes_cli.cli_background_results import display_results
+            display_results(self)
             return _cp(f"  {_t('resume.already_on')}")
         old_session_id = self.session_id
         _end_current_session(self, "resumed_other")
@@ -873,6 +875,8 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         self._restore_session_cwd(session_meta)
         self._restore_session_yolo(session_meta)
         self._restore_session_model(session_meta)
+        from hermes_cli.cli_background_results import display_results
+        display_results(self)
 
     def _resolve_resume_target(self, target: str):
         """``(session_id, meta)`` for a numbered selection, title, or id (an empty compression-chain head
@@ -1358,6 +1362,11 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
             f"  {_t('background.task_id', task_id=task_id)}", f"  {_t('background.keep_chatting')}\n")
         turn_route = self._resolve_turn_agent_config(prompt)
         runtime = turn_route["runtime"]
+        from hermes_cli.cli_background_results import admit
+        side_result = admit(self, task_id, "background.complete", inputs={"prompt": prompt}, route=turn_route)
+        if side_result is None:
+            return
+        session_db = side_result.db
 
         def produce():
             from agent.vault_backends.unlock import set_code_prompt_callback, set_save_login_prompt_callback, set_unlock_prompt_callback
@@ -1378,7 +1387,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                                                    "max_tokens")}, enabled_toolsets=self.enabled_toolsets,
                     quiet_mode=True, verbose_logging=False, session_id=task_id, platform="cli",
                     side_agent=True,
-                    session_db=self._session_db, reasoning_config=self.reasoning_config,
+                    session_db=session_db, reasoning_config=self.reasoning_config,
                     service_tier=self.service_tier,
                     request_overrides=turn_route.get("request_overrides"),
                     **{kw: getattr(self, attr) for kw, attr in _BG_PROVIDER_KWARGS.items()})
@@ -1416,51 +1425,21 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                     set_save_login_prompt_callback(None)
                     set_code_prompt_callback(None)
 
-        self._start_background_worker(task_id, task_num, preview, produce)
+        self._start_background_worker(task_id, task_num, preview, produce, side_result=side_result)
 
-    def _start_background_worker(self, task_id, task_num, preview, produce):
+    def _start_background_worker(self, task_id, task_num, preview, produce, *, side_result=None):
         """The /bg result panel's daemon thread (``produce()`` returns the answer text)."""
-        def done():
-            self._background_tasks.pop(task_id, None)
-            if not self._agent_running:  # clear spinner only if no foreground agent owns it
-                self._spinner_text = ""
-
-        thread = self._side_worker(
-            produce, name=f"bg-task-{task_id}", fail_label=_t("background.label", number=task_num),
-            header_lines=[f"  {_t('background.complete', number=task_num)}",
-                          f"  {_t('background.prompt', preview=preview)}"],
-            title_suffix=_t("background.title_suffix", number=task_num),
-            empty_note=f"  {_t('background.no_response')}", bell=True, on_done=done)
-        self._background_tasks[task_id] = thread
-        thread.start()
+        from hermes_cli.cli_background_results import start_background_worker
+        start_background_worker(self, task_id, task_num, preview, produce, side_result=side_result)
 
     def _side_worker(self, produce, *, name, fail_label, header_lines, title_suffix, empty_note,
-                     bell=False, on_done=None, console=None) -> threading.Thread:
+                     bell=False, on_done=None, console=None, side_result=None) -> threading.Thread:
         """Daemon thread for /bg, /btw and /login: ``produce()`` returns the body to print in a side-result
         panel; failures print ``fail_label`` failed; the TUI is always re-invalidated afterwards."""
-        def run():
-            try:
-                body = produce()
-                _print_side_result_panel(self, header_lines=header_lines, body=body,
-                                         title_suffix=title_suffix, empty_note=empty_note,
-                                         console=console)
-                if bell:
-                    self._ring_bell(context=_t("side_result.complete", label=fail_label))
-            except Exception as e:
-                _refresh_tui_before_print(self)
-                line = f"  {_t('side_result.failed', label=fail_label, error=e)}"
-                # Same console the caller captured, so a late failure can't splice into a later command.
-                if console is not None:
-                    console.print(line, markup=False)
-                else:
-                    _cp(line)
-            finally:
-                if on_done is not None:
-                    on_done()
-                if self._app:
-                    self._invalidate(min_interval=0)
-
-        return threading.Thread(target=run, daemon=True, name=name)
+        from hermes_cli.cli_background_results import side_worker
+        return side_worker(self, produce, name=name, fail_label=fail_label, header_lines=header_lines,
+                           title_suffix=title_suffix, empty_note=empty_note, bell=bell,
+                           on_done=on_done, console=console, side_result=side_result)
 
     def _handle_login_command(self, cmd_original: str) -> None:
         """Start an in-chat sign-in without blocking the input loop while approval is pending."""
@@ -1539,6 +1518,12 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
             **{k: runtime.get(k) for k in ("provider", "base_url", "api_key", "api_mode")},
             "session_id": getattr(parent_agent, "session_id", None),
         }
+        from hermes_cli.cli_background_results import admit
+        task_id = f"btw_{uuid.uuid4().hex}"
+        side_result = admit(self, task_id, "btw.complete",
+                            inputs={"question": question, "history": history_snapshot}, route=turn_route)
+        if side_result is None:
+            return
         preview = _ellipsize(question, 60)
         _cp(*_lines(_gt("btw.started", preview=preview)), "")
 
@@ -1550,7 +1535,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         self._side_worker(produce, name="btw-side-question", fail_label="/btw",
                           header_lines=[f"  {_t('btw.header', preview=preview)}"],
                           title_suffix=_t("btw.title_suffix"),
-                          empty_note=f"  {_t('btw.no_answer')}").start()
+                          empty_note=f"  {_t('btw.no_answer')}", side_result=side_result).start()
 
     # ---- /bundles, /browser ---------------------------------------------------------------
     def _handle_bundles_command(self, cmd: str) -> None:

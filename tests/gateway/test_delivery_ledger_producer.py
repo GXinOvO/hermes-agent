@@ -18,6 +18,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import SessionSource
+from gateway.strict_transport import single_attempt_transport
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +45,7 @@ class _Adapter(BasePlatformAdapter):  # type: ignore[misc]
     async def get_chat_info(self, chat_id):  # pragma: no cover - unused
         return None
 
+    @single_attempt_transport
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         self.sent.append(content)
         return SendResult(success=True, message_id="m1")

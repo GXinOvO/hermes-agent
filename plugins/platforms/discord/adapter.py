@@ -1176,6 +1176,9 @@ from plugins.platforms.discord.adapter_thread_titles import DiscordThreadTitlesM
 from plugins.platforms.discord.adapter_voice_info import DiscordVoiceInfoMixin
 
 
+from gateway.strict_transport import single_attempt_transport, strict_transport
+
+
 class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceInfoMixin,
                      DiscordSlashAuthMixin, BasePlatformAdapter):
     """Discord bot adapter: guild/DM messages, threads, slash commands, button approvals, reactions."""
@@ -3202,6 +3205,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             kept.append(notice)
         return kept
 
+    async def _prepare_strict_transport(self, method, **kwargs):
+        from plugins.platforms.discord.strict_delivery import preflight
+        await preflight(self, method, **kwargs)
+
+    @single_attempt_transport
     async def send(
         self,
         chat_id: str,
@@ -3211,6 +3219,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
     ) -> SendResult:
         """Send a message to a Discord channel or thread (metadata thread_id wins over
         chat_id; forum channels auto-create a thread post since they reject direct sends)."""
+        if strict_transport():
+            from plugins.platforms.discord.strict_delivery import send_text
+            return await send_text(self, chat_id, content, reply_to, metadata)
         if not self._client:
             # Dead transport: classify as send_path_degraded so the delivery ledger's reconnect
             # sweep can replay this; a generic "Not connected" error would strand the output.

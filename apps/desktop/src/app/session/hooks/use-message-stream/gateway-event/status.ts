@@ -176,34 +176,6 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
     return true
   }
 
-  if (event.type === 'btw.complete') {
-    // prompt.btw answers a side question and emits this on the originating
-    // session. Persistent transcript line, matching the TUI's `[btw "q"]`
-    // — without it Desktop only ever showed the acknowledgement (#99065).
-    const text = coerceGatewayText(payload?.text).trim()
-
-    if (text && sessionId) {
-      const taskId = String(payload?.task_id ?? '').trim()
-      const question = coerceGatewayText(payload?.question).trim()
-      const header = `[btw${question ? ` "${question}"` : ''}${taskId ? ` (${taskId})` : ''}]`
-
-      flushQueuedDeltas(sessionId)
-      updateSessionState(sessionId, state => ({
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: `btw-complete-${taskId || Date.now()}`,
-            role: 'system',
-            parts: [textPart(`${header}\n${text}`, occurredAt)],
-            timestamp: occurredAt
-          }
-        ]
-      }))
-    }
-
-    return true
-  }
 
   if (event.type === 'review.summary') {
     // Self-improvement background review saved something to memory/skills
@@ -242,35 +214,6 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
     return true
   }
 
-  if (event.type === 'background.complete') {
-    // prompt.background RPC (the TUI's /background path) reports the finished
-    // background turn here; the event carries the originating session id, so
-    // the result lands in the conversation that started the task. Persistent
-    // transcript line (not a toast), mirroring the TUI's `[bg <task_id>]`
-    // system line — without it the completion was indistinguishable from a
-    // lost task (#97635).
-    const text = coerceGatewayText(payload?.text).trim()
-
-    if (text && sessionId) {
-      const taskId = String(payload?.task_id ?? '').trim()
-
-      flushQueuedDeltas(sessionId)
-      updateSessionState(sessionId, state => ({
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: `background-complete-${taskId || Date.now()}`,
-            role: 'system',
-            parts: [textPart(taskId ? `[bg ${taskId}]\n${text}` : text, occurredAt)],
-            timestamp: occurredAt
-          }
-        ]
-      }))
-    }
-
-    return true
-  }
 
   if (event.type === 'notification.show') {
     // Driver-agnostic agent notice (credits usage/grant/depleted/restored

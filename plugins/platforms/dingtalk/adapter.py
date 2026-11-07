@@ -47,6 +47,7 @@ except Exception:
     open_api_models = tea_util_models = None
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms.helpers import MessageDeduplicator, compile_mention_patterns
 from agent.i18n import t
 from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -500,6 +501,7 @@ class DingTalkAdapter(BasePlatformAdapter):
     def _extract_media(self, message: ChatbotMessage):
         return extract_media(message)
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a reply via AI Card (when configured) or DingTalk session webhook markdown."""
         metadata = metadata or {}
@@ -515,7 +517,7 @@ class DingTalkAdapter(BasePlatformAdapter):
         # tool-progress, commentary and stream first-sends leave it None. It decides (1) finalize-on-create
         # (intermediate cards stay open so edits don't flicker) and (2) whether to fire the Done reaction.
         is_final_reply = reply_to is not None
-        if self._card_template_id and current_message and self._card_sdk:
+        if not strict_transport() and self._card_template_id and current_message and self._card_sdk:
             await self._close_streaming_siblings(chat_id)  # close lingering tool-progress cards before creating a new one
             result = await self._create_and_stream_card(chat_id, current_message, content, finalize=is_final_reply)
             if result and result.success:
@@ -530,7 +532,9 @@ class DingTalkAdapter(BasePlatformAdapter):
         try:
             resp = await self._http_client.post(session_webhook, json=payload, timeout=15.0)
             if resp.status_code < 300:
-                if is_final_reply:
+                if strict_transport() and resp.json().get("errcode", 0) != 0:
+                    return SendResult(success=False, error=str(resp.json()))
+                if is_final_reply and not strict_transport():
                     self._fire_done_reaction(chat_id)
                 return SendResult(success=True, message_id=uuid.uuid4().hex[:12])
             logger.warning("[%s] Send failed HTTP %d: %s", self.name, resp.status_code, resp.text[:200])
@@ -544,6 +548,34 @@ class DingTalkAdapter(BasePlatformAdapter):
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """DingTalk does not support typing indicators."""
 
+    @single_attempt_transport
+    async def send_animation(self, chat_id, animation_url, caption=None, reply_to=None, metadata=None):
+        return await self.send_image(chat_id, animation_url, caption=caption, reply_to=reply_to, metadata=metadata)
+
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from gateway.strict_transport import require_strict_transport
+        from urllib.request import url2pathname
+        calls = []
+        for url, caption in images:
+            if url.startswith("file://"):
+                method, kwargs = "send_image_file", {"image_path": url2pathname(url[7:])}
+            elif self._is_animation_url(url):
+                method, kwargs = "send_animation", {"animation_url": url}
+            else:
+                method, kwargs = "send_image", {"image_url": url}
+            require_strict_transport(self, method)
+            calls.append((method, dict(kwargs, caption=caption or None)))
+        result = SendResult(success=False, error="no images to send")
+        for method, kwargs in calls:
+            result = await getattr(self, method)(chat_id=chat_id, metadata=metadata, **kwargs)
+            if not result.success:
+                break
+        return result
+
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata=None) -> SendResult:
         """Render a remote image inline via markdown (session webhook has no native attachments)."""
         image_block = f"![image]({image_url})"

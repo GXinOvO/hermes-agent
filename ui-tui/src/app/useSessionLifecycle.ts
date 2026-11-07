@@ -625,8 +625,8 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             storedSid,
             usage: usageFrom(info)
           })
-          // resetSession dropped the previous session's controls; the snapshot's
-          // still-pending approval/clarify prompts are the only way they come back.
+          // Restore controls and sealed side-task lines after history reset and
+          // destination adoption, before releasing frames newer than the snapshot.
           gw.hydrateSharedPrompts?.(r)
           hydrateLiveSessionInflight(r.inflight)
           gw.settleAttach?.(hold, r)
@@ -744,6 +744,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
                 storedSid,
                 usage: usageFrom(info)
               })
+              // Includes sealed result lines: replay only after the history reset.
               gw.hydrateSharedPrompts?.(r)
               hydrateLiveSessionInflight(r.inflight)
               gw.settleAttach?.(hold, r)

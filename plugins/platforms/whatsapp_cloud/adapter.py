@@ -40,6 +40,7 @@ except ImportError:
     httpx = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.platforms._shared import config_connected_extra
 from agent.i18n import t
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult, transcode_to_ogg_opus
@@ -343,9 +344,12 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             logger.warning(reject_log, resp.status_code, *reject_args, error_msg)
             return [], error_msg
         try:
-            return resp.json().get("messages") or [], None
+            messages = resp.json().get("messages") or []
+            if strict_transport() and (not messages or not messages[0].get('id')):
+                return [], 'WhatsApp Cloud message ACK missing'
+            return messages, None
         except Exception:
-            return [], None
+            return [], 'WhatsApp Cloud message ACK missing' if strict_transport() else None
 
     async def _post_message_result(self, payload: dict[str, Any], **log_kwargs) -> SendResult:
         """``_post_messages`` → SendResult with the first returned message id; guards disconnected state."""
@@ -362,6 +366,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             payload["context"] = {"message_id": reply_to}
         return payload
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a text message via Graph API. ``chat_id`` is the recipient's ``wa_id``."""
         if self._http_client is None:
@@ -604,15 +609,34 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         return result
 
     # ``**kwargs`` absorbs base-class args (e.g. ``metadata``) the Cloud API has no use for.
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0) -> SendResult:
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from urllib.request import url2pathname
+        result = SendResult(success=False, error="no images to send")
+        for url, caption in images:
+            if url.startswith('file://'):
+                result = await self.send_image_file(chat_id, url2pathname(url[7:]), caption=caption, metadata=metadata)
+            else:
+                result = await self.send_image(chat_id, url, caption=caption, metadata=metadata)
+            if not result.success:
+                return result
+        return result
+
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_from_path_or_link(chat_id, image_url, "image", caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_from_path_or_link(chat_id, image_path, "image", caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_from_path_or_link(chat_id, video_path, "video", caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None, **kwargs,
     ) -> SendResult:
@@ -620,6 +644,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             chat_id, file_path, "document", caption=caption, filename=file_name or os.path.basename(file_path), reply_to=reply_to,
         )
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
                          is_voice: Optional[bool] = None, **kwargs) -> SendResult:
         """Voice message: ``audio/ogg; codecs=opus`` renders as a voice bubble, so a

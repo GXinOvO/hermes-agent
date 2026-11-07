@@ -45,15 +45,31 @@ Cron-run sessions cannot recursively create more cron jobs. Hermes disables cron
 
 ## Admission recovery
 
-Agent-backed runs retain their fire identity until output and a durable delivery handoff are recorded.
+All scheduled runs, including existing script-only (`no_agent`) jobs, retain their fire identity
+and completed result until output and a durable delivery handoff are recorded. No opt-in is needed.
 The scheduler reconciles unfinished receipts on each tick, including after an owner restart. A known
-terminal result is handed to the delivery queue without running the agent again; duplicate handoffs
+terminal result is handed to the delivery queue without running the script or agent again; duplicate handoffs
 and bookkeeping use the original fire identity. Delivery interrupted after a send claim stays
 unknown and is not retried automatically.
 
-An interrupted execution or a prepared fire that cannot be found stays paused for operator review.
-Recovery never creates another admission for it. Paused jobs are not automatically resumed, even
-when their completed result is recovered. `hermes cron run` exits nonzero for a known synchronous
+Script runs also record preparation before executing. Preparation alone does not prove completion:
+an interrupted script with no saved result stays paused for review and is never automatically rerun.
+Recovery refuses a live owner and does not revive a failed or cancelled execution. If the job was
+deleted or its source/delivery definition changed, the old result remains in its original profile's
+`cron/admissions/` journal for review; it is not delivered using the new job definition.
+New receipts also bind script contents and resolved delivery addresses. Changing a home channel
+does not redirect an old saved result to the new channel.
+
+Monitor jobs keep detection and processing separate. Their observed hash is saved before analysis
+and is never rolled back to retry an uncertain run. The stored observation identifies the analysis
+execution and whether its result was consumed; a matching unchanged tick stays silent while an
+unfinished analysis remains pending or unknown. Only consumption of a successful saved analysis
+advances the processed observation. This does not imply that a queued notification was delivered.
+
+An admitted execution with an unverified outcome stays paused for operator review. A definite
+non-admission is recorded as a failed fire. Recovery never creates another admission for either.
+An operator's pause is preserved; recovery may lift only its own exact uncertainty pause when a
+completed receipt resolves it. `hermes cron run` exits nonzero for a known synchronous
 execution failure; background dispatch is not a terminal success/failure verdict.
 
 ## Creating scheduled tasks

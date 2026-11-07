@@ -114,12 +114,9 @@ _MARKER_FIELDS = ('_gateway_active_turn_session_key', '_gateway_active_turn_toke
 
 
 async def _hand_over_turn_marker(authority, admission_id, event):
-    """The executed turn's durable active-turn marker outlives the handler, as the in-process
-    turn's does on main, and is released only once its reply is in the delivery ledger (or nothing
-    is owed). A kill between the terminal commit and that ledger write then leaves a marked turn
-    whose persisted reply the next unclean boot ledgers and sends once, without new inference,
-    instead of a settled answer nobody owes. The waiting adapter lifecycle adopts it; a recovered
-    no-waiter reply keeps it until ``deliver_settled``; any other turn releases it here."""
+    """Hold the turn marker through settlement and hand it to its delivery lifecycle.
+    A sealed descriptor owns exact recovery; an unproven legacy marker grants no send.
+    No waiter: ``deliver_settled`` holds it; nothing owed: release it here."""
     adopter = _marker_adopters(authority).get(admission_id)
     if adopter is not None:
         _move_marker(event, adopter)
@@ -132,10 +129,8 @@ async def _hand_over_turn_marker(authority, admission_id, event):
 
 
 def _move_marker(source, target):
-    for name in _MARKER_FIELDS:
-        if hasattr(source, name):
-            setattr(target, name, getattr(source, name))
-            delattr(source, name)
+    from gateway.pending_final import move_event_state
+    move_event_state(source, target, _MARKER_FIELDS)
 
 
 def _held_markers(authority):
@@ -359,6 +354,8 @@ async def execute_admission(authority, ref, row):
                 if is_api or (row['payload'].get('finite') is True and not event.get_command()):
                     result = {'final_response': '', 'messages': [], 'failed': True, 'completed': False,
                               'error': response or 'The admitted turn failed.'}
+            from gateway.pending_final import capture_result
+            result = await capture_result(authority, row, event, route, response, result)
             # The drain commits this under the stream lock so no viewer reads `terminal`
             # before the completion event exists in the replay ring.
             authority.pending_results[row['admission_id']] = {
@@ -410,9 +407,12 @@ def _launch_body_if_launch_owner(authority):
 async def _admission_scope(authority, home, row, event, captured):
     """The execution scope, inside the adapter lifecycle the executor owns for a producer-admitted
     turn (``session_producer_lifecycle``; a no-op for every other admission)."""
+    from gateway.session_delivery_policy import automation_delivery_scope
     async with producer_turn(authority, row, event, captured):
+        # Witness persistence uses the same off-loop SQLite discipline as settlement.
         with await _execution_scope(authority, home):
-            yield
+            async with automation_delivery_scope(authority, row, event):
+                yield
 
 
 async def _execution_scope(authority, home):

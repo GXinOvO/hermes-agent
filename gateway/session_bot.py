@@ -508,7 +508,8 @@ def _result(authority, record):
     return {k: v for k, v in dict(status=status, delivery_id=record['delivery_id'],
         profile_home=record['profile_home'], session_id=record['session_id'],
         admission_id=record['admission_id'], message=record['message'], reply=reply,
-        retry_admission_id=retry_id, error=error, reason=reason).items() if v is not None}
+        retry_admission_id=retry_id, error=error, reason=reason,
+        sealed_cron_result_v1=record.get('sealed_cron_result_v1')).items() if v is not None}
 
 
 def _failure(authority, admission_id):
@@ -557,11 +558,12 @@ def _retry_identity(key):
 
 
 def _retry_eligible(authority, record):
-    """Exactly the main-lane gate (``tools.bot_failure_reasons.result_retry_action``): the original
-    admission SETTLED ``failed`` with a committed result whose error classifies transient (429/5xx/
-    context overflow). queued/started/unknown admissions never qualify — unknown execution is never
-    replayed — and the retry itself is never retried."""
-    if (record.get('retry') or {}).get('refused') or _retry_admission(authority, record):
+    """A failed provider turn may retry once only with a runtime no-tool-start witness.
+
+    Consume-only, missing evidence and queued/started/unknown claims never authorize inference.
+    The existing transient classifier applies after this safety gate, not as a side-effect proof.
+    """
+    if record.get('sealed_cron_result_v1') or (record.get('retry') or {}).get('refused') or _retry_admission(authority, record):
         return False
     row = get_session_admission(authority.db, admission_id=record['admission_id'])
     if row is None or row['status'] != 'terminal' or row['outcome'] != 'failed':
@@ -570,8 +572,17 @@ def _retry_eligible(authority, record):
     saved = admission_result(authority.db, record['admission_id'])
     if saved is None:
         return False
+    from gateway.session_delivery_policy import retry_execution_safe
+    if not retry_execution_safe(authority, row):
+        return False
+    # A provider error after any tool step is not proof that replay is safe. Positive
+    # execution evidence only vetoes retry; model-supplied policy flags grant nothing.
+    result = saved['result']
+    if any(isinstance(message, dict) and (message.get('role') == 'tool' or message.get('tool_calls'))
+           for message in result.get('messages', [])):
+        return False
     from tools.bot_failure_reasons import RETRY_NONE, result_retry_action
-    return result_retry_action(saved['result']) != RETRY_NONE
+    return result_retry_action(result) != RETRY_NONE
 
 
 async def _maybe_retry(authority, home, path, record):
@@ -613,6 +624,8 @@ async def _maybe_retry(authority, home, path, record):
         return
     event = MessageEvent(text=record['message'], source=live.source, internal=True,
         message_id=identity, metadata={'gateway_session_key': live.route, 'gateway_session_id': entry.session_id})
+    from gateway.session_delivery_policy import mark_bot_request
+    mark_bot_request(event)
     from gateway.session_automation import automation_notification_metadata
     event.metadata.update(automation_notification_metadata(record))
     if record.get('author') is not None:
@@ -806,7 +819,8 @@ def _delivery_params(authority, actor, params):
     """``(home, key, message, author, category)`` of one ``deliver``/``settle`` request: the
     delivery's full identity, validated the same way for both verbs."""
     home = _home(authority, actor, params.get('profile'))
-    if set(params) - {'id', 'profile', 'message', 'session_id', 'author', 'notification_category'}:
+    if set(params) - {'id', 'profile', 'message', 'session_id', 'author', 'notification_category',
+                      'sealed_cron_result_v1'}:
         raise RuntimeStoreError('invalid_params')
     from gateway.session_automation import automation_notification_metadata
     notification = automation_notification_metadata(params)
@@ -849,33 +863,8 @@ async def _receipt_answer(authority, actor, home, record, identity, retry_path=N
 
 
 async def _deliver(connection, params):
-    authority, actor = connection.authority, connection.actor
-    home, key, message, author, category = _delivery_params(authority, actor, params)
-    identity = (message, author, category)
-    authority._require_admission_open()
-    async with mailbox_lock(authority):
-        root, record = await read_receipt(home, key)
-        path = root / f'{key}.json'
-        answer = await _receipt_answer(authority, actor, home, record, identity, retry_path=path)
-        if answer is not None:
-            return answer
-        try:
-            await _migrate(authority, actor, home, root)
-            _, record = await read_receipt(home, key)
-            answer = await _receipt_answer(authority, actor, home, record, identity, retry_path=path)
-            if answer is not None:
-                return answer
-            if record is not None:
-                raise RuntimeStoreError('unknown_execution')
-            holder = authority.db.get_session_by_title('Bot Chat')
-            ref, live, entry = await _target(authority, actor)
-            pinned = params.get('session_id', entry.session_id)
-            if pinned != entry.session_id and not _moved_aside_by_this_door(authority, holder, pinned):
-                raise RuntimeStoreError('admission_conflict')
-            return await _admit(authority, actor, home, root, key, message, ref, live, entry, author=author,
-                                notification_category=category)
-        except RuntimeStoreError as exc:
-            raise await _held_by_another_writer(home, key, exc) or exc
+    from cron.sealed_bot_result import deliver_inside
+    return await deliver_inside(connection, params)
 
 
 async def settle(connection, params):
@@ -953,21 +942,24 @@ async def _held_by_another_writer(home, key, exc):
 
 
 async def _admit(authority, actor, home, root, key, message, ref, live, entry, author=None, legacy=None,
-                 notification_category='result'):
+                 notification_category='result', sealed=None):
     from gateway.session_automation import automation_notification_metadata
     notification = automation_notification_metadata({'notification_category': notification_category})
     path = root / f'{key}.json'
     event = MessageEvent(text=message, source=live.source, internal=True,
         message_id='bot:' + key, metadata={'gateway_session_key': live.route,
                                          'gateway_session_id': entry.session_id})
+    from cron.sealed_bot_result import bind_event, event_descriptor
+    from gateway.session_delivery_policy import mark_bot_request
+    bind_event(event, sealed) if sealed is not None else mark_bot_request(event)
     event.metadata.update(notification)
     if author is not None:
         event.metadata['turn_author'] = dict(author)
     # Pin the physical target before committing. A process death in this
     # two-store window leaves an explicit unknown record, never a new target.
-    record = dict(legacy or {}, delivery_id=key, profile_home=str(home), session_id=ref.session_id,
+    record: dict = dict(legacy or {}, delivery_id=key, profile_home=str(home), session_id=ref.session_id,
         principal_id=actor.subject, message=message, status='ambiguous')
-    record.update(notification)
+    record.update(notification, **event_descriptor(event))
     if 'session:operator' in actor.capabilities:
         record['operator'] = True  # admitted on operator access: its one retry keeps it (``_maybe_retry``)
     if author is not None:
@@ -991,6 +983,9 @@ async def _admit(authority, actor, home, root, key, message, ref, live, entry, a
             logging.getLogger(__name__).info('Bot Chat delivery %s refused (%s)', key, exc.reason)
             await refuse_pin(home, key)
         raise
+    if sealed is not None:
+        from gateway.session_bot_admission_receipt import snapshot
+        record['native_admission_v1'] = await asyncio.to_thread(snapshot, authority.db, receipt.admission_id)
     record.update(status='canonical', admission_id=receipt.admission_id)
     record.update(_result(authority, record))
     if record['status'] in {'queued', 'claimed'}:

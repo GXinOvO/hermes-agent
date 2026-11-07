@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 from agent.i18n import t
 from gateway.platforms.base import SendResult, cache_document_from_bytes_async, cache_image_from_bytes_async
+from gateway.strict_transport import single_attempt_transport, strict_transport
 
 logger = logging.getLogger("plugins.platforms.wecom.adapter")
 
@@ -306,6 +307,8 @@ class WeComMediaMixin:
                 logger.error("[%s] Failed to prepare outbound media %s: %s", self.name, media_source, exc)
             return SendResult(success=False, error=str(exc))
         if prepared["rejected"]:
+            if strict_transport():
+                return SendResult(success=False, error=prepared["reject_reason"])
             text = self.warning_text(f"⚠️ {prepared['reject_reason']}", caption or "")
             if text:
                 await self._send_followup_markdown(chat_id, text, reply_to=reply_to)
@@ -335,24 +338,58 @@ class WeComMediaMixin:
             followup = await self._send_followup_markdown(chat_id, text, reply_to=reply_to) if text else None
             raw[key] = followup.raw_response if followup else None
             raw[f"{key}_error"] = followup.error if followup and not followup.success else None
+            if strict_transport() and followup and not followup.success:
+                return followup
         return SendResult(success=True, message_id=self._payload_req_id(media_response) or uuid.uuid4().hex[:12], raw_response=raw)
 
+    @single_attempt_transport
+    async def send_animation(self, chat_id, animation_url, caption=None, reply_to=None, metadata=None):
+        return await self.send_image(chat_id, animation_url, caption=caption, reply_to=reply_to, metadata=metadata)
+
+    @single_attempt_transport
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+        if not strict_transport():
+            return await super().send_multiple_images(chat_id, images, metadata, human_delay)
+        from gateway.strict_transport import require_strict_transport
+        from urllib.request import url2pathname
+        calls = []
+        for url, caption in images:
+            if url.startswith("file://"):
+                method, kwargs = "send_image_file", {"image_path": url2pathname(url[7:])}
+            elif self._is_animation_url(url):
+                method, kwargs = "send_animation", {"animation_url": url}
+            else:
+                method, kwargs = "send_image", {"image_url": url}
+            require_strict_transport(self, method)
+            calls.append((method, dict(kwargs, caption=caption or None)))
+        result = SendResult(success=False, error="no images to send")
+        for method, kwargs in calls:
+            result = await getattr(self, method)(chat_id=chat_id, metadata=metadata, **kwargs)
+            if not result.success:
+                break
+        return result
+
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         result = await self._send_media_source(chat_id=chat_id, media_source=image_url, caption=caption, reply_to=reply_to)
-        if result.success or not self._looks_like_url(image_url):
+        if strict_transport() or result.success or not self._looks_like_url(image_url):
             return result
         logger.warning("[%s] Falling back to text send for image URL %s: %s", self.name, image_url, result.error)
         return await self.send(chat_id=chat_id, content=f"{caption}\n{image_url}" if caption else image_url, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_source(chat_id=chat_id, media_source=image_path, caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         logger.info("[%s] send_document called: chat=%s file=%s", self.name, chat_id, file_path)
         return await self._send_media_source(chat_id=chat_id, media_source=file_path, caption=caption, file_name=file_name, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_source(chat_id=chat_id, media_source=audio_path, caption=caption, reply_to=reply_to)
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         return await self._send_media_source(chat_id=chat_id, media_source=video_path, caption=caption, reply_to=reply_to)

@@ -36,6 +36,8 @@ from gateway.platforms.base import (
     cache_audio_from_bytes_async, cache_document_from_bytes_async, cache_image_from_bytes_async,
 )
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.strict_transport import require_strict_transport, single_attempt_transport, strict_transport
+from .strict_delivery import post_options, preflight_file, preflight_media, validate_ack
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
 from gateway.platforms._shared import env_is_connected, extra_or_secret as _extra_or_env, get_scoped_secret as _wx_secret
@@ -275,12 +277,17 @@ async def _api_request(
     session: aiohttp.ClientSession, method: str, *, base_url: str, endpoint: str, headers: dict[str, str], timeout_ms: int, body: Optional[str] = None,
 ) -> dict[str, Any]:
     async def _do() -> dict[str, Any]:
-        kwargs = {"data": body} if body is not None else {}
+        kwargs: dict[str, Any] = {"data": body} if body is not None else {}
+        if method == "POST":
+            kwargs.update(post_options())
         async with getattr(session, method.lower())(f"{base_url.rstrip('/')}/{endpoint}", headers=headers, **kwargs) as response:
             raw = await response.text()
-            if not response.ok:
+            if not response.ok or (strict_transport() and response.status >= 300):
                 raise RuntimeError(f"iLink {method} {endpoint} HTTP {response.status}: {raw[:200]}")
-            return json.loads(raw)
+            result = json.loads(raw)
+            if method == "POST":
+                validate_ack(result)
+            return result
     return await asyncio.wait_for(_do(), timeout=timeout_ms / 1000)
 
 
@@ -337,12 +344,15 @@ async def _get_upload_url(
     payload = {
         "filekey": filekey, "media_type": media_type, "to_user_id": to_user_id, "rawsize": rawsize, "rawfilemd5": rawfilemd5,
         "filesize": filesize, "no_need_thumb": True, "aeskey": aeskey_hex}
-    return await _api_post(session, base_url=base_url, endpoint=EP_GET_UPLOAD_URL, payload=payload, token=token, timeout_ms=API_TIMEOUT_MS)
+    response = await _api_post(session, base_url=base_url, endpoint=EP_GET_UPLOAD_URL, payload=payload, token=token, timeout_ms=API_TIMEOUT_MS)
+    if strict_transport() and any(response.get(key, 0) != 0 for key in ("ret", "errcode")):
+        raise RuntimeError(f"iLink getUploadUrl rejected: {response}")
+    return response
 
 
 async def _upload_ciphertext(session: aiohttp.ClientSession, *, ciphertext: bytes, upload_url: str) -> str:
     async def _do() -> str:
-        async with session.post(upload_url, data=ciphertext, headers={"Content-Type": "application/octet-stream"}) as response:
+        async with session.post(upload_url, data=ciphertext, headers={"Content-Type": "application/octet-stream"}, **post_options()) as response:
             encrypted_param = response.headers.get("x-encrypted-param") if response.status == 200 else None
             if encrypted_param:
                 await response.read()
@@ -993,7 +1003,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     ret, errcode = (resp.get("ret"), resp.get("errcode")) if resp and isinstance(resp, dict) else (None, None)
                     if (ret is not None and ret != 0) or (errcode is not None and errcode != 0):
                         errmsg = resp.get("errmsg") or resp.get("msg")
-                        if _is_session_expired(resp, ret, errcode) and not retried_without_token and context_token:
+                        if _is_session_expired(resp, ret, errcode) and not retried_without_token and context_token and not strict_transport():
                             retried_without_token, context_token = True, None
                             self._token_store._cache.pop(self._token_store._key(self._account_id, chat_id), None)
                             logger.warning("[%s] session expired for %s; retrying without context_token", self.name, _safe_id(chat_id))
@@ -1011,7 +1021,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                                 f"iLink sendmessage rate limited (ret={ret} errcode={errcode} errmsg={errmsg or 'rate limited'}); "
                                 f"cooldown active for {self._rate_limit_cooldown_remaining():.1f}s")
                             break
-                        if attempt >= self._send_chunk_retries:
+                        if strict_transport() or attempt >= self._send_chunk_retries:
                             break
                         attempt += 1
                         wait = self._send_chunk_retry_delay_seconds * 3  # 3x backoff for rate limit
@@ -1023,7 +1033,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     return
                 except Exception as exc:
                     last_error = exc
-                    if attempt >= self._send_chunk_retries:
+                    if strict_transport() or attempt >= self._send_chunk_retries:
                         break
                     attempt += 1
                     wait = self._send_chunk_retry_delay_seconds * attempt
@@ -1034,6 +1044,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             assert last_error is not None
             raise last_error
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         if not self._send_session or not self._token:
             return SendResult(success=False, error="Not connected")
@@ -1043,16 +1054,32 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         # profile's scope: Docker MEDIA translation infers the sandbox from the active profile (#109024).
         with self._media_delivery_scope(self.build_source(chat_id=chat_id)):
             media_files, cleaned_content = self.extract_media(content)
-            local_files, final_content = self.extract_local_files(self.extract_images(cleaned_content)[1])
+            images, imageless_content = self.extract_images(cleaned_content)
+            local_files, final_content = self.extract_local_files(imageless_content)
             deliveries = [(p, v, "media") for p, v in self.filter_media_delivery_paths(media_files)]
             deliveries += [(p, False, "local file") for p in self.filter_local_delivery_paths(local_files)]
         try:
+            plan = []
             for path, is_voice, label in deliveries:
                 ext = Path(path).suffix.lower()
                 sender, key = next(((m, k) for exts, m, k in _OUTBOUND_BY_EXT if is_voice or ext in exts), ("send_document", "file_path"))
+                plan.append((path, label, sender, key))
+            if strict_transport():
+                if images:
+                    raise ValueError("strict media preflight: embedded images require send_image")
+                if len(deliveries) != len(media_files) + len(local_files):
+                    raise ValueError("strict media preflight: rejected media path")
+                preflight_media(self, [(path, sender) for path, _, sender, _ in plan])
+            for path, label, sender, key in plan:
                 try:
-                    await getattr(self, sender)(chat_id=chat_id, metadata=metadata, **{key: path})
+                    result = await getattr(self, sender)(chat_id=chat_id, metadata=metadata, **{key: path})
+                    if strict_transport():
+                        if not isinstance(result, SendResult) or not result.success:
+                            return result if isinstance(result, SendResult) else SendResult(success=False, error="Media ACK unconfirmed")
+                        last_message_id = result.message_id
                 except Exception as exc:
+                    if strict_transport():
+                        raise
                     logger.warning("[%s] %s delivery failed for %s: %s", self.name, label, path, exc)
             chunks = [c for c in self._split_text(self.format_message(final_content)) if c and c.strip()]
             for idx, chunk in enumerate(chunks):
@@ -1092,7 +1119,10 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
     async def stop_typing(self, chat_id: str) -> None:
         await self._set_typing(chat_id, TYPING_STOP, "stop")
 
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: str, reply_to: Optional[str] = None, metadata=None) -> SendResult:
+        if strict_transport():
+            require_strict_transport(self, "send_document")
         cleanup = image_url.startswith(("http://", "https://"))
         file_path = await self._download_remote_media(image_url) if cleanup else image_url.replace("file://", "")
         if not cleanup and not os.path.isabs(file_path):
@@ -1104,7 +1134,10 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                 with contextlib.suppress(OSError):
                     os.unlink(file_path)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to=None, metadata=None, **kwargs) -> SendResult:
+        if strict_transport():
+            require_strict_transport(self, "send_document")
         return await self.send_document(chat_id=chat_id, file_path=image_path, caption=caption, metadata=metadata)
 
     async def _send_file_result(self, chat_id: str, path: str, caption: str, label: str, **kwargs: Any) -> SendResult:
@@ -1116,15 +1149,18 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             logger.error("[%s] %s failed to=%s: %s", self.name, label, _safe_id(chat_id), exc)
             return SendResult(success=False, error=str(exc))
 
+    @single_attempt_transport
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None, **kwargs,
     ) -> SendResult:
         return await self._send_file_result(chat_id, file_path, caption or "", "send_document")
 
+    @single_attempt_transport
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to=None, metadata=None) -> SendResult:
         return await self._send_file_result(chat_id, video_path, caption or "", "send_video")
 
+    @single_attempt_transport
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to=None, metadata=None, **kwargs) -> SendResult:
         # Native outbound voice bubbles are not proven-working upstream; a file attachment at least plays (even .silk).
         return await self._send_file_result(chat_id, audio_path, caption or self.warning_text(t("platform.weixin.voice_as_attachment")), "send_voice", force_file_attachment=True)
@@ -1141,15 +1177,17 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     async def _send_file(self, chat_id: str, path: str, caption: str, force_file_attachment: bool = False) -> str:
         assert self._send_session is not None and self._token is not None
+        if strict_transport():
+            preflight_file(path)
         plaintext = Path(path).read_bytes()
         media_type, item_builder = self._outbound_media_builder(path, force_file_attachment=force_file_attachment)
         filekey, aes_key = secrets.token_hex(16), secrets.token_bytes(16)
         rawsize, rawfilemd5 = len(plaintext), hashlib.md5(plaintext).hexdigest()
+        ciphertext = _aes128_ecb_encrypt(plaintext, aes_key)
         upload_response = await _get_upload_url(
             self._send_session, base_url=self._base_url, token=self._token, to_user_id=chat_id, media_type=media_type, filekey=filekey,
             rawsize=rawsize, rawfilemd5=rawfilemd5, filesize=((rawsize + 16) // 16) * 16, aeskey_hex=aes_key.hex())
         upload_param = str(upload_response.get("upload_param") or "")
-        ciphertext = _aes128_ecb_encrypt(plaintext, aes_key)
         # Prefer upload_full_url (direct CDN), else construct from upload_param. Both use POST — PUT 404s on the CDN.
         upload_url = str(upload_response.get("upload_full_url") or "") or (upload_param and (
             f"{self._cdn_base_url.rstrip('/')}/upload?encrypted_query_param={quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"))
@@ -1178,7 +1216,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     break
                 # Same stale-session fallback as _send_text_chunk: re-send once without context_token. Clearing the
                 # token also covers the remaining item lists (caption, then media) and bounds this loop.
-                if _is_session_expired(resp, ret, errcode) and context_token:
+                if _is_session_expired(resp, ret, errcode) and context_token and not strict_transport():
                     context_token = None
                     self._token_store._cache.pop(self._token_store._key(self._account_id, chat_id), None)
                     logger.warning("[%s] session expired for %s; re-sending media without context_token", self.name, _safe_id(chat_id))

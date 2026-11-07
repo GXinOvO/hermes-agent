@@ -66,7 +66,13 @@ def prepare_result(row, response, outcome, result=None):
         value['completed'] = False
     # Compact before redacting, so the walk covers this turn's output, not every earlier turn.
     from hermes_state_terminal import compact_result
-    return outcome, _redacted(compact_result(result, user_message=row['payload'].get('text')))
+    from gateway.pending_final import prepared_value
+    descriptor = prepared_value(value.get('_pending_final_v1'))
+    clean = {**result, 'result':{k:v for k,v in value.items() if k != '_pending_final_v1'}}
+    stored = _redacted(compact_result(clean, user_message=row['payload'].get('text')))
+    if outcome == 'completed' and descriptor is not None:
+        stored['_pending_final_v1'] = descriptor
+    return outcome, stored
 
 
 def finish_result(db, *, epoch, row, response, outcome, result=None, prepared=None, transfers=None):
@@ -90,6 +96,10 @@ def finish_result(db, *, epoch, row, response, outcome, result=None, prepared=No
             result = load_result(saved[0])
             return dict(current), result['result'].get('final_response') or ''
     outcome, stored = prepared or prepare_result(row, response, outcome, result)
+    stored = dict(stored)
+    descriptor = stored.pop('_pending_final_v1', None)
+    from gateway.pending_final_identity import FIELD
+    stored.pop(FIELD, None)
     # A turn the owner's restart/stop interrupted: its reason commits as a Hermes transcript notice
     # in this same write, so a viewer that reconnects after the restart reads why (#134889 GW-21);
     # the live ``message.complete.warning`` carries the same copy. A retry that finds the row
@@ -101,8 +111,13 @@ def finish_result(db, *, epoch, row, response, outcome, result=None, prepared=No
     notice, display_metadata = owner_stop_notice(result, outcome, row), None
     if notice is None and (refusal := gateway_refusal_boundary(result, outcome)) is not None:
         notice, display_metadata = refusal
-    write = None if notice is None else (lambda conn, _current: close_discarded_turn(
-        db, conn, row, notice, replace_after=row.get('transcript_mark'), display_metadata=display_metadata))
+    def write(conn, current):
+        if notice is not None:
+            close_discarded_turn(db, conn, row, notice, replace_after=row.get('transcript_mark'),
+                                 display_metadata=display_metadata)
+        if descriptor is not None:
+            from gateway.pending_final import persist
+            stored[FIELD] = persist(conn, current, descriptor, db_path=db.db_path)
     settled = settle_session_input(db, epoch=epoch, admission_id=row['admission_id'],
         generation=row['generation'], outcome=outcome, result=stored, _transfers=transfers,
         _terminal_write=write)

@@ -819,6 +819,8 @@ def _live_session_payload(
                        ("pending_connection", _pending_connection_request_payload(sid))):
         if value:
             payload[key] = value
+    from tui_gateway.side_background_results import attach_results
+    attach_results(payload, session)
     return _attach_todo_state(payload, session)
 
 

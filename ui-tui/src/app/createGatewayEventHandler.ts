@@ -31,6 +31,7 @@ import { bootSeededPin, invalidateBootBackground, writeBootTheme } from '../lib/
 import { defaultThemeForCurrentBackground, fromSkin, skinIsLight, type Theme, themeToneHex } from '../theme.js'
 import type { Msg, SubagentProgress } from '../types.js'
 
+import { handleBackgroundResultEvent } from './backgroundResults.js'
 import { applyConnectionRequest, applyConnectionUpdate } from './connectionOperationStore.js'
 import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
 import { createBillingVerificationPresenter, createFreeTierChallengePresenter } from './gatewayBrowserLinks.js'
@@ -421,13 +422,6 @@ export function syncThemeToTerminalBackground(): void {
   }, 1500).unref?.()
 }
 
-const dropBgTask = (taskId: string) =>
-  patchUiState(state => {
-    const next = new Set(state.bgTasks)
-    next.delete(taskId)
-
-    return { ...state, bgTasks: next }
-  })
 
 const pushUnique =
   (max: number) =>
@@ -1178,7 +1172,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
   // Shared-control settles and the skills.changed catalog refetch need no per-event state.
   const handledBeforeSwitch = (ev: AnyGatewayEvent) =>
-    settleSharedPrompt(ev) || refreshSlashCatalogOnSkillsChange(ev, rpc, setCatalog)
+    settleSharedPrompt(ev) || refreshSlashCatalogOnSkillsChange(ev, rpc, setCatalog) || handleBackgroundResultEvent(ev, ctx.transcript)
 
   return (ev: AnyGatewayEvent) => {
     const sid = getUiState().sid
@@ -1188,6 +1182,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     }
 
     const current = getUiState().info
+
     const genericError = isGenericErrorEvent(ev)
 
     if (fenceLifecycleEvent(ev, current, genericError)) {
@@ -1652,25 +1647,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'approval.request':
         openCanonicalApproval(ev, setStatus, ringPromptBell)
-
-        return
-
-      case 'background.complete':
-        if (!ev.payload) {
-          return
-        }
-
-        dropBgTask(ev.payload.task_id)
-        sys(`[bg ${ev.payload.task_id}] ${ev.payload.text}`)
-
-        return
-
-      case 'btw.complete':
-        if (!ev.payload) {
-          return
-        }
-
-        sys(`[btw${ev.payload.question ? ` "${ev.payload.question}"` : ''}] ${ev.payload.text}`)
 
         return
       case 'review.summary': {

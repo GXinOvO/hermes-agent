@@ -36,6 +36,7 @@ except ImportError:
     web = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.tcp_site import start_tcp_site
@@ -314,6 +315,15 @@ class WebhookAdapter(BasePlatformAdapter):
         self._mark_disconnected()
         logger.info("[webhook] Disconnected")
 
+    async def _prepare_strict_transport(self, method, *, chat_id, **kwargs):
+        from gateway.platforms.webhook_delivery import prepare_strict_delivery, retained_destination
+        try:
+            delivery = await asyncio.to_thread(retained_destination, self, chat_id)
+            await prepare_strict_delivery(self, delivery, kwargs.get('content', ''))
+        except Exception as exc:
+            raise RuntimeError('strict webhook destination unavailable or unverified') from exc
+
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Deliver the agent's response to the destination stored for its opaque ``chat_id`` —
@@ -330,6 +340,10 @@ class WebhookAdapter(BasePlatformAdapter):
         except Exception:
             logger.warning("[webhook] Destination unavailable for %s", chat_id, exc_info=True)
             return SendResult(success=False, error="Webhook destination unavailable or unauthorized")
+        from gateway.strict_transport import strict_transport
+        if strict_transport():
+            from gateway.platforms.webhook_delivery import prepare_strict_delivery
+            await prepare_strict_delivery(self, delivery, content)
         return await self._deliver_to(delivery, chat_id, content)
 
     async def _deliver_to(self, delivery: dict[str, Any], chat_id: str, content: str) -> SendResult:
@@ -338,6 +352,10 @@ class WebhookAdapter(BasePlatformAdapter):
             logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
             return SendResult(success=True)
         if deliver_type == "github_comment":
+            from gateway.strict_transport import strict_transport
+            if strict_transport():
+                from gateway.platforms.webhook_delivery import send_github_comment
+                return await send_github_comment(self, content, delivery)
             return await self._deliver_github_comment(content, delivery)
         if self.gateway_runner and _is_known_platform(deliver_type):
             return await self._deliver_cross_platform(deliver_type, content, delivery)
@@ -1035,7 +1053,10 @@ class WebhookAdapter(BasePlatformAdapter):
                     return SendResult(success=False, error=f"No chat_id or home channel for {platform_name}")
                 chat_id = home.chat_id
             thread_id = extra.get("message_thread_id") or extra.get("thread_id")  # Telegram forum topics
-            result = await adapter.send(chat_id, content, metadata={"thread_id": thread_id} if thread_id else None)
+            from gateway.strict_transport import strict_transport, strict_call
+            metadata = {"thread_id": thread_id} if thread_id else None
+            result = (await strict_call(adapter, 'send', chat_id=chat_id, content=content, metadata=metadata)
+                if strict_transport() else await adapter.send(chat_id, content, metadata=metadata))
             if result.success:
                 self._mirror_delivery(platform_name, str(chat_id), content, delivery, thread_id)
             return result

@@ -4,6 +4,7 @@ Two lanes per chat: normal, and a control lane (approval prompts, finalize frame
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from typing import Dict
@@ -49,7 +50,9 @@ class ChatSendQueueMixin:
         queue = queues[key]
         logger.debug("[%s] Enqueuing send for chat %s (lane=%s, qsize=%d)", self.name, key, lane, queue.qsize())
         future = asyncio.get_running_loop().create_future()
-        await queue.put((coro_factory, future))
+        # A long-lived worker may belong to a previous human turn. Carry each
+        # item's strict scope instead of inheriting the worker's creation context.
+        await queue.put((coro_factory, future, contextvars.copy_context()))
         return await future
 
     async def _send_worker(self, chat_key: str, is_control: bool) -> None:
@@ -59,7 +62,7 @@ class ChatSendQueueMixin:
             logger.debug("[%s] Normal send worker started for chat %s", self.name, chat_key)
         try:
             while True:
-                coro_factory, future = await queue.get()
+                coro_factory, future, context = await queue.get()
                 try:
                     wait = self._bucket_try_consume(chat_key, is_control)
                     if wait > 0:
@@ -67,7 +70,7 @@ class ChatSendQueueMixin:
                             logger.debug("[%s] Normal worker rate-limited for chat %s, waiting %.1fs", self.name, chat_key, wait)
                         await asyncio.sleep(wait)
                         self._bucket_try_consume(chat_key, is_control)  # re-consume after wait
-                    result = await coro_factory()
+                    result = await asyncio.create_task(coro_factory(), context=context)
                     if not future.done():
                         future.set_result(result)
                 except Exception as exc:
@@ -77,6 +80,6 @@ class ChatSendQueueMixin:
                     queue.task_done()
         except asyncio.CancelledError:
             while not queue.empty():
-                _, future = queue.get_nowait()
+                _, future, _ = queue.get_nowait()
                 if not future.done():
                     future.set_exception(RuntimeError("WeCom adapter shutting down"))

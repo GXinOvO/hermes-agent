@@ -1355,26 +1355,8 @@ def _reclaim_fds_best_effort() -> None:
 
 def drain_delivery_queue(adapters, loop) -> int:
     """Send queued worker results through this gateway's live adapters."""
-    from cron.delivery_queue import _path, drain
-
-    # Only restart-safe workers create the queue file.  Every gateway (macOS,
-    # Windows, launchd, Docker) runs this housekeeping tick, so skip the sqlite
-    # open/create entirely until a worker has actually queued something.
-    if not _path().exists():
-        return 0
-    def send(queued_job, queued_content, queued_for_failure):
-        error = _deliver_result(
-            queued_job, queued_content, adapters=adapters, loop=loop,
-            for_failure=queued_for_failure,
-        )
-        # The ping left the process: book the incident alerted. A notice every target hid
-        # (warning notifications suppressed) is a durable disposition, not an alert.
-        if (not error and queued_for_failure
-                and not queued_job.get("_notification_all_targets_suppressed")):
-            _mark_incident_alerted(queued_job.get("_failure_incident_id"))
-        return error
-
-    return drain(send)
+    from cron.strict_delivery import drain_queue
+    return drain_queue(adapters, loop)
 
 
 _DEFAULT_SCRIPT_TIMEOUT = 3600  # seconds (1 hour)
@@ -1584,7 +1566,7 @@ def _apply_monitor_gate(
         # Unchanged: silent no_change tick (ledger doc kept; SILENT_MARKER blocks delivery).
         logger.info("Job '%s': monitor output unchanged — suppressing agent run", job_id)
         return (
-            True, f"{header}**Status:** no_change (agent run suppressed)\n", SILENT_MARKER, None,
+            True, f"{header}**Status:** no_change (agent run suppressed; analysis {_mon.analysis_status})\n", SILENT_MARKER, None,
         ), extra_prompt, None
     # Changed (or first run): pass monitor output through the runtime-data seam. Keep any manual
     # per-run prompt separate: it remains user input and is therefore still strict-scanned.
@@ -2539,7 +2521,10 @@ def run_job(
     owner_execution = current_execution()
     if owner_execution is not None and owner_execution[2:] != (job['id'], execution_id):
         owner_execution = None
-    if not job.get("no_agent") and owner_execution is None:
+    if job.get("no_agent"):
+        from cron.scheduler_results import run_script_job
+        return run_script_job(job, execution_id=execution_id, cancel_event=cancel_event)
+    if owner_execution is None:
         from cron.scheduler_authority import run_canonical_job
         return run_canonical_job(job, extra_prompt=extra_prompt, cancel_event=cancel_event,
                                  execution_id=execution_id)
@@ -2802,6 +2787,9 @@ def run_one_job(
             stage = "failed after handoff" if post_handoff else "dispatch failed"
             error = f"Restart-safe cron worker {stage}: {handoff_error}"
             if post_handoff:
+                from cron.scheduler_results import completed_worker_result_pending
+                if completed_worker_result_pending(job, execution_id):
+                    return False
                 from cron.scheduler_worker_failure import record_unknown_worker_outcome
 
                 if record_unknown_worker_outcome(job, error=str(handoff_error), adapters=adapters, loop=loop):
@@ -2836,6 +2824,9 @@ def run_one_job(
                     delivery_outcome=delivery_outcome)
             return True
         if handed_off:
+            from cron.scheduler_results import completed_worker_result_pending
+            if completed_worker_result_pending(job, execution_id):
+                return False
             from cron.scheduler_worker_failure import record_unknown_worker_outcome
 
             record_unknown_worker_outcome(job, adapters=adapters, loop=loop)
@@ -3097,7 +3088,7 @@ def _save_compose_deliver(
         and not _resolve_delivery_targets(job, for_failure=not d.success)
     )
     execution_id = job.get('execution_id')
-    if execution_id and not job.get('no_agent'):
+    if execution_id:
         from cron.delivery_queue import enqueue
         # Nothing to send: an origin-less job is ``not_configured``, never a queued "delivery".
         if d.unresolved_origin or _normalize_deliver_value(
@@ -3267,6 +3258,7 @@ def _run_one_job_body(
 
     delivery_attempted = False
     delivery_error = None
+    completed_result_ready = False
 
     _fire_scope_tokens = None
     _terminal_scope_token = None
@@ -3332,6 +3324,9 @@ def _run_one_job_body(
         if outcome is None:  # an operator cancel stopped it and is already booked
             return True
         success, output, final_response, error = outcome
+        from cron.scheduler_results import record_completed_result
+        record_completed_result(job, execution_id, outcome)
+        completed_result_ready = get_execution(execution_id) is not None
 
         if _fire_claim_ownership_lost():
             _teardown_deferred()
@@ -3391,13 +3386,8 @@ def _run_one_job_body(
         return finish_completed_run(d, fire_owner, execution_id)
 
     except BaseException as e:
-        from cron.scheduler_authority import CronExecutionUnknown
-        if isinstance(e, CronExecutionUnknown):
-            from cron.executions import give_up_execution
-            from cron.scheduler_authority import pause_for_unknown
-            pause_for_unknown(job["id"], execution_id, str(e))
-            give_up_execution(execution_id, reason=str(e))
-            logger.error("Cron %s paused with unverified admission: %s", job["id"], e)
+        from cron.scheduler_results import defer_unverified_run
+        if defer_unverified_run(job, execution_id, e, completed_result_ready, fence):
             return False
         # BaseException, not Exception: CancelledError/KeyboardInterrupt/SystemExit propagate here.
         # Without mark_job_run(False) a finite one-shot is wedged: claim_dispatch consumed

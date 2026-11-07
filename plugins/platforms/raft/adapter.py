@@ -36,6 +36,7 @@ except ImportError:
 
 sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult, merge_pending_message_event
 from gateway.platforms.event import MessageEvent, MessageType
@@ -408,8 +409,23 @@ class RaftAdapter(BasePlatformAdapter):
             # the TERM to the leader alone left in its group.
             release_process_group_once_empty(proc.pid, proc=proc, timeout=0)
 
+    async def _prepare_strict_transport(self, method, **kwargs):
+        import asyncio
+        from plugins.platforms.raft.strict_delivery import prepare
+        return await asyncio.to_thread(prepare, self, method, **kwargs)
+
+    def _strict_transport_binding(self, plan):
+        from plugins.platforms.raft.strict_delivery import binding
+        return binding(plan)
+
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
-                   metadata: Optional[dict[str, Any]] = None) -> SendResult:
+                   metadata: Optional[dict[str, Any]] = None, *, prepared_plan=None,
+                   execution_id=None, claim_id=None) -> SendResult:
+        if strict_transport():
+            from plugins.platforms.raft.strict_delivery import send
+            return await send(self, chat_id, content, reply_to, metadata, prepared_plan=prepared_plan,
+                              execution_id=execution_id, claim_id=claim_id)
         logger.debug("[raft] adapter send is a no-op; agent delivers via raft CLI")
         return SendResult(success=True)
 

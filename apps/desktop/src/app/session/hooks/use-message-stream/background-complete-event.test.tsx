@@ -58,6 +58,14 @@ describe('background.complete event', () => {
     expect(stream.text()).toBe('the answer')
   })
 
+  it('does not append the same durable completion after reconnect', () => {
+    emit('background.complete', { task_id: 'bg_once', text: 'saved answer' })
+    emit('background.complete', { task_id: 'bg_once', text: 'saved answer' })
+
+    expect(stream.state(SID).messages).toHaveLength(1)
+    expect(stream.text()).toBe('[bg bg_once]\nsaved answer')
+  })
+
   it('drops an empty completion instead of appending a blank line', () => {
     emit('background.complete', { task_id: 'bg_1', text: '   ' })
 

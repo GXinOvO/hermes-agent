@@ -17,6 +17,7 @@ import { isSessionGone } from '@/store/session-gone-latch'
 import { noteSessionEvent } from '@/store/session-states'
 import { setSessionDraftingTool } from '@/store/tool-drafting'
 
+import { handleBackgroundResultEvent } from './background-results'
 import { handleDeferredPickEvent } from './deferred-pick'
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import { handleFreeTierEvent } from './free-tier'
@@ -95,7 +96,8 @@ const HANDLERS: GatewayEventHandler[] = [
   handleToolEvent,
   handleInputRequestEvent,
   handleDesktopBridgeEvent,
-  handleStatusEvent
+  handleStatusEvent,
+  handleBackgroundResultEvent
 ]
 
 type ExecutionAuthorities = Parameters<typeof acceptExecutionEvent>[0]

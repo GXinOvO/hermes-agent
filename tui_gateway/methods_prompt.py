@@ -1199,7 +1199,8 @@ def _(rid, params: dict) -> dict:
                     agent.close()
         return _final_response_text(result)
 
-    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body)
+    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body,
+                             inputs={"text": text})
 
 
 @method("prompt.btw")
@@ -1221,7 +1222,8 @@ def _(rid, params: dict) -> dict:
             text, snapshot, parent_agent=agent, main_runtime=main_runtime) or ""
 
     return _spawn_side_agent(
-        rid, session, task_id, parent, "btw.complete", body, extra={"question": text})
+        rid, session, task_id, parent, "btw.complete", body, extra={"question": text},
+        inputs={"text": text, "history": snapshot})
 
 
 @method("preview.restart")
@@ -1268,7 +1270,7 @@ def _(rid, params: dict) -> dict:
     # Pin the validated preview cwd, else the parent workspace — never an invalid path.
     return _spawn_side_agent(
         rid, session, task_id, parent, "preview.restart.complete", body,
-        cwd=preview_cwd, cleanup=cleanup)
+        cwd=preview_cwd, cleanup=cleanup, inputs={"prompt": prompt, "history": parent_history})
 
 
 @method("clarify.lock")
@@ -1431,39 +1433,13 @@ def _validated_preview_cwd(cwd: str) -> str:
 
 
 def _spawn_side_agent(
-    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None):
+    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None, inputs=None):
     """Run ``body()`` on a daemon thread under the session's profile home (the ContextVar
     doesn't propagate across threads) and cwd; its text — or ``error: <exc>`` — lands on
     ``parent`` as ``event`` with ``task_id`` (+ ``extra``).  Replies ``{task_id}``."""
-    extra = extra or {}
-
-    def run():
-        # ``parent`` is the caller's live sid (``_sess`` admitted it): bind it as the UI owner so
-        # prompts this worker raises (skill secrets) reach the session whose profile it runs under.
-        session_tokens = _set_session_context(
-            task_id, cwd=(cwd or _session_cwd(session)), ui_session_id=parent)
-        # Bug #50233: ephemeral agent threads don't inherit the session's ContextVar scopes (set on the
-        # session-create thread), so a side turn under a non-default profile ran against the wrong home.
-        # Bind the profile's home + secrets + terminal policy for the whole body, exactly as a prompt turn
-        # does: home alone left terminal_tool on the launch process's ambient TERMINAL_* (a docker
-        # secondary's background/btw/preview agent ran local). NOTE: we deliberately do NOT close this
-        # agent through task-wide process cleanup — the whole point of preview.restart is to leave a
-        # background server running under this task_id, and AIAgent.close() would kill every process for
-        # the task_id and tear down the very server the restart just started.
-        try:
-            with _session_profile_runtime_scope(session):
-                text = body()
-            _emit(event, parent, {"task_id": task_id, **extra, "text": text})
-        except Exception as e:
-            _emit(event, parent, {"task_id": task_id, **extra, "text": f"error: {e}"})
-        finally:
-            if cleanup is not None:
-                cleanup()
-            _clear_session_context(session_tokens)
-
-    if _start_session_work(run, name=f"side-agent-{task_id}") is None:
-        return _err(rid, 5035, "backend is retiring; reconnect to continue")
-    return _ok(rid, {"task_id": task_id})
+    from tui_gateway.side_background_results import spawn
+    return spawn(rid, session, task_id, parent, event, body, cwd=cwd, extra=extra,
+                 cleanup=cleanup, inputs=inputs)
 
 
 def _side_agent_args(rid, params, prefix):

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
 
+from gateway.strict_transport import strict_transport
 from .constants import FILE_UPLOAD_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,8 @@ class ChunkedUploader:
         # Hashing is blocking I/O → executor.
         hashes = await asyncio.get_running_loop().run_in_executor(None, _compute_file_hashes, file_path, job.file_size)
         prepare = await self._prepare(job, file_type, file_name, hashes)
+        if strict_transport() and len(prepare.parts) != 1:
+            raise RuntimeError("strict QQ multipart upload unverified")
         max_concurrent = min(prepare.concurrency, _MAX_CONCURRENT_PARTS)
         job.upload_id, job.block_size, job.total_parts = prepare.upload_id, prepare.block_size, len(prepare.parts)
         job.retry_timeout = min(prepare.retry_timeout if prepare.retry_timeout > 0 else _PART_FINISH_DEFAULT_TIMEOUT,
@@ -194,6 +197,8 @@ class ChunkedUploader:
                             label: str, failure_label: str) -> Any:
         """Run *attempt_fn* up to ``max_retries + 1`` times with exponential backoff."""
         last_exc: Exception | None = None
+        if strict_transport():
+            max_retries = 0
         for attempt in range(max_retries + 1):
             try:
                 return await attempt_fn()
@@ -236,7 +241,7 @@ class ChunkedUploader:
                 await self._post(job, "upload_part_finish", body)
                 return
             except RuntimeError as exc:
-                if f"{_BIZ_CODE_PART_RETRYABLE}" not in str(exc):
+                if strict_transport() or f"{_BIZ_CODE_PART_RETRYABLE}" not in str(exc):
                     raise
                 elapsed = loop.time() - start
                 if elapsed >= job.retry_timeout:

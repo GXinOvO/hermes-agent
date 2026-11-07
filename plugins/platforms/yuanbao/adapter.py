@@ -42,6 +42,7 @@ except ImportError:
     websockets = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.strict_transport import single_attempt_transport, strict_transport
 from agent.i18n import t
 from gateway.platforms.base import (
     BasePlatformAdapter, SendResult,
@@ -2456,27 +2457,8 @@ class MessageSender:
         return SendResult(success=False, error=raw.get("error", "Unknown error"))
 
     async def send_text_chunk(self, chat_id: str, text: str, reply_to: Optional[str] = None, retry: int = 3, group_code: str = "") -> SendResult:
-        """Send a single text chunk with retry (exponential backoff: 1s, 2s, 4s)."""
-        adapter = self._adapter
-        last_error: str = "Unknown error"
-        for attempt in range(retry):
-            try:
-                if chat_id.startswith("group:"):
-                    msg_body = self._build_msg_body_with_mentions(text, chat_id[len("group:"):])
-                else:
-                    msg_body = [_text_elem(text)]
-                raw = await self._send_msg_body(chat_id, msg_body, reply_to, group_code)
-                if raw.get("success"):
-                    return self._to_send_result(raw)
-                last_error = raw.get("error", "Unknown error")
-                logger.warning("[%s] send_text_chunk attempt %d/%d failed: %s", adapter.name, attempt + 1, retry, last_error)
-            except Exception as exc:
-                last_error = str(exc)
-                logger.warning("[%s] send_text_chunk attempt %d/%d exception: %s", adapter.name, attempt + 1, retry, last_error)
-            if attempt < retry - 1:
-                await asyncio.sleep(2 ** attempt)
-        logger.error("[%s] send_text_chunk max retries (%d) exceeded. Last error: %s", adapter.name, retry, last_error)
-        return SendResult(success=False, error=f"Max retries exceeded: {last_error}")
+        from plugins.platforms.yuanbao.single_attempt import send_text_chunk
+        return await send_text_chunk(self, chat_id, text, reply_to, retry, group_code)
 
     async def _send_msg_body(self, chat_id: str, msg_body: list, reply_to: Optional[str], group_code: str) -> dict:
         """Route a MsgBody to group (``group:<code>``) or C2C (``direct:<account>`` / bare account)."""
@@ -2536,6 +2518,11 @@ class MessageSender:
         """Send pre-encoded bytes via WS → ``{"success", "msg_key" | "error"}``."""
         try:
             response = await adapter._connection.send_biz_request(encoded, req_id=req_id)
+            if strict_transport():
+                head = response.get("head") or {}
+                if head.get("status") != 0 or head.get("msg_id") != req_id:
+                    return {"success": False, "error": "Yuanbao message ACK missing or rejected"}
+                return {"success": True, "msg_key": head["msg_id"]}
             return {"success": True, "msg_key": response.get("msg_id", "")}
         except TimeoutError:
             return {"success": False, "error": f"Request timeout after {DEFAULT_SEND_TIMEOUT}s"}
@@ -2722,6 +2709,7 @@ class YuanbaoAdapter(BasePlatformAdapter):
         self._group_queues.clear()
         logger.info("[%s] Disconnected", self.name)
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None, group_code: str = "") -> SendResult:
         return await self._outbound.sender.send_text(chat_id, content, reply_to, group_code=group_code)
@@ -2797,10 +2785,12 @@ class YuanbaoAdapter(BasePlatformAdapter):
         return await self.send(f"direct:{user_id}", text, group_code=group_code)
 
     # Media sends delegate to MessageSender.send_media via the named handler strategy.
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[dict] = None, **kwargs: Any) -> SendResult:
         return await self._outbound.sender.send_media(chat_id, "image_url", reply_to=reply_to, caption=caption, image_url=image_url, **kwargs)
 
+    @single_attempt_transport
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, metadata: Optional[dict] = None, **kwargs: Any) -> SendResult:
         return await self._outbound.sender.send_media(chat_id, "image_file", reply_to=reply_to, caption=caption, image_path=image_path, **kwargs)
@@ -2809,6 +2799,7 @@ class YuanbaoAdapter(BasePlatformAdapter):
                            reply_to: Optional[str] = None, **kwargs: Any) -> SendResult:
         return await self._outbound.sender.send_media(chat_id, "sticker", reply_to=reply_to, sticker_name=sticker_name, face_index=face_index, **kwargs)
 
+    @single_attempt_transport
     async def send_document(self, chat_id: str, file_path: str, filename: Optional[str] = None, caption: Optional[str] = None,
                             reply_to: Optional[str] = None, metadata: Optional[dict] = None, **kwargs: Any) -> SendResult:
         return await self._outbound.sender.send_media(

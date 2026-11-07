@@ -39,6 +39,7 @@ class MonitorOutcome:
     first_run: bool = False
     context_block: Optional[str] = None
     error: Optional[str] = None
+    analysis_status: Optional[str] = None
 
 
 def hash_monitor_output(output: str) -> str:
@@ -136,11 +137,12 @@ def check_monitor(job: dict) -> MonitorOutcome:
         return MonitorOutcome(ok=False, error=output)
 
     new_hash = hash_monitor_output(output)
-    raw_state = job.get("monitor_state")
+    raw_state = _refresh_observation(job)
     last_hash = raw_state.get("last_output_hash") if isinstance(raw_state, dict) else None
 
     if last_hash is not None and new_hash == last_hash:
-        return MonitorOutcome(ok=True, changed=False)
+        status = (raw_state.get("observation") or {}).get("analysis_status", "unverified")
+        return MonitorOutcome(ok=True, changed=False, analysis_status=status)
 
     first_run = last_hash is None
     old_output = "" if first_run else _read_last_output(job_id)
@@ -164,23 +166,75 @@ def check_monitor(job: dict) -> MonitorOutcome:
             f"### Diff (previous → current)\n\n```diff\n{diff}\n```\n\n" + current
         )
 
-    _persist_monitor_state(job_id, new_hash, output)
+    _persist_monitor_state(job, new_hash, output)
     return MonitorOutcome(ok=True, changed=True, first_run=first_run, context_block=context_block)
 
 
-def _persist_monitor_state(job_id: str, new_hash: str, output: str) -> None:
-    from cron.jobs import _hermes_now, update_job
+def _refresh_observation(job: dict) -> dict:
+    """A dead analysis remains unknown even when an unchanged tick is suppressed."""
+    from cron.executions import execution_owner_live, get_execution
+    from cron.jobs import _jobs_lock, get_job, update_job
 
+    with _jobs_lock():
+        current = get_job(job['id']) or job
+        state = dict(current.get('monitor_state') or {})
+        observation = dict(state.get('observation') or {})
+        execution_id = observation.get('execution_id')
+        if execution_id and observation.get('analysis_status') == 'pending':
+            row = get_execution(execution_id)
+            if row and row['job_id'] == job['id'] and row['status'] in {'completed', 'failed', 'cancelled'}:
+                observation['analysis_status'] = row['status']
+            elif not execution_owner_live(execution_id, job['id']):
+                observation['analysis_status'] = 'unknown'
+            state['observation'] = observation
+            state['observations'] = dict(state.get('observations') or {}, **{execution_id: observation})
+            update_job(job['id'], {'monitor_state': state})
+        return state
+
+
+def _persist_monitor_state(job: dict, new_hash: str, output: str) -> None:
+    from cron.jobs import _hermes_now, _jobs_lock, get_job, update_job
+
+    job_id = job['id']
     _write_last_output(job_id, output)
-    try:
-        update_job(
-            job_id,
-            {
-                "monitor_state": {
-                    "last_output_hash": new_hash,
-                    "last_changed_at": _hermes_now().isoformat(),
-                }
-            },
-        )
-    except Exception as exc:
-        logger.warning("Monitor: failed to persist state for %r: %s", job_id, exc)
+    # Observation must be durable before analysis can perform tools. Never roll this hash back
+    # to retry an uncertain analysis. The execution ledger and its result own that uncertainty.
+    with _jobs_lock():
+        current = get_job(job_id) or job
+        state = dict(current.get('monitor_state') or {})
+        observed_at = _hermes_now().isoformat()
+        execution_id = job.get('execution_id')
+        observation = {'output_hash': new_hash, 'execution_id': execution_id,
+                       'observed_at': observed_at, 'analysis_status': 'pending' if execution_id else 'unknown',
+                       'consumed': False}
+        observations = {key: value for key, value in (state.get('observations') or {}).items()
+                        if not value.get('consumed')}
+        observations[execution_id or observed_at] = observation
+        state.update(last_output_hash=new_hash, last_changed_at=observed_at,
+                     observation=observation, observations=observations)
+        update_job(job_id, {'monitor_state': state})
+
+
+def settle_observation(job: dict, execution_id: str, *, success: bool, delivery_outcome) -> None:
+    """A completed result's tail consumed this observation, not a later unchanged tick."""
+    from cron.jobs import _hermes_now, _jobs_lock, get_job, update_job
+    from cron.scheduler_results import recovery_job_matches
+
+    with _jobs_lock():
+        current = get_job(job['id'])
+        if current is None or not recovery_job_matches({'job': job}, current):
+            return
+        state = dict(current.get('monitor_state') or {})
+        observations = dict(state.get('observations') or {})
+        observation = dict(observations.get(execution_id) or {})
+        if not observation or observation.get('consumed'):
+            return
+        observation.update(analysis_status='completed' if success else 'failed', consumed=True,
+                           consumed_at=_hermes_now().isoformat(), delivery_outcome=delivery_outcome)
+        observations[execution_id] = observation
+        state['observations'] = observations
+        if (state.get('observation') or {}).get('execution_id') == execution_id:
+            state['observation'] = observation
+            if success:
+                state['processed'] = observation
+        update_job(job['id'], {'monitor_state': state})

@@ -34,6 +34,7 @@ from gateway.config import Platform, PlatformConfig
 from utils import is_truthy_value
 from gateway.platforms._shared import get_scoped_secret as _get_secret, coerce_port, decode_json_list_literal, send_error
 from gateway.platforms.send_targets import StandaloneSendPolicy, regex_stripped_parser
+from gateway.strict_transport import single_attempt_transport, strict_transport
 
 logger = logging.getLogger(__name__)
 
@@ -548,7 +549,7 @@ class EmailAdapter(BasePlatformAdapter):
         try:
             return _open_smtp(host, port, security, ctx, smtplib.SMTP, smtplib.SMTP_SSL, timeout=SMTP_CONNECT_TIMEOUT)
         except (TimeoutError, ConnectionError, OSError) as exc:
-            if isinstance(exc, ssl.SSLError):
+            if strict_transport() or isinstance(exc, ssl.SSLError):
                 raise
             return _open_smtp(host, port, security, ctx, _IPv4SMTP, _IPv4SMTP_SSL, timeout=SMTP_CONNECT_TIMEOUT)
 
@@ -846,11 +847,12 @@ class EmailAdapter(BasePlatformAdapter):
     async def _run_send(self, fn, args: tuple, log_fmt: str, *log_args) -> SendResult:
         """Run a blocking SMTP sender in the executor; wrap its Message-ID in a SendResult."""
         try:
-            return SendResult(success=True, message_id=await asyncio.get_running_loop().run_in_executor(None, fn, *args))
+            return SendResult(success=True, message_id=await asyncio.to_thread(fn, *args))
         except Exception as e:
             logger.error(log_fmt, *log_args, e)
             return SendResult(success=False, error=str(e))
 
+    @single_attempt_transport
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an email reply to the given address."""
         return await self._run_send(self._send_email, (chat_id, content, reply_to), "[Email] Send failed to %s: %s", chat_id)
@@ -910,11 +912,13 @@ class EmailAdapter(BasePlatformAdapter):
         self._smtp_send(msg)
         return msg_id
 
+    @single_attempt_transport
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an image URL as part of an email body (``metadata`` unused)."""
         return await self.send(chat_id, f"{caption or ''}\n\nImage: {image_url}".strip(), reply_to)
 
+    @single_attempt_transport
     async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
                                    metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:
         """One email per batch: local files attached, URL images linked in the body (no remote download); base-class fallback on failure."""
@@ -930,27 +934,39 @@ class EmailAdapter(BasePlatformAdapter):
             elif Path(local_path := _unquote(image_url[7:])).exists():
                 local_paths.append(local_path)
             else:
+                if strict_transport():
+                    return SendResult(success=False, error="strict attachment bundle incomplete")
                 logger.warning("[Email] Skipping missing image: %s", local_path)
         if not local_paths and not body_parts:
             return SendResult(success=False, error="no valid images in batch")
         try:
-            message_id = await asyncio.get_running_loop().run_in_executor(None, self._send_email_with_attachments, chat_id, "\n\n".join(body_parts), local_paths)
+            message_id = await asyncio.to_thread(self._send_email_with_attachments, chat_id, "\n\n".join(body_parts), local_paths)
         except Exception as e:
+            if strict_transport():
+                return SendResult(success=False, error=str(e) or type(e).__name__)
             logger.error("[Email] Multi-image send failed, falling back: %s", e, exc_info=True)
             return await super().send_multiple_images(chat_id, images, metadata, human_delay)
         return SendResult(success=True, message_id=message_id)
 
     def _send_email_with_attachments(self, to_addr: str, body: str, file_paths: list[str]) -> str:
         """Send an email with multiple file attachments via SMTP (unattachable files are skipped)."""
-        msg_id = self._send_with_files(to_addr, body, [(Path(f), Path(f).name) for f in file_paths], lenient=True)
+        msg_id = self._send_with_files(to_addr, body, [(Path(f), Path(f).name) for f in file_paths], lenient=not strict_transport())
         logger.info("[Email] Sent multi-attachment email to %s (%d files)", to_addr, len(file_paths))
         return msg_id
 
+    @single_attempt_transport
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None,
                             file_name: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         """Send a file as an email attachment."""
         return await self._run_send(self._send_email_with_attachment, (chat_id, caption or "", file_path, file_name, reply_to),
                                     "[Email] Send document failed: %s")
+
+    @single_attempt_transport
+    async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
+                              reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs) -> SendResult:
+        if not strict_transport():
+            return await super().send_image_file(chat_id, image_path, caption, reply_to, metadata, **kwargs)
+        return await self.send_document(chat_id, image_path, caption=caption, reply_to=reply_to)
 
     def _send_email_with_attachment(self, to_addr: str, body: str, file_path: str, file_name: Optional[str] = None,
                                     reply_to_msg_id: Optional[str] = None) -> str:

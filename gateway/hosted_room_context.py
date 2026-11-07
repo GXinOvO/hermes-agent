@@ -126,12 +126,9 @@ def scheduled_post_kind(actor: Mapping[str, Any] | None) -> str | None:
     return "post" if actor_id.startswith(SCHEDULED_POST_PREFIX) else None
 
 
-def post_scheduled_message(
+def prepare_scheduled_message(
     db_path: DbPath, *, room_id: Any, job_id: str, job_name: str, run_key: str, text: str, notice: bool = False,
-    now: float | None = None,
 ) -> dict[str, Any]:
-    """Append one cron output to a room. Idempotent per ``run_key``: a retried delivery of the same run
-    returns the original event instead of posting twice."""
     from gateway.hosted_room_discussion import MAX_USER_TEXT_BYTES, validate_user_payload
 
     state = _local_authority(db_path, room_id)
@@ -145,16 +142,25 @@ def post_scheduled_message(
     actor = {"kind": "user", "id": f"{prefix}{job_label}",
              "display_name": (job_name or job_id)[: hosted_rooms.MAX_ACTOR_LABEL_CHARS]}
     event_id = f"cron-post:{digest[:40]}"
+    return dict(room_id=state['room_id'], event_id=event_id, kind='message.user', actor=actor, payload=payload,
+                authority_gateway_id=state['authority_gateway_id'], authority_epoch=state['authority_epoch'])
+
+
+def post_scheduled_message(
+    db_path: DbPath, *, room_id: Any, job_id: str, job_name: str, run_key: str, text: str, notice: bool = False,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Append one cron output to a room. Idempotent per ``run_key``: a retried delivery of the same run
+    returns the original event instead of posting twice."""
+    plan = prepare_scheduled_message(db_path, room_id=room_id, job_id=job_id, job_name=job_name,
+                                     run_key=run_key, text=text, notice=notice)
     try:
-        return hosted_rooms.append_event(
-            db_path, room_id=room_id, event_id=event_id, kind="message.user", actor=actor,
-            payload=payload, authority_gateway_id=state["authority_gateway_id"],
-            authority_epoch=state["authority_epoch"], now=now)
+        return hosted_rooms.append_event(db_path, **plan, now=now)
     except hosted_rooms.EventConflictError:
         # A retry of the same run re-rendered different text (a re-run agent, a new timestamp): the first
         # post already landed and the run is delivered, so report that post rather than a failure.
         with closing(hosted_rooms._read_connection(db_path)) as conn:
-            row = hosted_rooms._load_event(conn, state["room_id"], event_id)
+            row = hosted_rooms._load_event(conn, plan['room_id'], plan['event_id'])
         if row is None:
             raise
         return hosted_rooms._event_from_row(row, idempotent=True)

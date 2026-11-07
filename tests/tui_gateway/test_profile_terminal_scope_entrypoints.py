@@ -51,10 +51,17 @@ def _observe(got):
 
 def _run_side_worker(session, body):
     done = threading.Event()
+    session.setdefault("session_key", "stored-parent")
+    task_id = "side-task-" + body.__name__
     with patch.object(server, "_emit", lambda *a, **k: done.set()):
-        server._spawn_side_agent(1, session, "side-task", "parent", "background.complete", body,
+        reply = server._spawn_side_agent(1, session, task_id, "parent", "background.complete", body,
                                  cwd=session["cwd"])
+        assert "error" not in reply, reply
         assert done.wait(15), "side worker did not finish"
+        for thread in list(threading.enumerate()):
+            if thread.name == f"side-agent-{task_id}":
+                thread.join(10)
+                assert not thread.is_alive()
 
 
 def test_secondary_side_worker_runs_its_own_terminal_backend(tmp_path):
