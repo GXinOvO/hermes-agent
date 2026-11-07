@@ -262,7 +262,20 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         if r.get("live_transcript"):
             lines.append(f"Full live transcript (complete tool/assistant trace): {r['live_transcript']}")
         lines += _process_accounting_lines(r)
+        lines += _delegation_advisory_lines(r)
     return "\n".join(lines)
+
+
+def _delegation_advisory_lines(result: dict) -> list[str]:
+    lines = []
+    paths = result.get("stale_paths") or []
+    if paths:
+        lines.append("[NOTE: concurrent tasks modified files the parent previously read — re-read before editing: "
+                     + ", ".join(paths[:8]) + (f" (+{len(paths) - 8} more)" if len(paths) > 8 else "") + "]")
+    if "schema_valid" in result and result.get("missed_steer"):
+        lines.append("[steer did not land — the subagent finished before it could be delivered: "
+                     + result["missed_steer"] + "]")
+    return lines
 
 
 def _process_accounting_lines(r: dict) -> list:
@@ -321,6 +334,7 @@ def _format_async_delegation(evt: dict) -> str:
             lines += _recovery_lines(evt)
         if summary:
             lines += ["Partial output:", summary]
+    lines += _delegation_advisory_lines(evt)
     return "\n".join(lines)
 
 

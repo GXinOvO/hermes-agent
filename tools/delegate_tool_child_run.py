@@ -720,7 +720,8 @@ def _build_result_entry(
     if isinstance(_missed_steer, str) and _missed_steer.strip():
         entry["missed_steer"] = _missed_steer
         _miss_note = ("[steer did not land — the subagent finished before it could " f"be delivered: {_missed_steer}]")
-        entry["summary"] = f"{summary}\n\n{_miss_note}" if summary else _miss_note
+        if "schema_valid" not in entry:
+            entry["summary"] = f"{summary}\n\n{_miss_note}" if summary else _miss_note
     return entry
 
 
@@ -1065,7 +1066,7 @@ class _ChildRun:
                 + (f" (+{len(mod_paths) - 8} more)" if len(mod_paths) > 8 else "")
                 + "]"
             )
-            if entry.get("summary"):
+            if entry.get("summary") and "schema_valid" not in entry:
                 entry["summary"] = entry["summary"] + reminder
             else:
                 entry["stale_paths"] = mod_paths
