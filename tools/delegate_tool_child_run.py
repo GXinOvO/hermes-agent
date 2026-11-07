@@ -795,6 +795,7 @@ class _ChildRun:
     parent_task_id: Optional[str] = None
     wall_start: float = 0.0
     parent_reads_snapshot: list = field(default_factory=list)
+    write_observer: Any = None
 
     def elapsed(self) -> float:
         return round(time.monotonic() - self.child_start, 2)
@@ -848,8 +849,11 @@ class _ChildRun:
             # the goal message instead (same turn, no system-prompt mutation).
             from tools.subagent_worktree import build_worktree_context_note
             self.goal = self.goal + build_worktree_context_note(self.worktree_info)
-        self.wall_start = time.time()
-        self.parent_reads_snapshot = list(file_state.known_reads(self.parent_task_id)) if self.parent_task_id else []
+        if self.parent_task_id:
+            self.wall_start, self.parent_reads_snapshot, self.write_observer = (
+                file_state.get_registry().observe_writes(self.parent_task_id))
+        else:
+            self.wall_start = time.time()
 
     def finish_failed(
         self, entry: dict[str, Any], late_steer: Optional[str], *, preview: str, summary: str = "", status: Optional[str] = None,
@@ -1057,7 +1061,8 @@ class _ChildRun:
             return
         with _quiet("file_state sibling-write check failed", exc_info=True):
             sibling_writes = file_state.writes_since(self.parent_task_id, self.wall_start, self.parent_reads_snapshot)
-            mod_paths = sorted({p for paths in sibling_writes.values() for p in paths}) if sibling_writes else []
+            observed = self.write_observer.snapshot() if self.write_observer is not None else []
+            mod_paths = sorted({p for paths in sibling_writes.values() for p in paths} | set(observed))
             if not mod_paths:
                 return
             reminder = (
@@ -1135,6 +1140,8 @@ class _ChildRun:
         no turn is active."""
         child = self.child
         heartbeat.stop()
+        if self.write_observer is not None:
+            self.write_observer.close()
 
         # Safe even if the child was never registered (ID missing on test doubles).
         if self.subagent_id:

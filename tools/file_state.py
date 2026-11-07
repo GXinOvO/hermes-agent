@@ -63,6 +63,24 @@ def _evict_oldest(container, cap: int) -> None:
             break
 
 
+class _WriteObserver:
+    def __init__(self, registry, exclude_task_id: str, paths: Iterable[str]):
+        self.registry = registry
+        self.exclude_task_id = exclude_task_id
+        self.paths = frozenset(paths)
+        self.modified: set[str] = set()
+
+    def snapshot(self) -> list[str]:
+        if _disabled():
+            return []
+        with self.registry._state_lock:
+            return sorted(self.modified)
+
+    def close(self) -> None:
+        with self.registry._state_lock:
+            self.registry._write_observers.discard(self)
+
+
 class FileStateRegistry:
     """Process-wide coordinator for cross-agent file edits."""
 
@@ -73,6 +91,7 @@ class FileStateRegistry:
         self._path_lock_users: dict[str, int] = {}
         self._meta_lock = threading.Lock()  # guards _path_locks
         self._state_lock = threading.Lock()  # guards _reads + _last_writer
+        self._write_observers: set[_WriteObserver] = set()
 
     @contextmanager
     def lock_path(self, resolved: str):
@@ -118,11 +137,14 @@ class FileStateRegistry:
         mtime = _mtime_or_none(resolved) if mtime is None else mtime
         if mtime is None:
             return
-        now = time.time()
         with self._state_lock:
+            now = time.time()
             self._last_writer[resolved] = (task_id, now)
             _evict_oldest(self._last_writer, _MAX_GLOBAL_WRITERS)
             self._stamp(task_id, resolved, mtime, now, False)
+            for observer in self._write_observers:
+                if task_id != observer.exclude_task_id and resolved in observer.paths:
+                    observer.modified.add(resolved)
 
     def check_stale(self, task_id: str, resolved: str) -> Optional[str]:
         """Model-facing warning if this write would be stale, else ``None``. Severity
@@ -173,6 +195,15 @@ class FileStateRegistry:
         return (
             f"{resolved} was not read by this agent. "
             "Read the file first so you can write an informed edit.")
+
+    def observe_writes(self, exclude_task_id: str) -> tuple[float, list[str], Optional[_WriteObserver]]:
+        with self._state_lock:
+            since_ts = time.time()
+            paths = list(self._reads.get(exclude_task_id, {})) if not _disabled() else []
+            observer = _WriteObserver(self, exclude_task_id, paths) if paths else None
+            if observer is not None:
+                self._write_observers.add(observer)
+            return since_ts, paths, observer
 
     def writes_since(self, exclude_task_id: str, since_ts: float,
                      paths: Iterable[str]) -> dict[str, list[str]]:
