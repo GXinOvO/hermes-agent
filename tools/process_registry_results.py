@@ -41,6 +41,13 @@ _COMPLETED_FIELDS = (
 )
 
 
+def _completed_fields(record):
+    """Bind optional owned evidence without invalidating pre-existing v1 receipts."""
+    if 'owned_generation' in record or 'owned_lifecycle' in record:
+        return (*_COMPLETED_FIELDS, 'owned_generation', 'owned_lifecycle')
+    return _COMPLETED_FIELDS
+
+
 def _fingerprint(record, fields):
     payload = json.dumps({key: record[key] for key in fields}, sort_keys=True,
                          separators=(",", ":"), ensure_ascii=True, allow_nan=False)
@@ -97,11 +104,13 @@ def save_completed_result(session) -> str:
                     output_truncated=max(session.total_output_chars, len(session.output_buffer)) > MAX_OUTPUT_CHARS,
                     completion_consumed=session._result_consumed,
                 )
+                if session.owned_generation:
+                    record.update(owned_generation=session.owned_generation, owned_lifecycle=session.owned_lifecycle)
             # Live-output opt-out must not persist raw credentials in durable receipts.
             record["output"] = redact_terminal_output(record["output"], record["command"], force=True)
             record["command"] = redact_sensitive_text(record["command"], code_file=True, force=True)
             record["source_fingerprint"] = _fingerprint(record, _SOURCE_FIELDS)
-            record["result_fingerprint"] = _fingerprint(record, ("source_fingerprint", *_COMPLETED_FIELDS))
+            record["result_fingerprint"] = _fingerprint(record, ("source_fingerprint", *_completed_fields(record)))
             record["consumption_fingerprint"] = _fingerprint(record, ("result_fingerprint", "completion_consumed"))
             directory = get_hermes_home() / "logs" / "process-results"
             from hermes_constants import assert_named_profile_home_live
@@ -197,7 +206,7 @@ def _validated_record(path):
         return None
     if record["source_fingerprint"] != _fingerprint(record, _SOURCE_FIELDS):
         return None
-    if record["result_fingerprint"] != _fingerprint(record, ("source_fingerprint", *_COMPLETED_FIELDS)):
+    if record["result_fingerprint"] != _fingerprint(record, ("source_fingerprint", *_completed_fields(record))):
         return None
     if record["consumption_fingerprint"] != _fingerprint(record, ("result_fingerprint", "completion_consumed")):
         return None
@@ -231,6 +240,7 @@ def iter_completed_results(prefix=""):
                 result_fingerprint=record.get("result_fingerprint", ""),
                 _result_profile_home=str(get_hermes_home().resolve()), _result_recovered=True,
                 _result_consumed=record.get("completion_consumed", False),
+                owned_generation=record.get('owned_generation', ''), owned_lifecycle=record.get('owned_lifecycle'),
             )
             session._completion_event.set()
             yield session

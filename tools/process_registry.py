@@ -37,6 +37,7 @@ from tools.process_registry_notifications import (
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_ownership import ProcessOwnershipMixin
+from tools.process_registry_environment import ProcessEnvironmentMixin
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, restored_event_owned, result_visible, save_completed_result
 from tools.process_registry_result_recovery import ProcessResultRecoveryMixin
@@ -553,6 +554,9 @@ class ProcessSession:
     pid: Optional[int] = None
     process: Optional[subprocess.Popen] = None  # Popen handle (local only)
     env_ref: Any = None                         # Environment object (sandbox spawns)
+    owned_handle: Any = None                    # Backend-owned generation, never a host PID
+    owned_generation: str = ""                 # Retained identity without a runtime handle
+    owned_lifecycle: Optional[dict] = None      # Trusted termination independent of output drain
     cwd: Optional[str] = None
     started_at: float = 0.0                     # time.time() of spawn
     host_start_time: Optional[int] = None       # kernel start ticks (/proc/<pid>/stat f22) — PID-reuse guard
@@ -683,7 +687,7 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
+class ProcessRegistry(ProcessEnvironmentMixin, ProcessResultRecoveryMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -1277,36 +1281,6 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
             raise
         return session
 
-    def spawn_via_env(
-        self, env: Any, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
-        timeout: int = 10, owner_task_id: str = "", persist_on_release: bool = False) -> ProcessSession:
-        """Spawn a background process inside a non-local backend's sandbox.
-        The command is wrapped to capture its in-sandbox PID and redirect output to a
-        log file that later execute() calls poll. No live pipe or stdin, but it runs in
-        the correct sandbox context. ``persist_on_release`` keeps the process out of
-        agent-lifecycle kill sweeps (#41225)."""
-        session = self._new_session(command, task_id, owner_task_id, session_key, cwd, env_ref=env, pid_scope="sandbox",
-                                    persist_on_release=persist_on_release)
-        temp_dir = self._env_temp_dir(env)
-        log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
-        q = shlex.quote
-        bg_command = (
-            f"mkdir -p {q(temp_dir)} && "
-            f"( nohup bash -lc {q(command)} > {q(log_path)} 2>&1; "
-            f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)} ) & "
-            f"echo $! > {q(pid_path)} && cat {q(pid_path)}")
-        result = env.execute(bg_command, cwd=cwd or "", timeout=timeout, rewrite_compound_background=False)
-        output = result.get("output", "").strip()
-        session.pid = next((int(ln) for ln in map(str.strip, output.splitlines()) if ln.isdigit()), None)
-        # No PID from the wrapper (no bash in the image, sandbox gone, broken redirect): the
-        # command never started, so raise like a failed Popen instead of returning a session.
-        if session.pid is None:
-            raise RuntimeError(f"launch wrapper exited {result.get('returncode')} without a PID: "
-                               f"{output or '(no output)'}")
-        self._track_started(
-            session, self._env_poller_loop, f"proc-poller-{session.id}", (env, log_path, pid_path, exit_path))
-        return session
-
     # ----- Reader / Poller Threads -----
 
     def _reader_loop(self, session: ProcessSession):
@@ -1639,6 +1613,8 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
         """A reconcile saw the direct child exit and set ``exited``, but the reader that owns the
         output is still on its final drain: the buffer is not the whole output yet, so nothing
         may consume it as the completion."""
+        if session.owned_handle is not None:
+            return not session._completion_event.is_set()
         reader = session._reader_thread
         return (session._reader_finish_requested.is_set() and not session._completion_event.is_set()
                 and reader is not None and reader.is_alive())
@@ -1976,7 +1952,9 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
 
     @staticmethod
     def _status_head(session: ProcessSession) -> dict:
-        return {"session_id": session.id, "command": session.command, "status": "exited" if session.exited else "running"}
+        return {"session_id": session.id, "command": session.command,
+                "status": "exited" if session.exited else "running",
+                **ProcessRegistry._owned_output_pending(session)}
 
     def poll(self, session_id: str) -> dict:
         """Check status and get new output for a background process."""
@@ -2072,6 +2050,7 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
             elif _is_interrupted():
                 result = {
                     "status": "interrupted", "command": session.command, "output": _output_tail(session, 1000),
+                    **self._owned_output_pending(session),
                     "note": "User sent a new message -- wait interrupted"}
             elif _consume_yield(threading.current_thread().ident):
                 # A steer/redirect landed mid-turn: redirect() asks tool workers to YIELD so
@@ -2081,9 +2060,12 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
                 result = {
                     "status": "interrupted", "command": session.command, "output": _output_tail(session, 1000),
                     "process_running": True,
+                    **self._owned_output_pending(session),
                     "note": ("User sent a new message -- wait released; the process is still "
                              "running and you will be notified on exit. Respond to the user now.")}
             if result is not None:
+                if result.get('output_pending'):
+                    result['note'] = 'Process termination verified; final output is still pending. Use wait/log later.'
                 if timeout_note:
                     result["timeout_note"] = timeout_note
                 return result
@@ -2094,7 +2076,10 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
         result = {
             "status": "timeout", "command": session.command, "output": _output_tail(session, 1000),
             # Not a failure — models re-issued identical waits after misreading this as an error.
-            "process_running": True}
+            "process_running": True, **self._owned_output_pending(session)}
+        if result.get("output_pending"):
+            result["timeout_note"] = "Process termination is verified; output is still draining. Use wait/log later."
+            return result
         base_note = (
             f"Wait window of {effective_timeout}s elapsed — the process is still running. This is not an error.")
         if session.started_at:
@@ -2125,6 +2110,8 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
         session = self.get(session_id)
         if session is None or not result_visible(session):
             return _not_found(session_id)
+        if session.owned_handle is not None:
+            return self._kill_owned_session(session, source, consume_output)
         if session.exited:
             # A double-forked descendant may still be alive in the systemd scope even
             # though the main process exited — stop the scope to reap survivors.
@@ -2390,6 +2377,7 @@ class ProcessRegistry(ProcessResultRecoveryMixin, ProcessTerminationMixin, Proce
                 "uptime_seconds": int(time.time() - s.started_at),
                 "status": "exited" if s.exited else "running",
                 "output_preview": s.output_buffer[-200:] if s.output_buffer else "",
+                **self._owned_output_pending(s),
             }
             # Flag processes surfaced only because they share the gateway session (not the current task) —
             # these are the long-lived background processes a user may have forgotten about (#29177).
@@ -2575,6 +2563,8 @@ PROCESS_SCHEMA = {
         "until exit or timeout (partial output on timeout). write vs "
         "submit: submit appends Enter — use it to answer prompts; write "
         "sends raw bytes, no newline. close: EOF stdin. kill: terminate. "
+        "Owned kill may return process_running=false/output_pending=true: termination is verified, "
+        "but the reader still owns final output; retrieve wait/log later. "
         "handoff (subagents only): transfer a running process you started to your parent agent, which then "
         "receives its completion; `data` = one sentence on its purpose. Subagent-owned processes are otherwise "
         "killed when the subagent finishes and their notifications never reach the parent."
