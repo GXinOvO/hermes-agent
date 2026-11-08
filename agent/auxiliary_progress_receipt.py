@@ -11,21 +11,21 @@ from typing import Any, Optional
 
 
 def create_with_progress_once(
-    client: Any, kwargs: dict[str, Any], task: Optional[str] = None, *, force_stream: bool = False
+    client: Any, kwargs: dict[str, Any], task: Optional[str] = None, *, force_stream: bool = False, provider: str = ""
 ) -> Any:
     """Issue one auxiliary request, aggregating streams and finalizing one wire receipt."""
     from agent.auxiliary_client import (
         _RELAY_AUX_CALL_CONTEXT,
+        _STREAM_REJECTED,
+        _ClassifiedAttempt,
         _aggregate_chat_stream,
         _aux_progress_active,
+        _classify_failure,
         _client_streams_internally,
-        _is_auth_error,
-        _is_payment_error,
-        _is_rate_limit_error,
-        _is_transient_transport_error,
         _notify_aux_dispatch,
         _notify_aux_provider_response,
         _stream_request_plan,
+        aux_errors,
         bypass_chat_sdk_request_transform,
     )
     from agent.auxiliary_wire_receipt import (
@@ -58,14 +58,18 @@ def create_with_progress_once(
         finish_wire_receipt(receipt, error=exc)
         if not isinstance(exc, Exception):
             raise
-        if (force_stream or _is_transient_transport_error(exc) or _is_auth_error(exc)
-                or _is_payment_error(exc) or _is_rate_limit_error(exc)):
+        if force_stream:
             raise
+        failure = _classify_failure(exc, provider, client, kwargs.get("model"))
+        if aux_errors.stream_negotiation_reraises(failure.verdict):
+            raise _ClassifiedAttempt(failure)
         import logging
         logging.getLogger("agent.auxiliary_client").debug(
             "Auxiliary %s: streamed request failed (%s); retrying non-streaming",
             task or "call", exc,
         )
+        chunks = _STREAM_REJECTED
+    if chunks is _STREAM_REJECTED:
         _notify_aux_dispatch()
         response = run_with_wire_receipt(
             client, kwargs, lambda: client.chat.completions.create(**kwargs),
