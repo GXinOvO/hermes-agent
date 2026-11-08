@@ -134,7 +134,7 @@ def test_parallel_reads_copy_current_cell_context_and_callbacks():
     marker = contextvars.ContextVar("parallel-test-marker")
     seen = []
 
-    def dispatch(name, args, task_id=None):
+    def dispatch(name, args, task_id=None, **kwargs):
         seen.append((marker.get(), task_id, _get_approval_callback()))
         return json.dumps({"content": args["path"]})
 

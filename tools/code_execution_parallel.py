@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from concurrent.futures import FIRST_COMPLETED, wait
 
 from tools.daemon_pool import DaemonThreadPoolExecutor
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def execute_parallel(args, *, allowed_tools, tool_call_counter, max_tool_calls,
                      dispatch, tool_call_log, stop_event):
-    from tools.code_execution_rpc import _handle_rpc_request
+    from tools.code_execution_rpc import _handle_rpc_request, _parallel_call_id
 
     calls = args.get("calls") if isinstance(args, dict) else None
     if not isinstance(calls, list) or not 1 <= len(calls) <= MAX_PARALLEL_CALLS:
@@ -43,12 +44,16 @@ def execute_parallel(args, *, allowed_tools, tool_call_counter, max_tool_calls,
                 or (cell_stop is not None and cell_stop.is_set()))
 
     def invoke(call):
-        return json.loads(_handle_rpc_request(
-            call, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
-            max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
-            call_start=time.monotonic(), where="parallel sandbox", stop_event=stop_event,
-            budget_lock=budget_lock,
-        ))
+        token = _parallel_call_id.set(f"ptc-{uuid.uuid4().hex}")
+        try:
+            return json.loads(_handle_rpc_request(
+                call, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
+                max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
+                call_start=time.monotonic(), where="parallel sandbox", stop_event=stop_event,
+                budget_lock=budget_lock,
+            ))
+        finally:
+            _parallel_call_id.reset(token)
 
     pool = None
     futures = []

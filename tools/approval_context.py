@@ -126,6 +126,11 @@ def reset_current_session_key(token: contextvars.Token[str]) -> None:
 _Tokens = tuple[contextvars.Token[str], contextvars.Token[str], contextvars.Token[str]]
 
 
+def get_current_observability_context() -> dict[str, str]:
+    return {"turn_id": _approval_turn_id.get(), "tool_call_id": _approval_tool_call_id.get(),
+            "session_id": _approval_session_id.get()}
+
+
 def set_current_observability_context(*, turn_id: str = "", tool_call_id: str = "", session_id: str = "") -> _Tokens:
     """Bind active tool correlation IDs to approval hooks."""
     return (_approval_turn_id.set(turn_id or ""), _approval_tool_call_id.set(tool_call_id or ""),

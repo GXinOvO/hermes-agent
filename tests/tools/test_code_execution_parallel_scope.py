@@ -22,7 +22,7 @@ def test_parallel_workers_keep_profile_scope_and_callbacks_isolated(tmp_path, mo
     originals = [getter() for getter, _setter in callback_api]
     code = "from hermes_tools import parallel\nparallel([{'tool':'read_file','args':{'path':str(i)}} for i in range(2)])"
 
-    def dispatch(name, args, task_id=None):
+    def dispatch(name, args, task_id=None, **kwargs):
         before = marker.get()
         observed.append((str(get_hermes_home()), before, task_id,
                          tuple(getter() for getter, _setter in callback_api)))
