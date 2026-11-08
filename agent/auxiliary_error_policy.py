@@ -112,6 +112,6 @@ def ladder_accepts(failure: Failure, *, rung_spent: bool = False) -> bool:
 def stream_negotiation_reraises(verdict: ClassifiedError) -> bool:
     """A failed stream negotiation that is the provider's answer (or a certificate no stream flag repairs):
     re-raised, not re-sent non-streaming."""
-    return (verdict.reason in _PROVIDER_REFUSALS or verdict.reason is _R.ssl_cert_verification
+    return (verdict.reason in _PROVIDER_REFUSALS or verdict.reason in {_R.ssl_cert_verification, _R.provider_policy_blocked}
             or verdict.status_code == 429 or benches_provider(verdict) or "welcome_refusal" in verdict.error_context
             or resend_cannot_help(verdict))

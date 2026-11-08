@@ -55,3 +55,29 @@ def test_nonstream_retry_failure_does_not_inherit_negotiation_error(caplog):
     assert [receipt["status"] for receipt in receipts] == ["error", "error"]
     assert len({receipt["auxiliary_request_id"] for receipt in receipts}) == 1
     assert [receipt["physical_attempt"] for receipt in receipts] == [1, 2]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "streamed"])
+def test_account_policy_block_does_not_resend_and_keeps_provider_fallback(is_async, stream):
+    import httpx
+
+    from tests.agent import test_auxiliary_error_policy as fixtures
+
+    sent = []
+
+    def handle(request):
+        sent.append(request)
+        return httpx.Response(403, json={"error": {"message": "blocked for a previous policy violation"}},
+                              request=request)
+
+    client = fixtures._wire(handle, key="synthetic", is_async=is_async)
+    with (patch.object(aux, "_aux_progress_active", return_value=stream),
+          patch.object(aux.aux_errors, "classify_attempt", wraps=aux.aux_errors.classify_attempt) as classify):
+        outcome = fixtures.run_ladder(None, provider="openrouter", is_async=is_async, client=client)
+    assert len(sent) == 1
+    assert json.loads(sent[0].content).get("stream", False) == stream
+    assert outcome.fallback_attempts == 1
+    assert outcome.result.choices[0].message.content == "fallback"
+    assert classify.call_count == 1
+    assert classify.call_args.args[1] == "openrouter"
