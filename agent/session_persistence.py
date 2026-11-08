@@ -54,6 +54,25 @@ def _is_ephemeral_scaffolding(msg: Any) -> bool:
     return isinstance(msg, dict) and any(msg.get(flag) for flag in _EPHEMERAL_SCAFFOLDING_FLAGS)
 
 
+def stamp_db_persisted_markers(messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        if isinstance(message, dict) and not _is_ephemeral_scaffolding(message):
+            message[_DB_PERSISTED_MARKER] = True
+
+
+def drop_ephemeral_scaffolding(agent, messages: list) -> None:
+    kept = [message for message in messages if not _is_ephemeral_scaffolding(message)]
+    if len(kept) == len(messages):
+        return
+    for attr in ("_persist_user_message_idx", "_last_flushed_db_idx"):
+        index = getattr(agent, attr, None)
+        if type(index) is int and index >= 0:
+            setattr(agent, attr, sum(not _is_ephemeral_scaffolding(message) for message in messages[:index]))
+    messages[:] = kept
+    agent._db_flush_scan_prefix = None
+    agent._session_messages = messages
+
+
 # `_DB_PERSISTED_MARKER` (agent.context_compressor) is the intrinsic "already written to SQLite" marker: an
 # id(msg) set can alias a freed dict's address onto a new message, a key on the dict cannot. The `_` prefix is
 # mandatory (wire sanitizers strip `_` keys). CONTRACT: the marker asserts the dict's CONTENT is durable as

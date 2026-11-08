@@ -687,6 +687,7 @@ def _project_for_display(messages: list, *, home=None, inline_images: bool = Tru
     from agent.message_metadata import withheld_prompt_text
     from agent.prompt_builder import STEER_DISPLAY_KIND
     from agent.turn_failure_copy import CONTENT_REFUSED_DISPLAY_KIND, untyped_failed_turn_display_kind
+    from hermes_state_recovery import project_legacy_empty_recovery_pairs
 
     # inline_images=False (#116511): render content through the gateway's ``_coerce_message_text``
     # projection so a data-URI image part becomes ``[image]`` — the same branch session.resume's
@@ -701,7 +702,7 @@ def _project_for_display(messages: list, *, home=None, inline_images: bool = Tru
             return message
 
     projected_messages = []
-    for message in messages:
+    for message in project_legacy_empty_recovery_pairs(messages):
         message = _with_tool_call_labels(message)
         if coerce is not None:
             message = coerce(message)
@@ -748,6 +749,8 @@ async def get_session_messages(
     session_id: str, profile: Optional[str] = None, limit: Optional[int] = Query(None, ge=0),
     offset: int = Query(0, ge=0), order: Optional[str] = Query(None),
     include_compacted: bool = Query(False), inline_images: bool = Query(True)):
+    from hermes_state_recovery import recovery_compatible_message_page
+
     if order not in (None, "oldest", "latest"):
         raise HTTPException(status_code=400, detail="order must be one of: oldest, latest")
 
@@ -767,8 +770,8 @@ async def get_session_messages(
         # prefetch only shows the child continuation's messages after a
         # compression rotation, hiding the pre-compaction transcript
         # (#51058).
-        return sid, _limit, db.get_messages(
-            sid, limit=_limit, offset=offset, latest=latest_page,
+        return sid, _limit, recovery_compatible_message_page(
+            db, sid, limit=_limit, offset=offset, latest=latest_page,
             include_compacted=include_compacted, include_ancestors=True)
 
     result = await asyncio.to_thread(_with_db, profile, _read, read_only=True)
@@ -834,14 +837,20 @@ async def get_session_messages_around(
 ):
     """Bounded display page starting at a timeline prompt; no intervening payloads."""
     from hermes_state_timeline import get_session_messages_around as read_around
+    from hermes_state_recovery import project_legacy_empty_recovery_pairs
 
     owner = _serving_profile(profile)
 
     def _read(db):
         sid = _timeline_session_id(db, session_id, owner)
-        page = read_around(db, sid, row_id, limit=limit)
+        page = read_around(db, sid, row_id, limit=limit + 1)
         if page is None:
             raise HTTPException(status_code=404, detail="Prompt not found")
+        has_extra = len(page["messages"]) > limit
+        page["messages"] = project_legacy_empty_recovery_pairs(page["messages"])[:limit]
+        pagination = page["pagination"]
+        pagination.update(limit=limit, returned=len(page["messages"]),
+                          has_newer=has_extra or pagination.get("has_newer", False))
         return {"session_id": sid, "profile": owner, **page}
 
     result = await asyncio.to_thread(_with_db, profile, _read, read_only=True)

@@ -203,6 +203,9 @@ def _carrier_live_view(db, conn, session_id, message_id):
                        (message_id, session_id)).fetchone()
     message = row and db._row_to_message_dict(row, warn_context='rewind target', summary_flag=True)
     handoff, live = split_user_originated_turn(message) if message else (None, None)
+    if live is None:
+        raise RuntimeStoreError('invalid_params', field='target_message_id',
+                                detail='target message is not a user-originated turn')
     return live if handoff is not None else None
 
 

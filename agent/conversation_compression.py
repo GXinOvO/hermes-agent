@@ -3257,6 +3257,7 @@ def _publish_rotated_compaction(
     old_title = agent._session_db.get_session_title(agent.session_id)
     new_session_id = mint_session_id()
     from agent.context_compressor import _DB_PERSISTED_MARKER
+    from agent.session_persistence import stamp_db_persisted_markers
     from tools.approval_yolo import with_session_yolo
     agent._session_db.publish_compression_child(
         parent_session_id=old_session_id, child_session_id=new_session_id,
@@ -3283,9 +3284,7 @@ def _publish_rotated_compaction(
                 # scoped twin against the ANCHOR SOURCE, as the wrapper. An already-stamped exact twin still
                 # suppresses the broad pass here, or a content-equal old duplicate would get stamped.
                 _stamp_scoped_twins(_session_messages, _compressed_anchor_source, exact_counts_stamped=True)
-    for _handoff_message in compressed:
-        if isinstance(_handoff_message, dict):
-            _handoff_message[_DB_PERSISTED_MARKER] = True
+    stamp_db_persisted_markers(compressed)
     agent.session_id = new_session_id
     agent._db_flush_scan_prefix = None
     _rebind_session_context(agent.session_id)

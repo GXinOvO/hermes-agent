@@ -427,14 +427,8 @@ def _archive_watermark_for(session_db: Any, session_id: str, held: list[dict[str
 
 
 def stamp_db_persisted_markers(messages: list[dict[str, Any]]) -> None:
-    """Fulfil the post-commit contract of ``SessionDB.archive_and_compact()``.
-    Single stamp site for all callers. Call ONLY after the commit succeeded, on the dict instances the
-    caller keeps live. Needed because compress() output is marker-swept for the ROTATION flush; an
-    in-place commit returned unstamped is re-INSERTed as new by the next persist walk and the transcript
-    doubles on every compaction."""
-    for msg in messages:
-        if isinstance(msg, dict):
-            msg[_DB_PERSISTED_MARKER] = True
+    from agent.session_persistence import stamp_db_persisted_markers as stamp
+    stamp(messages)
 
 
 def _is_checkpoint_item(item: Any) -> bool:

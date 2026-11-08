@@ -663,6 +663,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         Never touches sessions.* counters (callers reconcile differently); reasoning kept for assistant rows.
         A caller that re-archives some rows afterwards passes ``prune_checkpoints=False`` and prunes once they
         are archived again (:meth:`_prune_shadowed_checkpoints`)."""
+        from agent.session_persistence import _is_ephemeral_scaffolding
+        messages = [message for message in messages if not _is_ephemeral_scaffolding(message)]
         now_ts = time.time()
         inserted = tool_calls_total = 0
         batch_tool_index: dict[str, str] = {}
@@ -1531,7 +1533,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         display = include_compacted and not include_inactive  # removed rows too: see drop_removed
         rows = self._fetch_conversation_rows(
             self._resume_lineage_ids(session_id) if include_ancestors else [session_id],
-            self._active_clause(include_inactive, include_compacted), with_session_id=False, with_compacted=display)
+            self._active_clause(include_inactive, include_compacted), with_session_id=include_ancestors, with_compacted=display)
         if include_compacted:
             rows = self._dedupe_display_generations(rows, drop_removed=display)
         return self._rows_to_conversation(rows, session_id=session_id, include_ancestors=include_ancestors,
@@ -1584,6 +1586,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         reactions); reasoning restored on assistant rows only; ``api_content`` VERBATIM (no sanitize/strip)
         so replay keeps the provider prompt cache byte-stable."""
         from hermes_state import _strip_background_review_harness, _strip_stale_tool_call_markers
+        from hermes_state_recovery import without_legacy_empty_recovery_pairs
+        rows = without_legacy_empty_recovery_pairs(rows)
         # Runtime import avoids the transcript_repair -> hermes_state_messages module cycle.
         from agent.transcript_repair import transcript_row_snapshot
         # Only the unaddressed live replay gets the digest: row-addressed loaders (include_row_ids) keep the

@@ -1860,6 +1860,9 @@ def run_conversation(
         finally:
             end_voice_turn_route(agent)
     settle_held_final(agent, result)
+    if isinstance(result, dict) and isinstance(result.get("messages"), list):
+        from agent.session_persistence import drop_ephemeral_scaffolding
+        drop_ephemeral_scaffolding(agent, result["messages"])
     result = export_current_turn_boundary(agent, result, user_message)
     if isinstance(result, dict):
         result["user_intervened"] = bool(getattr(agent, "_turn_user_intervened", False))

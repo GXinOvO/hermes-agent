@@ -303,3 +303,55 @@ def test_same_words_in_a_second_response_are_not_a_reused_response(real_loop):
 
     assert result["final_response"] == "Done."
     assert result["response_reused"] is False
+
+
+def test_recovered_reasoning_only_turn_does_not_replay_scaffolding(real_loop):
+    from agent.conversation_loop import _EMPTY_TOOL_RESPONSE_NUDGE
+
+    reasoning_only = _response()
+    reasoning_only.choices[0].message.reasoning_content = "I need to inspect the saved result before replying."
+    result = real_loop.run(
+        [
+            _response(finish_reason="tool_calls", tool_calls=[_write_file_call(real_loop.ledger)]),
+            reasoning_only,
+            _response(finish_reason="tool_calls", tool_calls=[
+                _call("read_file", {"path": str(real_loop.ledger)}, "call_verify")]),
+            _response("Recorded and verified."),
+        ],
+        "record the payment and verify the ledger",
+    )
+
+    assert result["final_response"] == "Recorded and verified."
+    _assert_saved_tool_pairs_stay_live(result, real_loop.db, real_loop.sid)
+    assert not any(message.get("_empty_recovery_synthetic") for message in result["messages"])
+    assert all(message.get("content") != _EMPTY_TOOL_RESPONSE_NUDGE for message in result["messages"])
+    assert result["messages"][result["current_turn_user_idx"]]["content"] == "record the payment and verify the ledger"
+
+    real_loop.agent.client.chat.completions.create.side_effect = None
+    real_loop.agent.client.chat.completions.create.return_value = _response("No additional payment was recorded.")
+    followup = real_loop.agent.run_conversation("confirm without changing the ledger", conversation_history=result["messages"])
+
+    sent = real_loop.agent.client.chat.completions.create.call_args.kwargs["messages"]
+    assert all(message.get("content") != _EMPTY_TOOL_RESPONSE_NUDGE for message in sent)
+    assert followup["final_response"] == "No additional payment was recorded."
+    assert real_loop.ledger.read_text() == "PAYMENT #1 SENT\n"
+
+
+def test_returned_history_cleanup_reanchors_current_user_after_old_scaffolding(real_loop):
+    from agent.conversation_loop import _EMPTY_TOOL_RESPONSE_NUDGE
+
+    history = [
+        {"role": "user", "content": "old request"},
+        {"role": "assistant", "content": "(empty)", "_empty_recovery_synthetic": True},
+        {"role": "user", "content": _EMPTY_TOOL_RESPONSE_NUDGE, "_empty_recovery_synthetic": True},
+        {"role": "assistant", "content": "old reply"},
+    ]
+    real_loop.agent.client.chat.completions.create.return_value = _response("new reply")
+
+    result = real_loop.agent.run_conversation("new request", conversation_history=history)
+
+    index = result["current_turn_user_idx"]
+    assert result["messages"][index]["content"] == "new request"
+    assert real_loop.agent._persist_user_message_idx == index
+    assert real_loop.agent._session_messages is result["messages"]
+    assert not any(message.get("_empty_recovery_synthetic") for message in result["messages"])
