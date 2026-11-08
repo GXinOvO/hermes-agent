@@ -16,6 +16,8 @@ import threading
 
 BASE_ENV={'PATH':'/usr/bin:/bin','HOME':'/home/sandbox','LANG':'C.UTF-8',
           'TMPDIR':'/state/tmp','PYTHONDONTWRITEBYTECODE':'1','HERMES_HOME':'/state/home'}
+payload_options = {}
+workspace = '/workspace'
 def harden():
     # Python installs a SIGINT handler; PID 1 would otherwise accept it from
     # model code and raise KeyboardInterrupt in the trusted owner. Default
@@ -51,8 +53,8 @@ def main():
     line,buffered=buffered.split(b'\n',1);req=json.loads(line)
     emit({'event':'scope_ready','namespace':os.readlink('/proc/self/ns/pid')})
     root=subprocess.Popen(['/bin/bash','--noprofile','--norc','-c',req['command']],
-        cwd='/workspace',env=BASE_ENV,stdin=subprocess.PIPE if req.get('stdin') is not None else subprocess.DEVNULL,
-        stdout=None,stderr=None,close_fds=True,start_new_session=True)  # detached-spawn: ok — PID 1 owns/reaps the complete invocation, including detached descendants
+        cwd=workspace,env=BASE_ENV,stdin=subprocess.PIPE if req.get('stdin') is not None else subprocess.DEVNULL,
+        stdout=None,stderr=None,close_fds=True,start_new_session=True, **payload_options)  # detached-spawn: ok — PID 1 owns/reaps the complete invocation, including detached descendants
     if req.get('stdin') is not None:
         def feed():
             try:root.stdin.write(req['stdin'].encode());root.stdin.close()

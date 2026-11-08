@@ -47,6 +47,7 @@ class WriteResult:
     # backend couldn't verify (no sha256sum). A mismatch is a hard error, never a flag.
     verified: Optional[bool] = None
     _content_sha256: Optional[str] = None
+    _protected_ticket: Any = field(default=None, repr=False, compare=False, kw_only=True)
     lint: Optional[dict[str, Any]] = None
     # LSP semantic diagnostics, kept separate from ``lint`` (syntax) so the model
     # reads the two as independent signals. None when LSP is off/inapplicable.
@@ -197,6 +198,8 @@ class ExecuteResult:
     # the command never ran, so the verdict is about the working directory, not
     # the requested path (callers must neither cache it nor blame the path).
     cwd_error: str = ""
+    _protected_ticket: Any = field(default=None, repr=False, compare=False, kw_only=True)
+    _source_ticket: Any = field(default=None, repr=False, compare=False, kw_only=True)
 
 
 # ---------------------------------------------------------------------------

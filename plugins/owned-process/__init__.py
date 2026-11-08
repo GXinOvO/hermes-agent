@@ -79,6 +79,8 @@ class OwnedProcessProvider(TerminalEnvironmentProvider):
 
 
 def register(ctx):
+    from .protected import ProtectedOwnedProvider
     ctx.register_terminal_environment_provider(OwnedProcessProvider(
         project_root=ctx.get_config('project_root'), state_root=ctx.get_config('state_root'),
         network=ctx.get_config('network', 'private')))
+    ctx.register_terminal_environment_provider(ProtectedOwnedProvider(ctx.get_config('protected')))

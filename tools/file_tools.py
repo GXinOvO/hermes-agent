@@ -26,6 +26,7 @@ from tools.file_operations import (
     ShellFileOperations, normalize_read_pagination, normalize_search_pagination)
 from tools.file_operations_common import DEFAULT_READ_LIMIT, count_conflict_blocks
 from tools import file_state
+from tools.file_backend_io import file_backend_call, file_mtime, storage_path
 from hermes_platform.host import facts
 from agent.redact import _is_secret_file_arg, redact_sensitive_text
 from tools.file_tools_paths import (
@@ -534,7 +535,7 @@ def _dedup_stub_or_block(task_data: dict, dedup_key: tuple, path: str) -> str:
 def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_str: str,
                             offset: int, limit: int, dedup_key: tuple, *, partial: bool,
                             redacted: bool = False, end_line: int | None = None,
-                            total_lines=None, version_before=None, snapshot=None) -> int:
+                            total_lines=None, version_before=None, snapshot=None, read_revision=None, protected_ticket=None) -> int:
     """Bookkeeping after a real (non-stub) read; returns the consecutive-read count.
 
     Per-task tracker under the lock (stub counter, history, consecutive count,
@@ -547,19 +548,28 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     background-review read-mark (a FULL read of a skill file counts like
     skill_view so a follow-up skill_manage(patch) is accepted).
     """
+    with _read_tracker_lock:
+        revision = task_data.get('io_revision', 0) if read_revision is None else read_revision
+        binding = task_data.get('backend_binding')
     version = (snapshot or _file_version(resolved_str)) if version_before is not None else None
     stable = version is not None and version[:-1] == version_before == _file_metadata(resolved_str)
     complete = False
+    try:
+        _mtime_now = file_mtime(resolved_str)
+    except OSError:
+        _mtime_now = None
+    key = storage_path(resolved_str)
     with _read_tracker_lock:
+        if (task_data.get('io_revision', 0) != revision or task_data.get('backend_binding') != binding
+                or _read_tracker.get(task_id) is not task_data):
+            return 0
         task_data["dedup_hits"].pop(dedup_key, None)
         task_data["dedup_generation_reads"].add(dedup_key)
         task_data["read_history"].add((path, offset, limit))
         count = _bump_consecutive(task_data, ("read", path, offset, limit))
-        try:
-            _mtime_now = os.path.getmtime(resolved_str)
+        if _mtime_now is not None:
             task_data.setdefault("read_timestamps", {})[resolved_str] = _mtime_now
-        except OSError:
-            pass
+        task_data.setdefault('storage_paths', {})[resolved_str] = key
         baselines = task_data["full_write_baselines"]
         if stable and version is not None and count < 4:
             task_data["dedup"][dedup_key] = version_before
@@ -574,9 +584,13 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
                 complete = complete and not redacted
             if complete:
                 baselines[resolved_str] = version
+                if protected_ticket is not None:
+                    from dataclasses import replace
+                    task_data.setdefault('protected_tickets', {})[resolved_str] = replace(protected_ticket, task_id=task_id)
                 task_data.setdefault("blind_patches", {}).pop(resolved_str, None)
         if not complete:
             baselines.pop(resolved_str, None)
+            task_data.setdefault('protected_tickets', {}).pop(resolved_str, None)
         if not stable or count >= 4:
             task_data["dedup"].pop(dedup_key, None)
             task_data["dedup_generation_reads"].discard(dedup_key)
@@ -602,6 +616,7 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     return count
 
 
+@file_backend_call
 def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, task_id: str = "default") -> str:
     """Read a file with pagination and line numbers.
 
@@ -674,10 +689,11 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
             # First unchanged read after a compaction boundary serves full content
             # (the summary may have dropped exact bytes); later ones get the stub.
             content_served_in_generation = dedup_key in task_data["dedup_generation_reads"]
+            read_revision = task_data.get('io_revision', 0)
         # Same rule as skill_view: the review fork shares the parent's task_id and its
         # read-before-write guard needs a real read, which the stub path never records (#95976).
         file_ops = _get_file_ops(task_id)
-        version_before = _file_metadata(resolved_str) if _file_ops_uses_host_paths(file_ops) else None
+        version_before = _file_metadata(resolved_str)
         if (cached_version is not None and not is_background_review()
                 and version_before == cached_version and content_served_in_generation):
             return _dedup_stub_or_block(task_data, dedup_key, path)
@@ -738,7 +754,8 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
                                         redacted=redacted or bool(result_dict.get("truncated_lines")),
                                         end_line=end_line, total_lines=total_lines,
                                         version_before=version_before,
-                                        snapshot=getattr(result, "_snapshot", None))
+                                        snapshot=getattr(result, "_snapshot", None), read_revision=read_revision,
+                                        protected_ticket=getattr(result, '_protected_ticket', None))
         if count >= 4:
             return tool_error(
                 f"BLOCKED: You have read this exact file region {count} times in a row. "
@@ -860,6 +877,7 @@ def _whole_file_rewrite_hint(task_id: str, resolved: str | None, new_content: st
     )
 
 
+@file_backend_call
 def write_file_tool(path: str, content: str, task_id: str = "default",
                     cross_profile: bool = False,
                     session_id: str | None = None) -> str:
@@ -882,24 +900,28 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     if err:
         return tool_error(err)
     try:
-        # Resolution failure falls back to the legacy unlocked path (the write
-        # still proceeds; the per-task staleness check still runs).
+        from tools.file_tools_commit_binding import capture_write_binding, bind_write_commit, authorized_write
         _resolved = _resolve_or_none(path, task_id)
+        if not _resolved:
+            return tool_error('Could not bind an absolute write target; refusing write')
+        binding = capture_write_binding(_resolved, task_id)
         path_to_resolved = {path: _resolved}
         with ExitStack() as _lock:
             if _resolved:
                 # Per-path lock serializes read→modify→write across concurrent
                 # subagents; different paths stay fully parallel.
-                _lock.enter_context(file_state.lock_path(_resolved))
+                _lock.enter_context(file_state.lock_path(binding.storage_key))
             # A whole-file overwrite of content this task never saw, or that
             # changed since, is refused HERE — before the write — instead of
             # warning after the clobber (#65604). Nothing below runs.
             blocker = _stale_overwrite_blocker(path, _resolved, task_id)
             if blocker:
                 return json.dumps(_stale_write_refusal(path, blocker, _resolved), ensure_ascii=False)
+            authorized_write(binding, task_id)
             warnings = _edit_warnings([path], path_to_resolved, task_id)
             rewrite_hint = _whole_file_rewrite_hint(task_id, _resolved, content)
-            result = _get_file_ops(task_id).write_file(_resolved or path, content)
+            with bind_write_commit(binding):
+                result = _get_file_ops(task_id).write_file(_resolved, content)
             result_dict = result.to_dict()
             if warnings:
                 result_dict["_warning"] = warnings[0]
@@ -916,7 +938,11 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
                     result_dict["files_modified"] = [_resolved]
                     # Own write = current whole-file content: consecutive
                     # same-task writes stay unblocked (patch_tool carries it).
-                    _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None))
+                    if binding.protected_ticket is not None:
+                        _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None),
+                                                 published_ticket=getattr(result, '_protected_ticket', None))
+                    else:
+                        _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None))
                 _note_edited(task_id, [path], path_to_resolved, session_id)
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
@@ -956,6 +982,7 @@ def _collect_v4a_header_paths(patch: str) -> tuple[list[str], list[str], list[st
     return paths, content_paths, entry_paths
 
 
+@file_backend_call
 def patch_tool(mode: str = "replace", path: str | None = None, old_string: str | None = None,
                new_string: str | None = None, replace_all: bool = False, patch: str | None = None,
                task_id: str = "default", cross_profile: bool = False,
@@ -985,7 +1012,7 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
         _path_to_resolved: dict[str, str] = {_p: _resolve_or_none(_p, task_id) for _p in _paths_to_check}
         _path_to_entry: dict[str, str] = {_p: _resolve_or_none(_p, task_id, entry=True) for _p in _entry_paths}
         with ExitStack() as _locks:
-            for _r in sorted({_r for _r in (*_path_to_resolved.values(), *_path_to_entry.values()) if _r}):
+            for _r in sorted({storage_path(_r) for _r in (*_path_to_resolved.values(), *_path_to_entry.values()) if _r}):
                 _locks.enter_context(file_state.lock_path(_r))
             stale_warnings = _edit_warnings(_paths_to_check, _path_to_resolved, task_id)
             file_ops = _get_file_ops(task_id)
@@ -1001,15 +1028,21 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
                 if old_string is None or new_string is None:
                     return tool_error("old_string and new_string required")
                 _replace_target = _path_to_resolved.get(path) or path
-                result = file_ops.patch_replace(_replace_target, old_string, new_string, replace_all)
+                from tools.file_protected_patch import protected_patch_scope
+                with protected_patch_scope(file_ops, task_id) as native_patch:
+                    result = file_ops.patch_replace(_replace_target, old_string, new_string, replace_all)
             elif mode == "patch":
                 if not patch:
                     return tool_error("patch content required")
-                result = file_ops.patch_v4a(
-                    _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops))
+                from tools.file_protected_patch import protected_patch_scope
+                with protected_patch_scope(file_ops, task_id) as native_patch:
+                    result = file_ops.patch_v4a(
+                        _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops))
             else:
                 return tool_error(f"Unknown mode: {mode}")
 
+            if native_patch is not None:
+                native_patch.record()
             result_dict = result.to_dict()
             if stale_warnings:
                 result_dict["_warning"] = " | ".join(stale_warnings)
@@ -1022,7 +1055,8 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
                 if len(_resolved_modified) == 1:
                     result_dict["resolved_path"] = _resolved_modified[0]
                 _note_edited(task_id, _paths_to_check, _path_to_resolved, session_id)
-                _carry_full_write_baselines(task_id, _known, getattr(result, "_writes", ()), _path_to_resolved)
+                if native_patch is None:
+                    _carry_full_write_baselines(task_id, _known, getattr(result, "_writes", ()), _path_to_resolved)
                 # Clear failure counters so a future miss starts a fresh count.
                 _reset_patch_failures(task_id, [_r for _r in _path_to_resolved.values() if _r])
         # old_string-not-found hint. Failure escalation is tracked for replace
@@ -1050,6 +1084,7 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
         return tool_error(str(e))
 
 
+@file_backend_call
 def search_tool(pattern: str, target: str = "content", path: str = ".",
                 file_glob: str | None = None, limit: int = 50, offset: int = 0,
                 output_mode: str = "content", context: int = 0,

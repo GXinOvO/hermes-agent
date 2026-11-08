@@ -72,3 +72,65 @@ BaseEnvironment shell export and cwd snapshots are supported. This backend does 
 shared persistent Python kernel, arbitrary live-object identity, the parent F02/A3 isolation
 contract, FUSE/ext4 publication, browser/Desktop placement or production adoption. Those remain
 separate acceptance gates.
+
+## Protected project volume (r19 candidate, pending independent review)
+
+The additional `protected_owned` provider is discoverable through the same bundled plugin.
+R19 qualifies the explicit private-offline project-volume combination through native config,
+PluginManager, terminal/file tools and process_manage. The original r17 `/cas` launch permission
+failure and r18 shell-bootstrap failure remain historical failures. The protected launch now
+enters the payload-owned root after dropping identity and retains only the constant
+`LD_LIBRARY_PATH=/opt/runtime/lib` for the protected Python runtime. Existing `owned_process`
+acceptance and its configuration above remain separate. This candidate is pending independent
+review and has not been installed, enabled or adopted in production.
+
+Candidate configuration (trusted owner input, no default activation):
+
+```yaml
+plugins:
+  enabled: [owned-process]
+  isolation: in_process
+  entries:
+    owned-process:
+      settings:
+        protected:
+          authority_root: /absolute/authority-package
+          state_root: /absolute/existing/private-state
+          volume: owner-specific-project-volume
+          label: owner-specific-resource-label
+          image: sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+terminal:
+  backend: protected_owned
+  cwd: /cas
+```
+
+The selected image must exist locally; constructors use `--pull=never`, private networking and
+exact task-labelled IDs. The immutable r16 authority binary/source hashes and system runtime
+dependencies are checked before service use. Authority runs as trusted container root in a PID
+namespace separate from each payload; payload UID/GID is `127776:456597`, root mode is `0700`.
+Native qualification records all payload UID/GID slots, empty supplementary groups, all capability
+sets zero, NoNewPrivs, mount/FD layout and paired lawful writes. Signal/ptrace/capability/identity
+attacks against live trusted PID1 fail with EPERM; trusted state/helper/control FD reads fail
+with EACCES. Absent host proc/Docker sockets are separate visibility observations. The PID1
+reaper retains only KILL/SETUID/SETGID (0xe0), drops bounding/inheritable/ambient capabilities,
+and leaves SIGINT at default. This assumes the native host controller and configuration owner
+are trusted; it does not establish hostile-host or arbitrary hostile-interpreter provenance.
+
+Project data is a Docker volume backed by the authority SQLite database; state-root identity
+is the trusted controller owner, not a hostile-payload provenance claim. Existing volume labels
+must match; another owner's data is never imported or overwritten. Bootstrap refreshes trusted
+code only. Environment cleanup retains that volume; explicit owner-controlled retirement is
+separate. There is no automatic host-directory import/export. Initialization and export use
+ordinary terminal/file tools on `/cas`; native qualification covers nested creation, consecutive
+writes/patches, independent readback and ordinary terminal mutation under the same authority.
+Final conditional publication detects a same-file replace or pwrite after host-side checks.
+Cleanup preserves data; normal reopen, idle authority SIGKILL/reopen and a journal-observed
+pre-COMMIT SIGKILL recover committed bytes. Each authority incarnation rejects prior tickets;
+a fresh full read restores lawful publication. Response loss after a real commit is unknown,
+with no automatic retry. Owned process results preserve generation/fingerprint/profile ownership
+and are readable by a fresh native interpreter without executing the command again.
+
+No host path should be supplied as `cwd` to simulate isolation. Hostnet, business credentials,
+shared Python kernels, mmap/symlink/full POSIX, power-loss durability of host storage, ordinary
+ext4 last-replace races and whole-Agent/browser/MCP behavior remain outside this candidate's
+claims. The task delivery REPORT and receipts define the exact accepted scope and history.

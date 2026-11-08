@@ -16,6 +16,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+from tools.file_backend_io import FileBackendUnavailable, file_mtime, storage_path
 
 # (mtime, read_ts, partial). partial=True when read_file returned a windowed
 # view (offset > 1 or limit < total_lines) — a later write should still warn
@@ -40,7 +41,7 @@ def guard_disabled() -> bool:
 
 def _mtime_or_none(resolved: str) -> Optional[float]:
     try:
-        return os.path.getmtime(resolved)
+        return file_mtime(resolved)
     except OSError:
         return None
 
@@ -68,13 +69,16 @@ class _WriteObserver:
         self.registry = registry
         self.exclude_task_id = exclude_task_id
         self.paths = frozenset(paths)
+        names = registry._read_names.get(exclude_task_id, {})
+        self.names = {path: names.get(path, path) for path in self.paths}
         self.modified: set[str] = set()
 
     def snapshot(self) -> list[str]:
         if _disabled():
             return []
         with self.registry._state_lock:
-            return sorted(self.modified)
+            paths = sorted(self.modified)
+        return [self.names[path] for path in paths]
 
     def close(self) -> None:
         with self.registry._state_lock:
@@ -86,6 +90,8 @@ class FileStateRegistry:
 
     def __init__(self) -> None:
         self._reads: dict[str, dict[str, ReadStamp]] = defaultdict(dict)
+        self._read_names: dict[str, dict[str, str]] = defaultdict(dict)
+        self._writer_names: dict[str, str] = {}
         self._last_writer: dict[str, tuple[str, float]] = {}
         self._path_locks: dict[str, threading.Lock] = {}
         self._path_lock_users: dict[str, int] = {}
@@ -97,14 +103,19 @@ class FileStateRegistry:
     def lock_path(self, resolved: str):
         """Per-path lock: threads on the same path serialize, different paths proceed.
         The lock entry is dropped once the last holder/waiter exits."""
+        resolved = storage_path(resolved)
         with self._meta_lock:
             lock = self._path_locks.setdefault(resolved, threading.Lock())
             self._path_lock_users[resolved] = self._path_lock_users.get(resolved, 0) + 1
-        lock.acquire()
+        acquired = False
         try:
+            acquired = lock.acquire(timeout=15)
+            if not acquired:
+                raise FileBackendUnavailable('file-state path lock deadline exceeded; refusing write')
             yield
         finally:
-            lock.release()
+            if acquired:
+                lock.release()
             with self._meta_lock:
                 users = self._path_lock_users[resolved] - 1
                 if users:
@@ -113,11 +124,13 @@ class FileStateRegistry:
                     self._path_lock_users.pop(resolved, None)
                     self._path_locks.pop(resolved, None)
 
-    def _stamp(self, task_id: str, resolved: str, mtime: float, now: float, partial: bool) -> None:
+    def _stamp(self, task_id: str, resolved: str, mtime: float, now: float, partial: bool, display: str) -> None:
         """Caller holds ``_state_lock``."""
         agent_reads = self._reads[task_id]
         agent_reads[resolved] = (float(mtime), now, bool(partial))
+        self._read_names[task_id][resolved] = display
         _evict_oldest(agent_reads, _MAX_PATHS_PER_AGENT)
+        self._read_names[task_id] = {p: name for p, name in self._read_names[task_id].items() if p in agent_reads}
 
     def record_read(self, task_id: str, resolved: str, *, partial: bool = False,
                     mtime: Optional[float] = None) -> None:
@@ -126,8 +139,9 @@ class FileStateRegistry:
         mtime = _mtime_or_none(resolved) if mtime is None else mtime
         if mtime is None:
             return
+        display, resolved = resolved, storage_path(resolved)
         with self._state_lock:
-            self._stamp(task_id, resolved, mtime, time.time(), partial)
+            self._stamp(task_id, resolved, mtime, time.time(), partial, display)
 
     def note_write(self, task_id: str, resolved: str, *, mtime: Optional[float] = None) -> None:
         """Record a successful write: global last-writer AND this agent's own
@@ -137,11 +151,14 @@ class FileStateRegistry:
         mtime = _mtime_or_none(resolved) if mtime is None else mtime
         if mtime is None:
             return
+        display, resolved = resolved, storage_path(resolved)
         with self._state_lock:
             now = time.time()
             self._last_writer[resolved] = (task_id, now)
+            self._writer_names[resolved] = display
             _evict_oldest(self._last_writer, _MAX_GLOBAL_WRITERS)
-            self._stamp(task_id, resolved, mtime, now, False)
+            self._writer_names = {p: name for p, name in self._writer_names.items() if p in self._last_writer}
+            self._stamp(task_id, resolved, mtime, now, False, display)
             for observer in self._write_observers:
                 if task_id != observer.exclude_task_id and resolved in observer.paths:
                     observer.modified.add(resolved)
@@ -151,9 +168,10 @@ class FileStateRegistry:
         order: sibling wrote after our read > mtime drift / partial read > never read."""
         if _disabled():
             return None
+        key = storage_path(resolved)
         with self._state_lock:
-            stamp = self._reads.get(task_id, {}).get(resolved)
-            last_writer = self._last_writer.get(resolved)
+            stamp = self._reads.get(task_id, {}).get(key)
+            last_writer = self._last_writer.get(key)
 
         if stamp is None and last_writer is None:  # net-new file / first touch
             return None
@@ -212,12 +230,12 @@ class FileStateRegistry:
         you previously read" reminder)."""
         if _disabled():
             return {}
-        paths_set = set(paths)
+        paths_set = {storage_path(p) for p in paths}
         out: dict[str, list[str]] = defaultdict(list)
         with self._state_lock:
             for p, (writer_tid, ts) in self._last_writer.items():
                 if writer_tid != exclude_task_id and ts >= since_ts and p in paths_set:
-                    out[writer_tid].append(p)
+                    out[writer_tid].append(self._read_names.get(exclude_task_id, {}).get(p, self._writer_names.get(p, p)))
         return dict(out)
 
     def known_reads(self, task_id: str) -> list[str]:
@@ -227,6 +245,11 @@ class FileStateRegistry:
         with self._state_lock:
             return list(self._reads.get(task_id, {}).keys())
 
+    def display_paths(self, task_id: str, paths: Iterable[str]) -> list[str]:
+        with self._state_lock:
+            names = self._read_names.get(task_id, {})
+            return [names.get(p, self._writer_names.get(p, p)) for p in paths]
+
     def forget_task(self, task_id: str) -> None:
         """Release read stamps and writer claims owned by a task after its lifecycle ends.
 
@@ -235,13 +258,17 @@ class FileStateRegistry:
         same scratch path as "modified by sibling subagent" hours after the writer exited."""
         with self._state_lock:
             self._reads.pop(task_id, None)
+            self._read_names.pop(task_id, None)
             for p in [p for p, (writer_tid, _ts) in self._last_writer.items() if writer_tid == task_id]:
                 del self._last_writer[p]
+                self._writer_names.pop(p, None)
 
     def clear(self) -> None:
         """Reset all state. Intended for tests only."""
         with self._state_lock:
             self._reads.clear()
+            self._read_names.clear()
+            self._writer_names.clear()
             self._last_writer.clear()
         with self._meta_lock:
             self._path_locks.clear()

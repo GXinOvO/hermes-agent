@@ -27,6 +27,7 @@ import time
 
 from tools.file_state import _evict_oldest
 from tools.file_tools_paths import _authoritative_workspace_root, _resolve_path_for_task
+from tools.file_backend_io import file_exists, file_metadata, file_mtime, remote_file_version, storage_path
 
 logger = logging.getLogger("tools.file_tools")
 
@@ -55,7 +56,7 @@ def _task_data(task_id: str) -> dict:
     task_data = _read_tracker.setdefault(task_id, {
         "last_key": None, "consecutive": 0, "read_history": set()})
     for key in ("dedup", "dedup_hits", "read_timestamps", "read_coverage", "full_write_baselines",
-                "blind_patches"):
+                "storage_paths", "protected_tickets", "blind_patches"):
         task_data.setdefault(key, {})
     task_data.setdefault("dedup_generation_reads", set())
     return task_data
@@ -93,6 +94,8 @@ def _cap_read_tracker_data(task_data: dict) -> None:
         ("read_timestamps", _READ_TIMESTAMPS_CAP),
         ("read_coverage", _READ_TIMESTAMPS_CAP),
         ("full_write_baselines", _FULL_WRITE_BASELINES_CAP),
+        ("storage_paths", _FULL_WRITE_BASELINES_CAP),
+        ("protected_tickets", _FULL_WRITE_BASELINES_CAP),
         ("blind_patches", _FULL_WRITE_BASELINES_CAP),
         ("not_found", _NOT_FOUND_CAP)):
         container = task_data.get(key)
@@ -133,7 +136,7 @@ def _check_not_found_cache(op: str, resolved_str: str, task_id: str) -> str | No
     # "check → create → read" is common, so never serve a stale miss for a path
     # that now exists. The stat runs OUTSIDE the tracker lock: a hung stat on a
     # dead network mount must not stall every task.
-    if os.path.exists(resolved_str):
+    if file_exists(resolved_str):
         with _read_tracker_lock:
             _pop_not_found(op, resolved_str, task_id)
         return None
@@ -175,15 +178,26 @@ def reset_file_dedup(task_id: str | None = None):
         else:
             targets = list(_read_tracker.values())
         for task_data in targets:
+            task_data['io_revision'] = task_data.get('io_revision', 0) + 1
             if "dedup_hits" in task_data:
                 task_data["dedup_hits"].clear()
             task_data.setdefault("dedup_generation_reads", set()).clear()
-        candidates = [(task_data, dict(task_data.get("full_write_baselines", {})))
+        candidates = [(task_data, task_data.get('backend_binding'), dict(task_data.get("full_write_baselines", {})),
+                       dict(task_data.get('storage_paths', {})), task_data['io_revision'])
                       for task_data in targets]
-    for task_data, baselines in candidates:
-        changed = {p for p, version in baselines.items() if _file_metadata(p) != version[:-1]}
+    from tools.file_backend_io import saved_backend_scope
+    for task_data, binding, baselines, paths, revision in candidates:
+        try:
+            with saved_backend_scope(binding):
+                changed = {p for p, version in baselines.items()
+                           if storage_path(p) != paths.get(p) or _file_metadata(p) != version[:-1]}
+        except Exception:
+            logger.debug('saved backend baseline validation failed', exc_info=True)
+            changed = set(baselines)
         if changed:
             with _read_tracker_lock:
+                if task_data.get('backend_binding') != binding or task_data.get('io_revision') != revision:
+                    continue
                 for p in changed:
                     if task_data["full_write_baselines"].get(p) == baselines[p]:
                         task_data["full_write_baselines"].pop(p, None)
@@ -216,6 +230,7 @@ def _invalidate_dedup_for_path(filepath: str, task_id: str) -> None:
         task_data = _read_tracker.get(task_id)
         if task_data is None:
             return
+        task_data['io_revision'] = task_data.get('io_revision', 0) + 1
         dedup = task_data.get("dedup")
         if dedup:
             for k in [k for k in dedup if k[0] == resolved]:
@@ -236,7 +251,7 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
     if resolved is None:
         return
     try:
-        current_mtime = os.path.getmtime(resolved)
+        current_mtime = file_mtime(resolved)
     except OSError:
         return
     with _read_tracker_lock:
@@ -248,14 +263,16 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
 
 def _file_metadata(resolved: str) -> tuple | None:
     try:
-        st = os.stat(resolved)
-        return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+        return file_metadata(resolved)
     except OSError:
         return None
 
 
 def _file_version(resolved: str) -> tuple | None:
     """A byte snapshot, not just mtime (editors/copy tools can preserve that)."""
+    remote, version = remote_file_version(resolved)
+    if remote:
+        return version
     try:
         if not stat.S_ISREG(os.stat(resolved).st_mode):
             return None
@@ -275,16 +292,51 @@ def _file_version(resolved: str) -> tuple | None:
         return None
 
 
-def _mark_full_write_baseline(resolved: str, task_id: str, expected_sha256: str | None = None) -> None:
+def _mark_full_write_baseline(resolved: str, task_id: str, expected_sha256: str | None = None,
+                              published_ticket=None) -> None:
     """Record that *task_id* saw the whole current content of *resolved* (full
     unredacted read_file, or its own successful write_file), so a later
     write_file may replace the file. Acquires the lock itself."""
-    version = _file_version(resolved)
+    with _read_tracker_lock:
+        data = _task_data(task_id)
+        revision = data.get('io_revision', 0)
+    key = storage_path(resolved)
+    from tools.file_backend_io import _active
+    from tools.file_protected_fuse import protected_fuse
+    protected = protected_fuse(_active.get())
+    ticket = protected.snapshot(resolved) if protected is not None else None
+    version = ticket.version if ticket is not None else _file_version(resolved)
+    if protected is not None and (published_ticket is None or ticket is None
+                                 or ticket.packet != published_ticket.packet
+                                 or ticket.generation != published_ticket.generation
+                                 or ticket.domain_json != published_ticket.domain_json
+                                 or ticket.version != published_ticket.version
+                                 or ticket.storage_key != published_ticket.storage_key
+                                 or published_ticket.task_id != task_id):
+        with _read_tracker_lock:
+            current = _read_tracker.get(task_id)
+            if current is not None and current is data and current.get('io_revision', 0) == revision:
+                for key in ('full_write_baselines', 'protected_tickets', 'storage_paths',
+                            'read_coverage', 'read_timestamps'):
+                    current.get(key, {}).pop(str(resolved), None)
+                for key in ('dedup', 'dedup_hits'):
+                    cache = current.get(key, {})
+                    for entry in [entry for entry in cache if entry[0] == str(resolved)]:
+                        cache.pop(entry, None)
+                generation_reads = current.get('dedup_generation_reads', set())
+                generation_reads.difference_update([key for key in generation_reads if key[0] == str(resolved)])
+        return
     if version is None or (expected_sha256 is not None and version[-1].hex() != expected_sha256):
         return
     with _read_tracker_lock:
-        task_data = _task_data(task_id)
+        task_data = _read_tracker.get(task_id)
+        if task_data is not data or task_data.get('io_revision', 0) != revision:
+            return
         task_data["full_write_baselines"][str(resolved)] = version
+        if ticket is not None:
+            from dataclasses import replace
+            task_data.setdefault('protected_tickets', {})[str(resolved)] = replace(ticket, task_id=task_id)
+        task_data.setdefault('storage_paths', {})[str(resolved)] = key
         task_data["blind_patches"].pop(str(resolved), None)
         _cap_read_tracker_data(task_data)
 
@@ -293,7 +345,8 @@ def _has_full_write_baseline(resolved: str, task_id: str) -> bool:
     with _read_tracker_lock:
         task_data = _read_tracker.get(task_id) or {}
         baseline = task_data.get("full_write_baselines", {}).get(str(resolved))
-    return baseline is not None and _file_version(resolved) == baseline
+        key = task_data.get('storage_paths', {}).get(str(resolved))
+    return baseline is not None and key == storage_path(resolved) and _file_version(resolved) == baseline
 
 
 def _known_full_content_sha256(resolved_paths, task_id: str) -> dict:
@@ -391,7 +444,7 @@ def _read_mtime_drifted(filepath: str, task_id: str) -> bool:
     if read_mtime is None:
         return False
     try:
-        return os.path.getmtime(resolved) != read_mtime
+        return file_mtime(resolved) != read_mtime
     except OSError:
         return False
 
@@ -411,6 +464,10 @@ def _mark_verification_stale(task_id: str, resolved_paths: list[str],
     """Best-effort note that successful edits made prior verification stale. cwd: the
     first edited path's recognised project root, else the workspace root, else the first parent."""
     from pathlib import Path
+    from tools.file_backend_io import _active
+
+    if _active.get() is not None:
+        return
 
     paths = [p for p in resolved_paths if p]
     if not paths:

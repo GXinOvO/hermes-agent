@@ -25,6 +25,7 @@ from tools.binary_extensions import (
 from tools.file_tools_paths import (
     _expand_tilde, _resolve_path_for_task, _ssh_path_escapes_home, _terminal_env_type_for_task)
 from tools.file_tools_read_tracking import _has_full_write_baseline, _is_own_blind_patch, _read_mtime_drifted
+from tools.file_backend_io import file_exists
 import itertools
 
 # Prefixes matched after realpath. macOS: /private/var mirrors /var — block the
@@ -580,9 +581,9 @@ def _stale_overwrite_blocker(filepath: str, resolved: str | None, task_id: str) 
     if not resolved or _has_full_write_baseline(resolved, task_id):
         return None
     try:
-        exists = Path(resolved).exists()
+        exists = file_exists(resolved)
     except OSError:
-        return None
+        return 'Could not establish current file state; retry after the backend is available.'
     if not exists:
         return None
     if _is_own_blind_patch(resolved, task_id):

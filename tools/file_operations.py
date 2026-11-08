@@ -347,6 +347,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         else base64 over the transport; ``(None, result)`` hands back the failed shell read for the
         caller's message. Only a regular file gets a native open (a FIFO would block this thread); the
         rest take the shell path and its timeout, as before."""
+        from tools.file_protected_patch import protected_patch
+        state = protected_patch(self)
+        if state is not None:
+            ticket = state.target(path)
+            if ticket.absent:
+                return None, ExecuteResult(stdout=f"No such file or directory: {path}", exit_code=1)
+            return ticket.content, None
         if self._native_read_enabled():
             import stat as _stat
             full = path if os.path.isabs(path) else os.path.join(
@@ -580,6 +587,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         doesn't =word-expand. ``trap ... EXIT`` removes the temp on every failure.
         The local POSIX backend does the same in-process (``tools.file_operations_native``).
         """
+        from tools.file_tools_commit_binding import bound_atomic_write
+        bound = bound_atomic_write(self, path, content)
+        if bound is not None:
+            return bound
         if self._native_read_enabled():
             error = _native_io.atomic_write(self._native_path(path), content.encode("utf-8", "surrogateescape"))
             return ExecuteResult(stdout=error or "", exit_code=1 if error else 0)
@@ -830,6 +841,9 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         """
         path = self._expand_path(path)  # before shell escaping: ~ doesn't expand in quotes
         offset, limit = normalize_read_pagination(offset, limit)
+        from tools.file_protected_fuse import protected_fuse
+        if protected_fuse(self.env) is not None:
+            return self.env.read_file(self, path, offset, limit)
 
         if self._native_read_enabled():
             return self._read_file_native(path, offset, limit)
@@ -1251,6 +1265,20 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     def read_file_raw(self, path: str) -> ReadResult:
         """Whole file as a plain string (no pagination/line numbers/clamping)."""
         path = self._expand_path(path)
+        from tools.file_protected_patch import protected_patch
+        state = protected_patch(self)
+        if state is not None:
+            ticket = state.target(path)
+            if ticket.absent:
+                return ReadResult(error=f"File not found: {path}", not_found=True)
+            if self._is_image(path):
+                return ReadResult(is_image=True, is_binary=True, file_size=len(ticket.content))
+            sample = ticket.content[:1000]
+            if has_binary_extension(path) or self._is_likely_binary_bytes(sample):
+                return ReadResult(is_binary=True, file_size=len(ticket.content),
+                                  error=describe_binary_file(sample, len(ticket.content)))
+            content, _ = _strip_bom(ticket.content.decode('utf-8', 'surrogateescape'))
+            return ReadResult(content=content, file_size=len(ticket.content), _content_sha256=ticket.sha256)
         file_size, status = self._probe_regular_file(path)
         if status == "missing":
             return self._suggest_similar_files(path)
@@ -1310,6 +1338,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         denied = get_write_denied_error(path, verb="Delete", entry=True)
         if denied:
             return WriteResult(error=denied)
+        from tools.file_protected_patch import protected_patch
+        state = protected_patch(self)
+        if state is not None:
+            result = state.namespace(path)
+            return WriteResult(error=result.stdout if result.exit_code else None)
+        from tools.file_protected_fuse import protected_fuse
+        if protected_fuse(self.env) is not None:
+            raise RuntimeError('protected delete requires native patch binding')
         # Path baked in via repr() for shell-independent quoting; no
         # ``unlink(missing_ok=True)`` (a 3.7 remote interpreter lacks it).
         snippet = (
@@ -1349,6 +1385,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             denied = get_write_denied_error(p, verb="Move", entry=True)
             if denied:
                 return WriteResult(error=denied)
+        from tools.file_protected_patch import protected_patch
+        state = protected_patch(self)
+        if state is not None:
+            result = state.namespace(src, dst)
+            return WriteResult(error=result.stdout if result.exit_code else None)
+        from tools.file_protected_fuse import protected_fuse
+        if protected_fuse(self.env) is not None:
+            raise RuntimeError('protected move requires native patch binding')
         result = self._exec(f"mv {self._escape_shell_arg(src)} {self._escape_shell_arg(dst)}")
         if result.exit_code != 0:
             return WriteResult(error=f"Failed to move {src} -> {dst}: {result.stdout}")
@@ -1417,6 +1461,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         pre-content is read only when wanted and not supplied; the line ending comes
         from pre-content when there is any, else from the sample; the BOM always comes
         from disk. An unparseable reply falls back to the separate probes."""
+        from tools.file_protected_patch import protected_patch
+        state = protected_patch(self)
+        if state is not None:
+            raw = state.target(path).content
+            body = raw.decode('utf-8', 'surrogateescape')
+            if want_pre and pre_content is None:
+                pre_content = body
+            return raw.startswith(_UTF8_BOM.encode()), pre_content, _detect_line_ending(pre_content or body)
         if want_pre and pre_content is None:
             body_mode: Optional[str] = "cat"
         elif not pre_content:
@@ -1562,7 +1614,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         write_result = self._atomic_write(path, content)
         if write_result.exit_code != 0:
             return WriteResult(error=f"Failed to write file: {write_result.stdout}")
-        content_verified, verify_error = self._verify_written_hash(path, content_bytes)
+        if getattr(write_result, '_protected_ticket', None) is not None:
+            content_verified, verify_error = True, None
+        else:
+            content_verified, verify_error = self._verify_written_hash(path, content_bytes)
         if verify_error is not None:
             return verify_error
 
@@ -1576,6 +1631,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return WriteResult(
             bytes_written=len(content_bytes), dirs_created=dirs_created, verified=content_verified,
             _content_sha256=hashlib.sha256(content_bytes).hexdigest(),
+            _protected_ticket=getattr(write_result, '_protected_ticket', None),
             lint=lint_result.to_dict() if lint_result else None, lsp_diagnostics=lsp_diagnostics)
 
     # --- PATCH (replace mode) -----------------------------------------------
@@ -1607,6 +1663,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         Line endings are normalized first (Windows text-mode ``open()`` writes LF as
         CRLF) and the re-read's BOM stripped (``new_content`` is the BOM-less
         string we matched against)."""
+        from tools.file_protected_patch import protected_patch
+        if protected_patch(self) is not None:
+            # write_file compared its complete published identity. Re-reading
+            # here must not replace that identity with a later same-byte object.
+            return None
         data, _failed = self._read_exact_bytes(path)
         if data is None:
             return PatchResult(error=f"Post-write verification failed: could not re-read {path}")
