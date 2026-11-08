@@ -8,6 +8,7 @@ files via ``env.execute()``.
 
 import base64
 from contextlib import nullcontext
+from contextvars import ContextVar
 import json
 import logging
 import secrets
@@ -24,11 +25,27 @@ logger = logging.getLogger("tools.code_execution_tool")
 
 # Terminal parameters that must not be used from ephemeral sandbox scripts.
 _TERMINAL_BLOCKED_PARAMS = {"background", "pty", "notify", "notify_on_complete", "watch_patterns", "heartbeat", "persist_on_release"}
+_parallel_call_id: ContextVar[str] = ContextVar("ptc_parallel_call_id", default="")
 
 
 def _default_dispatch(task_id):
     from model_tools import handle_function_call
-    return lambda tool_name, tool_args: handle_function_call(tool_name, tool_args, task_id=task_id)
+    def dispatch(tool_name, tool_args):
+        if call_id := _parallel_call_id.get():
+            from tools.approval_context import (get_current_observability_context,
+                                                reset_current_observability_context,
+                                                set_current_observability_context)
+            scope = get_current_observability_context()
+            scope["tool_call_id"] = call_id
+            tokens = set_current_observability_context(**scope)
+            try:
+                return handle_function_call(tool_name, tool_args, task_id=task_id,
+                                            tool_call_id=call_id, turn_id=scope["turn_id"],
+                                            session_id=scope["session_id"])
+            finally:
+                reset_current_observability_context(tokens)
+        return handle_function_call(tool_name, tool_args, task_id=task_id)
+    return dispatch
 
 
 def _private_dirs_cmd(root: str, *subdirs: str) -> str:

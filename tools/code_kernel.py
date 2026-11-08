@@ -239,9 +239,10 @@ class CellAuthority:
         return self._dispatch_started(tool_name, tool_args)
 
     def _dispatch_started(self, tool_name: str, tool_args: dict) -> str:
-        return self.ctx.copy().run(self._invoke, tool_name, tool_args)
+        from tools.code_execution_rpc import _parallel_call_id
+        return self.ctx.copy().run(self._invoke, tool_name, tool_args, _parallel_call_id.get())
 
-    def _invoke(self, tool_name: str, tool_args: dict) -> str:
+    def _invoke(self, tool_name: str, tool_args: dict, call_id: str = "") -> str:
         from model_tools import handle_function_call
         from tools.interrupt import acting_for_tid
         origin = acting_for_tid.set(self.origin_tid)
@@ -254,6 +255,19 @@ class CellAuthority:
             except Exception:
                 previous = None
         try:
+            if call_id:
+                from tools.approval_context import (get_current_observability_context,
+                                                    reset_current_observability_context,
+                                                    set_current_observability_context)
+                scope = get_current_observability_context()
+                scope["tool_call_id"] = call_id
+                tokens = set_current_observability_context(**scope)
+                try:
+                    return handle_function_call(tool_name, tool_args, task_id=self.task_id,
+                                                tool_call_id=call_id, turn_id=scope["turn_id"],
+                                                session_id=scope["session_id"])
+                finally:
+                    reset_current_observability_context(tokens)
             return handle_function_call(tool_name, tool_args, task_id=self.task_id)
         finally:
             acting_for_tid.reset(origin)

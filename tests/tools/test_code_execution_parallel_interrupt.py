@@ -19,7 +19,7 @@ def test_native_interrupt_stops_queued_batch_and_other_owner_stays_usable(monkey
     seen, outcomes, owner_tid = [], [], []
     guard = threading.Lock()
 
-    def dispatch(name, args, task_id=None):
+    def dispatch(name, args, task_id=None, **kwargs):
         if task_id == "other-task":
             return '{"content":"other-owner"}'
         with guard:

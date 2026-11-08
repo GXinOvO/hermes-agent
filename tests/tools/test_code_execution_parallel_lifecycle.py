@@ -159,7 +159,7 @@ def test_queued_old_cell_reads_do_not_charge_a_new_cell():
     held_threads = []
     guard = threading.Lock()
 
-    def dispatch(name, args, task_id=None):
+    def dispatch(name, args, task_id=None, **kwargs):
         with guard:
             observed.append(task_id)
             if task_id == "old":
