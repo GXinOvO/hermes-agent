@@ -16,13 +16,11 @@ logger = logging.getLogger("tools.terminal_tool")
 # only for servers/watchers; for bounded tasks the agent almost always wanted a
 # notification and forgot the flag, so nudge it (cheap false positive).
 _SILENT_BACKGROUND_HINT = (
-    'background=true without notify_on_complete=true means this process runs SILENTLY — you '
-    'will not be told when it exits. If this is a bounded task (test suite, build, CI poller, '
-    'deploy, anything with a defined end), you almost certainly wanted notify_on_complete=true '
-    'so the system pings you on exit. Re-launch with notify_on_complete=true, or call '
-    "process(action='poll') / process(action='wait') yourself to learn the outcome. Only "
-    'ignore this hint for genuine long-lived processes that never exit (servers, watchers, '
-    'daemons).'
+    'This process is running silently; no completion notification was requested. '
+    'Do NOT re-launch it to enable notifications: that would start a second copy. '
+    'Use process_manage wait, poll, or log with the returned session_id to inspect this execution. '
+    'For future bounded tasks, start with background=true and notify=true. '
+    'Servers and watchers may intentionally run silently.'
 )
 
 # Homebrewed CI pollers built on `gh pr view --json statusCheckRollup` or

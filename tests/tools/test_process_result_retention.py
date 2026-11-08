@@ -176,3 +176,37 @@ def test_ttl_still_expires_native_receipts(native_terminal, tmp_path, consumed):
         assert pr.ProcessRegistry().poll(session.id)['status'] == 'not_found'
     assert not path.exists()
     assert (tmp_path / 'executions').read_text() == '0\n'
+
+
+@pytest.mark.platforms("linux", "macos")
+def test_silent_background_guidance_keeps_the_original_execution(tmp_path, native_terminal):
+    producer = native_terminal
+    terminal_entry = tools.get_entry("terminal")
+    process_entry = tools.get_entry("process_manage")
+    assert terminal_entry is not None and process_entry is not None
+    marker = tmp_path / "executions"
+    command = shlex.join([
+        sys.executable, "-c",
+        f"from pathlib import Path; p=Path({str(marker)!r}); "
+        r"p.open('a').write('once\n'); print('FINISHED')",
+    ])
+
+    with scoped_current_session_id("silent-guidance-owner"):
+        result = json.loads(terminal_entry.handler(
+            {"command": command, "background": True, "notify": False, "workdir": str(tmp_path)},
+            task_id="silent-guidance-task", session_id="silent-guidance-session"))
+        assert result.get("error") is None, result
+        session = producer.get(result["session_id"])
+        try:
+            hint = result["hint"]
+            assert "Do NOT re-launch" in hint, hint
+            assert "notify_on_complete=true" not in hint, hint
+            assert "session_id" in hint and "wait" in hint and "poll" in hint, hint
+            waited = json.loads(process_entry.handler(
+                {"action": "wait", "session_id": result["session_id"], "timeout": 10}))
+            assert waited["status"] == "exited" and waited["exit_code"] == 0, waited
+            assert "FINISHED" in waited["output"], waited
+            assert marker.read_text() == "once\n"
+            assert producer.get(result["session_id"]) is session
+        finally:
+            producer.kill_all(source="test")
