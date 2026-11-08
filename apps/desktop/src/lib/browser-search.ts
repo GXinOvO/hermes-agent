@@ -8,7 +8,8 @@ import { type BrowserBootstrap, endpointUrl } from '@/lib/browser-transport'
 /** Browser-hosted Desktop searches the server's filesystem with the same
  * same-origin cookie/session header as its existing file preview requests. */
 export function createBrowserSearchBridge(
-  bootstrap: BrowserBootstrap
+  bootstrap: BrowserBootstrap,
+  bootstrapFor?: (connectionId?: null | string, sessionId?: string) => BrowserBootstrap
 ): Pick<Window['hermesDesktop'], 'searchFiles' | 'cancelFileSearch' | 'onFileSearchFrame'> {
   const listeners = new Set<(event: { id: string; frame: FileSearchFrame }) => void>()
   const active = new Map<string, AbortController>()
@@ -25,7 +26,11 @@ export function createBrowserSearchBridge(
       active.get(id)?.abort()
     },
     searchFiles: async (payload: HermesFileSearchPayload) => {
-      requireBrowserConnection(payload.connectionId)
+      if (!bootstrapFor) {
+        requireBrowserConnection(payload.connectionId)
+      }
+
+      const target = bootstrapFor?.(payload.connectionId, payload.sessionId) ?? bootstrap
 
       if (payload.native) {
         throw new Error('This window can search only the connected filesystem')
@@ -49,7 +54,7 @@ export function createBrowserSearchBridge(
       const timer = setTimeout(() => controller.abort(), (payload.request.timeoutMs ?? 15000) + 5000)
 
       try {
-        const url = endpointUrl('/api/fs/search', bootstrap.basePath, payload.profile)
+        const url = endpointUrl('/api/fs/search', target.basePath, payload.profile)
 
         if (payload.sessionId !== undefined) {
           url.searchParams.set('session_id', payload.sessionId)
@@ -61,7 +66,7 @@ export function createBrowserSearchBridge(
           signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
-            ...(bootstrap.token ? { 'X-Hermes-Session-Token': bootstrap.token } : {})
+            ...(target.token ? { 'X-Hermes-Session-Token': target.token } : {})
           },
           body: JSON.stringify(payload.request)
         })

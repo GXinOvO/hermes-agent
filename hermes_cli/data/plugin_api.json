@@ -89,6 +89,8 @@
       "source": "adding-platform-adapters.md § Public helpers for platform plugins",
       "entries": [
         "gateway.platforms.access_policy_mixin:OwnAccessPolicyMixin",
+        "gateway.strict_transport:single_attempt_transport",
+        "gateway.strict_transport:strict_transport",
         "tools.approval:resolve_gateway_approval",
         "tools.approval:resolve_gateway_approval_card",
         "tools.clarify_gateway:get_pending",
@@ -125,6 +127,18 @@
       "source": "plugins/index.md § platform plugins: read session identity through the task-local context",
       "entries": [
         "gateway.session_context:get_session_env"
+      ]
+    },
+    {
+      "source": "plugin-llm-access.md § From the plugin's frontend: a plugin RPC method (`force=True` where secrets must never leave)",
+      "entries": [
+        "agent.redact:redact_sensitive_text"
+      ]
+    },
+    {
+      "source": "user-guide/features/plugins.md § Plugin code inside the gateway: which client created the session",
+      "entries": [
+        "hermes_cli.plugin_session:session_client"
       ]
     }
   ]

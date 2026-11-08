@@ -25,9 +25,12 @@ it('captures a known legacy profile door without inheriting a foreign ambient co
   setSessions([{ id: 'legacy', profile: 'legacy-profile' } as never])
   setApiRequestConnection('foreign')
   $connection.set({ connectionId: 'foreign', profile: 'ambient', mode: 'remote' } as never)
-  expect(captureFileSearchScope('legacy')).toEqual({
-    sessionId: 'legacy', owner: { profile: 'legacy-profile', native: false }
+  const scope = captureFileSearchScope('legacy')
+  expect(scope).toEqual({
+    sessionId: 'legacy', owner: { connectionId: 'primary', profile: 'legacy-profile', native: false }
   })
+  setPrimaryGatewayConnection({ connectionId: 'changed', mode: 'remote' }, 'legacy-profile')
+  expect(scope.owner?.connectionId).toBe('primary')
 })
 
 it('keeps a local host tile native even when the ambient profile uses SSH', () => {

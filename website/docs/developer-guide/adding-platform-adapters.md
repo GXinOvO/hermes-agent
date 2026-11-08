@@ -305,6 +305,7 @@ lists each import of it.
 | SSRF-safe HTTP client: connect-time IP validation, per-redirect re-check, shared keepalive limits | `from gateway.platforms.helpers import platform_http_client` |
 | The pieces of that client, to build your own | `gateway.platforms.base.ssrf_redirect_guard` (httpx `response` hook), `tools.url_safety.create_ssrf_safe_async_client`, `tools.url_safety.is_safe_url`, `gateway.platforms._http_client_limits.platform_httpx_limits` |
 | Own DM/group policy (`dm_policy` / `group_policy` / allowlists) | `from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin` |
+| Single-attempt delivery after a durable claim | `gateway.strict_transport.single_attempt_transport`, `gateway.strict_transport.strict_transport` |
 | Resolve an approval from a native button | `from tools.approval import resolve_gateway_approval_card` (pass the card's request id; `resolve_gateway_approval` answers the oldest pending request) |
 | Native clarify buttons | `tools.clarify_gateway`: `get_pending(clarify_id)` (the pending entry or `None`; read `session_key`, `choices`, `multi_select`), `resolve_gateway_clarify(clarify_id, text)`, `mark_awaiting_text(clarify_id)`, `SKIPPED` |
 | `setup_fn` wizard steps | `hermes_cli.gateway_setup_wizard`: `print_setup_header(title)`, `confirm_reconfigure(label, *env_vars)`, `offer_home_channel(home_var, user_id, what)`, `save_env_values(**values)`, `prompt_csv(text, default)`; prompts from `hermes_cli.setup` (`prompt`, `prompt_choice`, `prompt_yes_no`); output from `hermes_cli.cli_output` (`print_info`, `print_success`, `print_warning`, `print_error`); `.env` access through `hermes_cli.config` (`save_env_value`, `get_env_value`) |
@@ -317,6 +318,14 @@ async def connect(self) -> bool:
     self._http = platform_http_client(headers={"User-Agent": "my-chat-bot/1.0"})
     ...
 ```
+
+`strict_transport()` is true only inside the caller's strict delivery scope. A marked method
+must disable its internal retries and fallbacks in that scope, validate its transport and business
+ACK, and stop a multipart send on its first uncertain result. `single_attempt_transport` marks only
+the decorated method; it does not disable SDK retries or grant permission to send. An uncertain
+submission must remain unknown for reconciliation rather than being sent again. The bundled
+`strict-transport-compat` plugin applies this contract to the audited Yuanbao Labs implementation;
+unknown plugin revisions remain unavailable for strict delivery while ordinary sending is unchanged.
 
 `get_pending()` returns `None` once the clarify was answered, timed out or cleared, so compare the
 result by identity with the entry your card was rendered for before acting on a click.

@@ -10,17 +10,19 @@ from gateway.strict_transport import strict_transport, strict_transport_scope
 
 
 @pytest.mark.asyncio
-async def test_yuanbao_lost_ack_is_not_retried_in_strict_scope():
-    from plugins.platforms.yuanbao.adapter import MessageSender
-    sender = MessageSender(SimpleNamespace(name='inert'))
-    sender._send_msg_body = AsyncMock(side_effect=TimeoutError('lost ACK'))
-    with patch('asyncio.sleep', new=AsyncMock()):
-        with strict_transport_scope():
+async def test_yuanbao_lost_ack_is_not_retried_in_strict_scope(tmp_path, monkeypatch):
+    from tests.gateway.yuanbao_external_fixture import connected_adapter, loaded_yuanbao
+
+    with loaded_yuanbao(tmp_path, monkeypatch) as (_manager, module, _entry, _directory):
+        sender = (await connected_adapter(module))._outbound.sender
+        sender._send_msg_body = AsyncMock(side_effect=TimeoutError('lost ACK'))
+        with patch('asyncio.sleep', new=AsyncMock()):
+            with strict_transport_scope():
+                assert not (await sender.send_text_chunk('direct:inert', 'answer')).success
+            assert sender._send_msg_body.await_count == 1
+            sender._send_msg_body.reset_mock()
             assert not (await sender.send_text_chunk('direct:inert', 'answer')).success
-        assert sender._send_msg_body.await_count == 1
-        sender._send_msg_body.reset_mock()
-        assert not (await sender.send_text_chunk('direct:inert', 'answer')).success
-        assert sender._send_msg_body.await_count == 3
+            assert sender._send_msg_body.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -132,31 +134,15 @@ async def test_unsupported_background_stays_pending_until_verified_transport_ava
 
 
 @pytest.mark.asyncio
-async def test_yuanbao_lost_ack_reaches_websocket_only_once():
-    from functools import partial
-    from plugins.platforms.yuanbao.adapter import ConnectionManager, MessageSender
-    from websockets.asyncio.client import connect
-    from websockets.asyncio.server import serve
-    submissions = []
+async def test_yuanbao_lost_ack_reaches_websocket_only_once(monkeypatch):
+    from tests.gateway.test_strict_http_yuanbao import yuanbao_peer
 
-    async def peer(socket):
-        async for message in socket:
-            submissions.append(message)
-            await socket.close(code=1011, reason='lost ACK')
-
-    adapter = SimpleNamespace(name='inert', _bot_id='', MAX_TEXT_CHUNK=20)
-    adapter._connection = ConnectionManager(adapter)
-    adapter._outbound = SimpleNamespace(slow_notifier=SimpleNamespace(cancel=lambda chat:None))
-    sender = MessageSender(adapter)
-    async with serve(peer, '127.0.0.1', 0) as server:
-        port = server.sockets[0].getsockname()[1]
-        async with connect(f'ws://127.0.0.1:{port}') as socket:
-            adapter._connection._ws = socket
-            adapter._connection.send_biz_request = partial(adapter._connection.send_biz_request, timeout=0.02)
-            with strict_transport_scope():
-                result = await sender.send_text('direct:inert', 'first chunk\n\nsecond chunk')
-            assert not result.success
-    assert len(submissions) == 1
+    async with yuanbao_peer(monkeypatch, fault='drop') as (adapter, uploads, frames):
+        adapter.MAX_TEXT_CHUNK = 20
+        with strict_transport_scope():
+            result = await adapter.send('direct:inert', 'first chunk\n\nsecond chunk')
+        assert not result.success
+        assert len(frames) == 1 and not uploads
 
 
 @pytest.mark.asyncio

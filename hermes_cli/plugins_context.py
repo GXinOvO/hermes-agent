@@ -636,11 +636,13 @@ class PluginContext(PluginCapabilityCtxMixin):
 
     def register_platform_handler(self, platform: str, factory: Callable) -> None:
         """Register ``factory(native, adapter)``, invoked at ``connect()`` before/as the core handlers
-        register (``adapter`` read-only). ``native``: telegram PTB ``Application``, discord
-        ``commands.Bot``, slack ``AsyncApp``, matrix client, teams ``App``, dingtalk
-        ``DingTalkStreamClient``, line aiohttp ``web.Application``, others ``None``. Keep SDK imports
-        inside the factory; exceptions are logged and the platform still connects. Scope handlers in
-        first-match dispatch tables so core flows keep working. Raises ``ValueError`` when not callable
+        register. ``native``: telegram PTB ``Application``, discord ``commands.Bot``, slack
+        ``AsyncApp``, matrix client, teams ``App``, dingtalk ``DingTalkStreamClient``, line aiohttp
+        ``web.Application``, others ``None``. Instance-local transport wrappers need audited
+        semantics and an identity-conditional ``ctx.on_unload`` inverse; never change the class,
+        routing or credentials. Re-enabling a removed wrapper requires a fresh adapter.
+        Keep SDK imports inside the factory; exceptions are logged and the platform still connects.
+        Scope handlers in first-match dispatch tables so core flows keep working. Raises ``ValueError`` when not callable
         or platform is empty."""
         if not callable(factory):
             raise self._refuse("a platform handler factory with a non-callable factory")
@@ -752,7 +754,7 @@ class PluginContext(PluginCapabilityCtxMixin):
     def register_session_env(self, names, resolver: Callable[[str], Any]) -> PluginRegistration:
         """Each session's tool subprocesses get ``resolver(session_id)``'s ``names``, resolved at spawn."""
         from hermes_cli.plugins_session_env import register_session_env
-        release = register_session_env(self._manager.scope_key, names, resolver)
+        release = register_session_env(self._manager.scope_key, names, resolver, owner=self.plugin_id)
         return self._track("session_env", getattr(resolver, "__qualname__", "resolver"), release)
 
     def _track_callback(

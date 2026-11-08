@@ -1,0 +1,6 @@
+name: strict-transport-compat
+version: 1.0.0
+kind: backend
+description: Preserve audited strict delivery for external platform adapters.
+author: GXinOvO
+provides_hooks: []

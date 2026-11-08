@@ -63,7 +63,9 @@ export function captureFileSearchScope(sessionId: null | string = $focusedStored
   const fileOwner = sessionFileOwnerScope(sessionId)
   const mode = ownerConnectionMode(known)
 
-  if (!known || !fileOwner || !mode) {
+  const connectionId = known && typeof known === 'object' ? known.connectionId : $primaryGatewayRoute.get().connectionId
+
+  if (!known || !fileOwner || !mode || !connectionId) {
     throw new Error(`Cannot search: filesystem owner is unknown for session ${sessionId}`)
   }
 
@@ -71,7 +73,7 @@ export function captureFileSearchScope(sessionId: null | string = $focusedStored
     sessionId,
     owner: {
       ...fileOwner,
-      connectionId: typeof known === 'object' ? known.connectionId : undefined,
+      connectionId,
       native: mode === 'local' && hostHas('nativeHostFiles')
     }
   }

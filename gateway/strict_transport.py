@@ -30,8 +30,11 @@ def supports_strict_transport(adapter, method='send'):
 
 
 def require_strict_transport(adapter, method='send'):
-    if not supports_strict_transport(adapter, method):
+    operation = getattr(adapter, method, None)
+    function = getattr(operation, '__func__', operation)
+    if getattr(function, '_single_attempt_transport', None) is not _SINGLE_ATTEMPT:
         raise RuntimeError('strict_transport_unverified: ' + type(adapter).__name__ + '.' + method)
+    return operation
 
 
 async def strict_call(adapter, method='send', *, prepared_plan=_UNPREPARED,
@@ -43,8 +46,9 @@ async def strict_call(adapter, method='send', *, prepared_plan=_UNPREPARED,
     if prepared_plan is not None:
         kwargs['prepared_plan'] = prepared_plan
         kwargs.update(identity)
+    operation = require_strict_transport(adapter, method)
     with strict_transport_scope():
-        return await getattr(adapter, method)(**kwargs)
+        return await operation(**kwargs)
 
 
 def _local_payloads(kwargs):

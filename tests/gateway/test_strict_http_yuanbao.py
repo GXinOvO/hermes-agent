@@ -1,7 +1,10 @@
 """Yuanbao: real HTTP/COS upload followed by real WS dispatch/ACK."""
 import asyncio
 import json
+import importlib
 import os
+import tempfile
+from pathlib import Path
 from collections import Counter
 from contextlib import asynccontextmanager
 from functools import partial
@@ -13,15 +16,22 @@ from aiohttp import web
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from gateway.config import PlatformConfig
 from gateway.strict_transport import strict_call, strict_transport_scope
+from tests.gateway.yuanbao_external_fixture import connected_adapter, loaded_yuanbao
 
 
 @asynccontextmanager
-async def yuanbao_peer(monkeypatch, fault=None, upload_fault=None):
-    from plugins.platforms.yuanbao import adapter as module
-    from plugins.platforms.yuanbao import yuanbao_media as media
-    from plugins.platforms.yuanbao import yuanbao_proto as proto
+async def yuanbao_peer(monkeypatch, fault=None, upload_fault=None, *, compat=True):
+    with tempfile.TemporaryDirectory() as root:
+        with loaded_yuanbao(Path(root), monkeypatch, compat=compat) as (_manager, module, _entry, _directory):
+            async with _yuanbao_peer(module, monkeypatch, fault, upload_fault) as peer:
+                yield peer
+
+
+@asynccontextmanager
+async def _yuanbao_peer(module, monkeypatch, fault, upload_fault):
+    media = importlib.import_module('.yuanbao_media', module.__package__)
+    proto = importlib.import_module('.yuanbao_proto', module.__package__)
     uploads, frames = [], []
 
     async def upload(request):
@@ -63,7 +73,7 @@ async def yuanbao_peer(monkeypatch, fault=None, upload_fault=None):
         async for raw in socket:
             msg = proto.decode_conn_msg(raw)
             frames.append(msg)
-            if fault == 'missing-first' and len(frames) == 1:
+            if fault == 'missing-first' and len(frames) == 1 or fault == 'missing-second' and len(frames) == 2:
                 continue
             if fault == 'drop':
                 await socket.close(code=1011, reason='lost ACK')
@@ -76,7 +86,7 @@ async def yuanbao_peer(monkeypatch, fault=None, upload_fault=None):
                     head['msg_id'], head['module'], status=500))
             await socket.send(response)
 
-    adapter = module.YuanbaoAdapter(PlatformConfig(extra={}))
+    adapter = await connected_adapter(module)
     adapter._get_cached_token = token
     adapter._api_domain = http_url
     receive_task = None
@@ -155,7 +165,7 @@ async def test_yuanbao_url_image(fault, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('fault', [None, 'missing-first', 'reject'])
+@pytest.mark.parametrize('fault', [None, 'missing-first', 'missing-second', 'reject'])
 async def test_yuanbao_text_chunks(fault, monkeypatch):
     async with yuanbao_peer(monkeypatch, fault=fault) as (adapter, uploads, frames):
         adapter.MAX_TEXT_CHUNK = 64
@@ -163,7 +173,7 @@ async def test_yuanbao_text_chunks(fault, monkeypatch):
                                    content='\n\n'.join(c * 40 for c in 'abc'))
         assert result.success is (fault is None)
         messages = [f for f in frames if f['head']['cmd'] in ('send_c2c_message', 'send_group_message')]
-        assert len(messages) == (3 if fault is None else 1)
+        assert len(messages) == (3 if fault is None else 2 if fault == 'missing-second' else 1)
         assert uploads == []
 
 

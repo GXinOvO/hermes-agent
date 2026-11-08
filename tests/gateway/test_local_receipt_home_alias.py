@@ -215,8 +215,27 @@ def _use_foreign_database(authority, other):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('variant', ['missing_alias', 'dangling_alias', 'alias_loop', 'retarget',
-                                    'retarget_hardlinked_db', 'missing_db', 'missing_owner',
-                                    'other_home', 'other_db', 'db_symlink', 'foreign_actor', 'foreign_ref'])
+                                    'retarget_hardlinked_db', 'db_symlink'])
+async def test_moved_store_does_not_depend_on_old_alias(tmp_path, monkeypatch, variant):
+    from gateway.session_local_recovery import owned_receipt
+
+    async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
+        _runner, authority, original, raw, old, _new, _homes = moved
+        db_path = Path(authority.db.db_path)
+        other = tmp_path / 'other'
+        other.mkdir()
+        undo = (_hide_database(db_path, symlink=True) if variant == 'db_symlink'
+                else _damage_alias(old, other, tmp_path, db_path, variant))
+        try:
+            assert owned_receipt(authority, original.session_id)[0] == json.loads(raw)
+        finally:
+            if undo is not None:
+                undo()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('variant', ['missing_db', 'missing_owner', 'other_home', 'other_db',
+                                    'foreign_actor', 'foreign_ref'])
 async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypatch, variant):
     from gateway.session_contract import SessionActor, SessionRef
     from gateway.session_cron import _admit_local_delivery
@@ -224,7 +243,7 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
     from hermes_state_runtime import RuntimeStoreError, list_session_admissions
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
-        _runner, authority, original, _raw, old, _new, homes = moved
+        _runner, authority, original, _raw, _old, _new, homes = moved
         ref = SessionRef(authority.profile_id, original.session_id)
         assert ref.session_id in authority.sessions
         owned_receipt(authority, ref.session_id)
@@ -234,13 +253,10 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
         def undo():
             pass
         actions = {
-            **{name: lambda: _damage_alias(old, other, tmp_path, db_path, variant)
-               for name in ('missing_alias', 'dangling_alias', 'alias_loop', 'retarget', 'retarget_hardlinked_db')},
             'missing_db': lambda: _hide_database(db_path),
             'missing_owner': lambda: setattr(authority, 'profile_id', str(other / 'absent')),
             'other_home': lambda: setattr(authority, 'profile_id', str(dict(homes)['beta'])),
             'other_db': lambda: _use_foreign_database(authority, other),
-            'db_symlink': lambda: _hide_database(db_path, symlink=True),
         }
         if variant in actions:
             undo = actions[variant]() or undo
@@ -255,7 +271,7 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
                 with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
                     await authority.resolve(actor, ref)
             else:
-                with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
+                with pytest.raises((RuntimeStoreError, ValueError)):
                     owned_receipt(authority, ref.session_id)
                 with pytest.raises(RuntimeStoreError):
                     await _admit_local_delivery(authority, ref.session_id, 'MUST_NOT_WRITE', {})
@@ -293,38 +309,37 @@ async def test_alias_keeps_native_receipt_identity_checks(tmp_path, monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_alias_rejects_unknown_open_database_identity(tmp_path, monkeypatch):
+async def test_alias_keeps_unknown_inode_with_a_valid_store_generation(tmp_path, monkeypatch):
     from gateway.session_local_recovery import owned_receipt
-    from hermes_state_runtime import RuntimeStoreError
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
-        _runner, authority, original, _raw, _old, _new, _homes = moved
+        _runner, authority, original, raw, _old, _new, _homes = moved
+        assert authority.db._db_file_application_id
         monkeypatch.setattr(authority.db, '_db_file_identity', None)
-        with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
-            owned_receipt(authority, original.session_id)
+        assert not authority.db._db_file_was_replaced()
+        assert owned_receipt(authority, original.session_id)[0] == json.loads(raw)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('alias', ['missing', 'foreign'])
-async def test_cold_restore_refuses_unproven_alias(tmp_path, monkeypatch, alias):
+async def test_cold_restore_does_not_need_the_old_alias(tmp_path, monkeypatch, alias):
     from gateway.session_cron import _admit_local_delivery
     from hermes_state_local import POLICY_PREFIX
-    from hermes_state_runtime import RuntimeStoreError, list_session_admissions
+    from hermes_state_runtime import list_session_admissions
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha', alias=alias) as moved:
         _runner, authority, original, raw, _old, _new, _homes = moved
-        assert original.session_id not in authority.sessions
-        with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
-            await _admit_local_delivery(authority, original.session_id, 'MUST_NOT_WRITE', {})
-        assert not list_session_admissions(authority.db, session_id=original.session_id, pending_only=False)
+        assert original.session_id in authority.sessions
+        assert await _admit_local_delivery(authority, original.session_id, 'MOVED_STORE_NOTE', {})
+        rows = list_session_admissions(authority.db, session_id=original.session_id, pending_only=False)
+        assert len(rows) == 1
         assert authority.db.get_meta(POLICY_PREFIX + original.session_id) == raw
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('linked_db', [False, True])
-async def test_alias_retarget_during_validation_is_refused(tmp_path, monkeypatch, linked_db):
+async def test_retargeted_old_alias_is_not_consulted_for_ownership(tmp_path, monkeypatch, linked_db):
     from gateway.session_local_recovery import owned_receipt
-    from hermes_state_runtime import RuntimeStoreError
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, _raw, old, _new, _homes = moved
@@ -333,26 +348,20 @@ async def test_alias_retarget_during_validation_is_refused(tmp_path, monkeypatch
         target.mkdir(parents=True)
         if linked_db:
             os.link(authority.db.db_path, target / 'state.db')
-        samefile = Path.samefile
-        changed = False
+        old.unlink()
+        old.symlink_to(other, target_is_directory=True)
 
-        def retarget(path, other_path):
-            nonlocal changed
-            result = samefile(path, other_path)
-            if path == Path(original.profile_id) and not changed:
-                old.unlink()
-                old.symlink_to(other, target_is_directory=True)
-                changed = True
-            return result
+        def refuse_alias_check(path, other_path):
+            raise AssertionError('old paths do not own the migrated store')
 
-        monkeypatch.setattr(Path, 'samefile', retarget)
-        with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
-            owned_receipt(authority, original.session_id)
-        assert changed
+        monkeypatch.setattr(Path, 'samefile', refuse_alias_check)
+        receipt = owned_receipt(authority, original.session_id)[0]
+        assert receipt['profile_id'] == original.profile_id
 
 
 @pytest.mark.asyncio
-async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch):
+@pytest.mark.parametrize('unknown_inode', [False, True])
+async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch, unknown_inode):
     from gateway.session_local_recovery import owned_receipt
     from hermes_state import SessionDB
     from hermes_state_runtime import RuntimeStoreError
@@ -366,12 +375,14 @@ async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch):
         foreign = SessionDB(replacement)
         foreign.create_session('foreign', source='gui')
         foreign.close()
+        if unknown_inode:
+            monkeypatch.setattr(db, '_db_file_identity', None)
         path.rename(saved)
         replacement.rename(path)
         try:
             assert (Path(original.profile_id) / 'state.db').samefile(path)
             assert db._db_file_was_replaced()
-            with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
+            with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
                 owned_receipt(authority, original.session_id)
         finally:
             path.rename(replacement)
@@ -379,7 +390,7 @@ async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fixture_profile_remains_literal_only(tmp_path, monkeypatch):
+async def test_moved_fixture_profile_rejects_the_old_actor(tmp_path, monkeypatch):
     from gateway import run
     from gateway.config import GatewayConfig
     from gateway.run import GatewayRunner
@@ -401,8 +412,9 @@ async def test_fixture_profile_remains_literal_only(tmp_path, monkeypatch):
         receipt = owned_receipt(authority, ref.session_id)[0]
         assert receipt['profile_id'] == 'fixture'
         authority.profile_id = 'other-fixture'
+        assert owned_receipt(authority, ref.session_id)[0] == receipt
         with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
-            owned_receipt(authority, ref.session_id)
+            authority.authorize(actor, ref, 'session:create')
     finally:
         unbind_owner(authority)
         runner.session_store.close_all_db_handles()

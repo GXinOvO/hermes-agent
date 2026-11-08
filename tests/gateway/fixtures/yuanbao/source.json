@@ -1,0 +1,21 @@
+{
+  "repo": "https://github.com/NousResearch/hermes-labs-plugins",
+  "commit": "51ede1f023906114ec06c216c4a7b98e8a45d672",
+  "files": {
+    "yuanbao/LICENSE": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+    "yuanbao/__init__.py": "f126c7a4cadb2904bc45dc1f26ebf25b8c3541cac5e4dbce35992f48d6f94cf1",
+    "yuanbao/_i18n.py": "a4dd700eb2ffe8a791284ce69770e98ec96bb4ce88c6d4a35d23877917ab4091",
+    "yuanbao/adapter.py": "c5afef3c220200bc17b603c45696c6afdc9b20fcf38dd818b66b40a1d446e6c5",
+    "yuanbao/gateway_env.py": "2372f26403238e460e9e30fab2fafce991f0758e752c3c1750d18e567aea79d9",
+    "yuanbao/inbound_capacity.py": "8c3a84c726ef01adcee351e0d2e2376a48e5432c3e5d41815ed3ca1d53c8f234",
+    "yuanbao/plugin.yaml": "15977e69b939adceb5417ccaf1c421175cfa801c257b64bf8f277b8f807eaca7",
+    "yuanbao/register.py": "bfec5b80f0db8f55ad36f771b6a35be49d531618f6a3cc8b960a5d498edbc45a",
+    "yuanbao/send_ack.py": "81e9577e9fb5c07c63971e7c4d5e5d62a284596d808f5bcac44feea3f0c8b825",
+    "yuanbao/skills/yuanbao/SKILL.md": "6636244d779f103fc47c874b44d7a75c94aa62226aa200cfa41d38198cb49124",
+    "yuanbao/tools.py": "8b2e2b290f270ca02ffd1276f4c38d12c98b9adb151d9a825f391c2efeb209dd",
+    "yuanbao/ws_proxy.py": "24e1bfade600c36f34739691d6ed71a3b78ba5d4fdcc4dbe8448098118a97d59",
+    "yuanbao/yuanbao_media.py": "ef28de9f8382d987a511e63b9ba1005df4f524b52800d382d7a526ca947fd9ce",
+    "yuanbao/yuanbao_proto.py": "95c97b23acbea1a0303c326110a512032b60e59f6ae35f74923119fadc479c23",
+    "yuanbao/yuanbao_sticker.py": "4faed049caeb872defd5addb44c687b74c6763006bf8d06c73c8d623c110d55c"
+  }
+}
