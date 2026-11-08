@@ -14,3 +14,6 @@ config_schema:
     type: string
     default: private
     description: private (default) or hostnet (explicit opt-in).
+  protected:
+    type: object
+    description: Explicit protected_owned settings (authority_root, state_root, volume, label, image); private offline only.

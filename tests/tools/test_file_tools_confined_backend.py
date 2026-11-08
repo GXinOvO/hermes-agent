@@ -35,6 +35,9 @@ class _MountedViewEnv(LocalEnvironment):
         result["output"] = result.get("output", "").replace(self._real, self._view)
         return result
 
+    def execute_file_probe(self, command, *, stdin_data=None):
+        return super().execute_file_probe(command.replace(self._view, self._real), stdin_data=stdin_data)
+
 
 class _ConfinedEnv(_MountedViewEnv):
     uses_host_filesystem = False

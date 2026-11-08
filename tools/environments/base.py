@@ -341,6 +341,9 @@ class BaseEnvironment(ABC):
         """Release backend resources (container, instance, connection)."""
         ...
 
+    def execute_file_probe(self, command: str, *, stdin_data: str | None = None) -> dict:
+        return self._wait_for_process(self._run_bash(command, login=False, timeout=15, stdin_data=stdin_data), timeout=15)
+
     # --- File extraction (backend -> host) ---
     def fetch_file(self, remote_path: str, local_dest: Path, *, max_bytes: int) -> None:
         """Copy a regular file out of the backend filesystem to ``local_dest`` on the host.

@@ -43,10 +43,16 @@ def execute(request):
     with jobs_lock:job=jobs[identifier]
     try:
         control_r,control_w=os.pipe();report_r,report_w=os.pipe()
-        argv=['/usr/bin/unshare','--user','--map-root-user','--mount','--pid','--fork',
-              '--kill-child=KILL','--mount-proc','/usr/bin/python3','-I','-B','/boundary/scope_init.py',str(control_r),str(report_w)]
+        protected = len(sys.argv) == 2 and sys.argv[1] == '--protected'
+        namespace = ['--mount','--pid','--fork'] if protected else ['--user','--map-root-user','--mount','--pid','--fork']
+        entry = '/authority/code/protected_init.py' if protected else '/boundary/scope_init.py'
+        argv=['/usr/bin/unshare',*namespace,'--kill-child=KILL','--mount-proc',
+              '/usr/bin/python3','-I','-B',entry,str(control_r),str(report_w)]
+        env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'}
+        if protected:
+            env['LD_LIBRARY_PATH']='/opt/runtime/lib'
         proc=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8'},cwd='/workspace',
+            stderr=subprocess.STDOUT,env=env,cwd='/' if protected else '/workspace',
             close_fds=True,pass_fds=(control_r,report_w),start_new_session=True)  # detached-spawn: ok — retained launcher, private cancel pipe and namespace reaping
         launcher_identity={'pid':proc.pid,
             'start_ticks':int(Path('/proc/'+str(proc.pid)+'/stat').read_text(encoding='utf-8-sig').rsplit(')',1)[1].split()[19]),

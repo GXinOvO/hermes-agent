@@ -185,7 +185,7 @@ def test_delegation_observation_is_bounded_by_parent_read_population(tmp_path, r
             registry.note_write('child', path, mtime=2)
         registry.forget_task('child')
         assert len(observer.paths) == file_state._MAX_PATHS_PER_AGENT
-        assert observer.snapshot() == sorted(watched)
+        assert observer.snapshot() == sorted(registry.display_paths('parent', watched))
         assert not registry._last_writer
     finally:
         observer.close()
@@ -279,7 +279,7 @@ def test_observation_linearization_does_not_depend_on_wall_clock(tmp_path, regis
     registry.forget_task('old-sibling')
     monkeypatch.setattr(file_state.time, 'time', lambda: 10)
     start, paths, observer = registry.observe_writes('parent')
-    assert start == 10 and paths == [path] and observer is not None
+    assert start == 10 and registry.display_paths('parent', paths) == [path] and observer is not None
     try:
         assert observer.snapshot() == []
         registry.record_read('parent', later, mtime=1)

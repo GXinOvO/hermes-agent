@@ -81,6 +81,8 @@
         "hermes_cli.auth_constants:AuthError",
         "tools.environments.base:BaseEnvironment",
         "tools.environments:BaseEnvironment",
+        "tools.file_protected_fuse:ProtectedFuseEnvironment",
+        "tools.file_protected_fuse:runtime_helper_path",
         "utils:atomic_json_write",
         "utils:read_json_or_empty"
       ]

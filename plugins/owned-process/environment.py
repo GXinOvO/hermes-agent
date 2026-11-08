@@ -215,6 +215,10 @@ class OwnedProjectEnvironment(BaseEnvironment):
         self.project = canonical_directory(project)
         self.state = Path(state)
         self.state.mkdir(parents=False, exist_ok=False, mode=0o700)
+        self._initialize_transport(lambda: launch_argv(self.project, self.state, network), cwd, timeout)
+
+    def _initialize_transport(self, argv, cwd, timeout):
+        """Start the existing owned wire over an explicitly prepared transport."""
         self.handles = {}
         self.all_handles = weakref.WeakSet()
         self.handles_lock = threading.RLock()
@@ -227,7 +231,7 @@ class OwnedProjectEnvironment(BaseEnvironment):
         self.cleanup_complete = False
         self.cleanup_errors = []
         try:
-            self.argv = launch_argv(self.project, self.state, network)
+            self.argv = argv()
             self.stderr_path = self.state / 'worker.stderr'
             self.stderr_file = self.stderr_path.open('w', encoding='utf-8')
             self.proc = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
