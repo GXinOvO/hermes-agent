@@ -1,0 +1,16 @@
+name: owned-process
+version: 0.1.0
+description: Opt-in Linux owned-process terminal backend for an explicitly mounted host project.
+author: Hermes contributors
+platforms: [linux]
+config_schema:
+  project_root:
+    type: string
+    description: Canonical absolute host project directory mounted read-write at /workspace.
+  state_root:
+    type: string
+    description: Canonical absolute private state directory disjoint from the project.
+  network:
+    type: string
+    default: private
+    description: private (default) or hostnet (explicit opt-in).

@@ -161,7 +161,7 @@ def apply_wait_poll_policy(action: str, session_id: str, result: dict) -> dict:
         running = result.get("status") == "running"
     else:
         running = False
-    if not running:
+    if not running or result.get("process_running") is False:
         # Exit, any other action on the session, or a released/interrupted wait starts over.
         if action not in ("wait", "poll") or result.get("status") != "interrupted":
             _forget(session.id)

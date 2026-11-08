@@ -20,6 +20,8 @@ class ProcessResultRecoveryMixin:
             **ProcessResultRecoveryMixin._result_fields(session),
             "completion_reason": session.completion_reason,
             "termination_source": session.termination_source,
+            **({"owned_generation": session.owned_generation, "owned_lifecycle": session.owned_lifecycle}
+               if session.owned_generation else {}),
         }
 
     @staticmethod
