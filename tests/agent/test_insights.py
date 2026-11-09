@@ -1,5 +1,6 @@
 """Tests for agent/insights.py — InsightsEngine analytics and reporting."""
 
+import json
 import time
 import pytest
 
@@ -319,6 +320,61 @@ class TestInsightsPopulated:
         assert top_skill["manage_count"] == 0
         assert top_skill["total_count"] == 2
         assert top_skill["last_used_at"] is not None
+
+    def test_skill_manage_batches_count_each_named_operation(self, db):
+        db.create_session(session_id="cli", source="cli", model="m")
+        db.create_session(session_id="discord", source="discord", model="m")
+
+        def add_call(session, tool, arguments):
+            db.append_message(session, role="assistant", content="", tool_calls=[{
+                "function": {"name": tool, "arguments": json.dumps(arguments)}
+            }])
+
+        add_call("cli", "skill_view", {"name": "alpha"})
+        add_call("cli", "skill_manage", {"name": "legacy", "action": "patch"})
+        add_call("cli", "skill_manage", {"name": "fallback", "operations": [
+            {"name": "alpha", "action": "patch"},
+            {"name": "alpha", "action": "write_file"},
+            {"name": "beta", "action": "create"},
+            {"action": "patch"},
+        ]})
+        add_call("discord", "skill_manage", {"operations": [{"name": "remote", "action": "patch"}]})
+        db._conn.commit()
+
+        engine = InsightsEngine(db)
+        full = engine.generate(days=30)
+        assert engine.get_usage_breakdown(days=30)["skills"] == full["skills"]
+        skills = full["skills"]
+        assert skills["summary"]["total_skill_loads"] == 1
+        assert skills["summary"]["total_skill_edits"] == 6
+        assert {s["skill"]: s["manage_count"] for s in skills["top_skills"]} == {
+            "alpha": 2, "beta": 1, "fallback": 1, "legacy": 1, "remote": 1,
+        }
+        cli = engine.get_usage_breakdown(days=30, source="cli")["skills"]
+        assert cli["summary"]["total_skill_edits"] == 5
+        assert "remote" not in {s["skill"] for s in cli["top_skills"]}
+
+    def test_skill_manage_batch_ignores_invalid_ops_but_counts_failed_attempts(self, db):
+        db.create_session(session_id="s", source="cli", model="m")
+        db.append_message("s", role="assistant", content="", tool_calls=[
+            {"id": "failure", "function": {"name": "skill_manage", "arguments": json.dumps({
+                "operations": [None, {}, {"name": 42}, {"name": "  "}, {"name": "attempt", "action": "patch"}]
+            })}},
+            {"function": {"name": "skill_manage", "arguments": json.dumps({"name": "ignored", "operations": "bad"})}},
+            {"function": {"name": "skill_manage", "arguments": "{"}},
+            {"function": {"name": "skill_manage", "arguments": json.dumps({"name": "ignored", "operations": []})}},
+        ])
+        db.append_message("s", role="tool", tool_call_id="failure", tool_name="skill_manage",
+                          content='{"success": false, "error": "batch rolled back"}')
+        db._conn.commit()
+
+        skills = InsightsEngine(db).get_usage_breakdown(days=30)["skills"]
+        assert skills["summary"]["total_skill_edits"] == 1
+        assert [(s["skill"], s["manage_count"]) for s in skills["top_skills"]] == [("attempt", 1)]
+        engine = InsightsEngine(db)
+        report = engine.generate(days=30)
+        for text in (engine.format_terminal(report), engine.format_gateway(report)):
+            assert "Counts are requested calls/operations, not confirmed results." in text
 
     # The Insights assistant tool-call queries pin
     # idx_messages_assistant_calls_by_session via INDEXED BY.  These tests prove
