@@ -1187,6 +1187,13 @@ def _append_model_switch_marker(session: dict | None, *, model: str, provider: s
             db = getattr(agent, "_session_db", None) if agent is not None else None
             if db is None and _ensure_session_db_row(session) is False:
                 raise RuntimeError("session store unavailable")
+            # A live handle proves nothing about the ROW: a draft chat persists its ``sessions`` row on
+            # the first submit, so inserting this pivot first violates ``messages.session_id``'s foreign
+            # key and the switch loses the very notice it describes. INSERT OR IGNORE keeps this a no-op
+            # once the row exists.
+            if db is not None and not db.get_session(_submit_row_target_key(session)):
+                if _ensure_session_db_row(session) is False:
+                    raise RuntimeError("session store unavailable")
             with (contextlib.nullcontext(db) if db is not None else _session_db(session)) as db:
                 # Resolve the live target under the history lock, as for the submit row (#123545).
                 target = _submit_row_target_key(session)
