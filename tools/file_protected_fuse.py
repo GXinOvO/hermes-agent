@@ -351,41 +351,80 @@ class ProtectedFuseEnvironment:
         except (ValueError, TypeError) as exc:
             raise FileBackendUnavailable('protected FUSE result unavailable; write outcome unknown; no retry') from exc
 
+    def _ticket(self, path, value, generation):
+        from tools.file_backend_probe import FileBackendUnavailable
+        try:
+            if not isinstance(value, dict):
+                raise ValueError('invalid reply envelope')
+            _path(path)
+            raw = base64.b64decode(value['packet'], validate=True)
+            if len(raw) != C.sizeof(Request):
+                raise ValueError('invalid reply packet size')
+            req = Request.from_buffer_copy(raw)
+            e = req.expected
+            data = base64.b64decode(value.get('data', ''), validate=True)
+            absent = value.get('absent', False)
+            metadata = value.get('metadata')
+            domain = value['domain']
+            storage_id = value['storage_id']
+            domain_ok = (
+                isinstance(domain, list) and len(domain) == 5
+                and isinstance(domain[0], str) and str(uuid.UUID(domain[0])) == domain[0]
+                and isinstance(domain[1], list) and len(domain[1]) == 6
+                and all(isinstance(part, str) for part in domain[1])
+                and domain[1][0].isdecimal() and domain[1][1].isdecimal()
+                and re.fullmatch(r'[0-9]+:[0-9]+', domain[1][2])
+                and domain[1][3].startswith('/') and domain[1][4] == '/cas'
+                and bool(domain[1][5])
+                and isinstance(domain[2], list) and len(domain[2]) >= 3
+                and all(isinstance(part, str) for part in domain[2])
+                and domain[2][0].startswith('fuse') and domain[2][1]
+                and isinstance(domain[3], list) and len(domain[3]) == 5
+                and isinstance(domain[4], list) and len(domain[4]) == 5
+                and all(type(part) is int and part >= 0 for part in domain[3] + domain[4])
+                and domain[3][1] > 0 and domain[3][2] <= 0o177777 and stat.S_ISDIR(domain[3][2])
+                and domain[4][1] > 0 and domain[4][2] <= 0o177777 and stat.S_ISREG(domain[4][2]))
+            expected_storage_id = hashlib.sha256(
+                json.dumps(domain, separators=(',', ':')).encode()).hexdigest() if domain_ok else None
+            if (type(absent) is not bool or not domain_ok
+                    or not isinstance(storage_id, str) or storage_id != expected_storage_id
+                    or req.abi != 2 or req.status != 1 or e.depth > DEPTH
+                    or e.name.decode() != path[len('/cas/'):]
+                    or absent != (e.inode == 0)):
+                raise ValueError('invalid ticket authority or CAS identity')
+            if e.inode:
+                if (not isinstance(metadata, list) or len(metadata) != 6
+                        or e.size != len(data) or metadata[1:5] != [e.inode, e.size, e.mtime_ns, e.ctime_ns]
+                        or not isinstance(value.get('sha256'), str)
+                        or not re.fullmatch('[0-9a-f]{64}', value['sha256'])
+                        or hashlib.sha256(data).hexdigest() != value['sha256']):
+                    raise ValueError('invalid target snapshot')
+                version = Expected.from_buffer_copy(bytes(e))
+                C.memset(C.addressof(version) + Expected.snapshot_id.offset, 0, 40)
+                if metadata[5] != int.from_bytes(hashlib.sha256(bytes(version)).digest(), 'big'):
+                    raise ValueError('invalid target version')
+            elif data:
+                raise ValueError('absent target carries snapshot data')
+            domain_json = json.dumps(domain, separators=(',', ':'))
+            return ReadTicket(path, generation, None, raw, domain_json, tuple(metadata or ()), storage_id,
+                              hashlib.sha256(data).hexdigest(), e.incarnation, data)
+        except (KeyError, OverflowError, TypeError, ValueError) as exc:
+            raise FileBackendUnavailable('protected FUSE target reply invalid; refusing ticket') from exc
+
     def snapshot(self, path):
         from tools.file_backend_probe import FileBackendUnavailable
         from tools.file_backend_io import checked_generation
         generation = checked_generation(self)
         value = self._rpc('snapshot', path)
         checked_generation(self, generation)
-        raw = base64.b64decode(value['packet'], validate=True)
-        req = Request.from_buffer_copy(raw)
-        e = req.expected
-        data = base64.b64decode(value['data'], validate=True)
-        if (len(raw) != C.sizeof(Request) or req.abi != 2 or req.status != 1 or e.size != len(data)
-                or e.depth > DEPTH or e.name.decode() != path[len('/cas/'):]
-                or value['metadata'][1:5] != [e.inode, e.size, e.mtime_ns, e.ctime_ns]
-                or len(value['metadata']) != 6 or hashlib.sha256(data).hexdigest() != value['sha256']):
-            raise FileBackendUnavailable('protected FUSE snapshot identity invalid')
-        version = Expected.from_buffer_copy(bytes(e))
-        C.memset(C.addressof(version) + Expected.snapshot_id.offset, 0, 40)
-        if value['metadata'][5] != int.from_bytes(hashlib.sha256(bytes(version)).digest(), 'big'):
-            raise FileBackendUnavailable('protected FUSE path version invalid')
-        return ReadTicket(path, generation, None, raw, json.dumps(value['domain'], separators=(',', ':')),
-                          tuple(value['metadata']), value['storage_id'], value['sha256'], e.incarnation, data)
+        return self._ticket(path, value, generation)
 
     def target(self, path):
         from tools.file_backend_io import checked_generation
         generation = checked_generation(self)
         value = self._rpc('target', path)
         checked_generation(self, generation)
-        if not value.get('absent'):
-            return self.snapshot(path)
-        raw = base64.b64decode(value['packet'], validate=True)
-        packet = Request.from_buffer_copy(raw)
-        if packet.abi != 2 or packet.status != 1 or packet.expected.inode or packet.expected.name.decode() != path[5:]:
-            raise RuntimeError('protected FUSE absence identity invalid')
-        return ReadTicket(path, generation, None, raw, json.dumps(value['domain'], separators=(',', ':')),
-                          (), value['storage_id'], hashlib.sha256(b'').hexdigest(), packet.expected.incarnation, b'')
+        return self._ticket(path, value, generation)
 
     def probe(self, path):
         from tools.file_backend_probe import ProbeResult
@@ -400,10 +439,16 @@ class ProtectedFuseEnvironment:
             logging.getLogger(__name__).exception('Protected FUSE probe unavailable')
             return ProbeResult('unavailable', error=f'protected FUSE probe unavailable: {exc}')
 
-    def read_file(self, operations, path, offset, limit):
+    def read_file(self, operations, path, offset, limit, *, ticket=None):
+        from tools.file_backend_io import checked_generation
         from tools.file_operations_common import ReadResult
+        from tools.file_backend_probe import FileBackendUnavailable
         from tools.tool_output_limits import get_max_line_length
-        ticket = self.snapshot(path)
+        if ticket is None:
+            ticket = self.snapshot(path)
+        if (not isinstance(ticket, ReadTicket) or ticket.path != path
+                or ticket.generation != checked_generation(self)):
+            raise FileBackendUnavailable('protected FUSE read ticket is invalid; refusing read')
         data = ticket.content
         try:
             text = data.decode('utf-8')

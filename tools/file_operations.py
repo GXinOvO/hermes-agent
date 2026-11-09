@@ -843,7 +843,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         offset, limit = normalize_read_pagination(offset, limit)
         from tools.file_protected_fuse import protected_fuse
         if protected_fuse(self.env) is not None:
-            return self.env.read_file(self, path, offset, limit)
+            target = self.env.target(path)
+            if target.absent:
+                return ReadResult(error=f"File not found: {path}", not_found=True)
+            return self.env.read_file(self, path, offset, limit, ticket=target)
 
         if self._native_read_enabled():
             return self._read_file_native(path, offset, limit)
