@@ -3177,7 +3177,7 @@ class TestNewEndpoints:
                     {
                         "function": {
                             "name": "skill_manage",
-                            "arguments": '{"name":"github-code-review"}',
+                            "arguments": '{"operations":[{"action":"patch","name":"github-code-review"},{"action":"write_file","name":"github-code-review"},{"action":"patch","name":"github-code-review"}]}',
                         }
                     },
                 ],
@@ -3191,17 +3191,17 @@ class TestNewEndpoints:
         data = resp.json()
         assert data["skills"]["summary"] == {
             "total_skill_loads": 1,
-            "total_skill_edits": 1,
-            "total_skill_actions": 2,
+            "total_skill_edits": 3,
+            "total_skill_actions": 4,
             "distinct_skills_used": 2,
         }
         assert len(data["skills"]["top_skills"]) == 2
 
         top_skill = data["skills"]["top_skills"][0]
-        assert top_skill["skill"] == "github-pr-workflow"
-        assert top_skill["view_count"] == 1
-        assert top_skill["manage_count"] == 0
-        assert top_skill["total_count"] == 1
+        assert top_skill["skill"] == "github-code-review"
+        assert top_skill["view_count"] == 0
+        assert top_skill["manage_count"] == 3
+        assert top_skill["total_count"] == 3
         assert top_skill["last_used_at"] is not None
 
     def _daily_for_local_starts(self, tz_name, local_starts):

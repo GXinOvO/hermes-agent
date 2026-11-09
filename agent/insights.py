@@ -269,13 +269,19 @@ class InsightsEngine:
                 tool_name = func.get("name")
                 if tool_name not in _SKILL_TOOLS:
                     continue
-                skill_name = (_parse_json(func.get("arguments"), dict) or {}).get("name")
-                if not isinstance(skill_name, str) or not skill_name.strip():
-                    continue
-                entry = skill_counts.setdefault(skill_name, {"skill": skill_name, "view_count": 0, "manage_count": 0, "last_used_at": None})
-                entry["view_count" if tool_name == "skill_view" else "manage_count"] += 1
-                if timestamp is not None and (entry["last_used_at"] is None or timestamp > entry["last_used_at"]):
-                    entry["last_used_at"] = timestamp
+                args = _parse_json(func.get("arguments"), dict) or {}
+                operations = args.get("operations") if tool_name == "skill_manage" else None
+                if isinstance(operations, list):
+                    names = (op.get("name") or args.get("name") for op in operations if isinstance(op, dict))
+                else:
+                    names = [args.get("name")] if operations is None else []
+                for skill_name in names:
+                    if not isinstance(skill_name, str) or not skill_name.strip():
+                        continue
+                    entry = skill_counts.setdefault(skill_name, {"skill": skill_name, "view_count": 0, "manage_count": 0, "last_used_at": None})
+                    entry["view_count" if tool_name == "skill_view" else "manage_count"] += 1
+                    if timestamp is not None and (entry["last_used_at"] is None or timestamp > entry["last_used_at"]):
+                        entry["last_used_at"] = timestamp
         return list(skill_counts.values())
 
     def _get_message_stats(self, cutoff: float, source: str | None = None) -> dict:
@@ -551,7 +557,8 @@ class InsightsEngine:
                 lines.append(f"  {skill['skill'][:28]:<28} {skill['view_count']:>7,} {skill['manage_count']:>7,} {last_used:>11}")
             summary = skills.get("summary", {})
             lines += [f"  Distinct skills: {summary.get('distinct_skills_used', 0)}  Loads: {summary.get('total_skill_loads', 0):,}  "
-                      f"Edits: {summary.get('total_skill_edits', 0):,}", ""]
+                      f"Edits: {summary.get('total_skill_edits', 0):,}",
+                      "  Counts are requested calls/operations, not confirmed results.", ""]
         act = report.get("activity", {})
         if act.get("by_day"):
             lines += self._section("📅 Activity Patterns")
@@ -599,7 +606,7 @@ class InsightsEngine:
             for skill in skills["top_skills"][:5]:
                 suffix = f", last used {_day(skill['last_used_at'])}" if skill.get("last_used_at") else ""
                 lines.append(f"  {skill['skill']} — {skill['view_count']:,} loads, {skill['manage_count']:,} edits{suffix}")
-            lines.append("")
+            lines += ["  Counts are requested calls/operations, not confirmed results.", ""]
         act = report.get("activity", {})
         if act.get("busiest_day") and act.get("busiest_hour"):
             lines.append(f"**📅 Busiest:** {act['busiest_day']['day']}s ({act['busiest_day']['count']} sessions), {_hour12(act['busiest_hour']['hour'])} ({act['busiest_hour']['count']} sessions)")
