@@ -1,7 +1,10 @@
 import base64
 import copy
+from dataclasses import replace
 import hashlib
 import json
+
+import pytest
 
 pytest_plugins = ['tests.tools.protected_owned_fixture']
 
@@ -118,3 +121,72 @@ def test_unavailable_authority_read_is_not_absence(protected_native):
     assert killed['exit'] == 0
     value = n.tool('read_file', {'path': '/cas/unavailable-read.txt'})
     assert value.get('error') and not value.get('not_found'), value
+
+
+def test_permission_revoked_after_metadata_is_not_a_read(protected_native, monkeypatch):
+    from tools import file_tools
+    from tools.file_tools_read_tracking import _read_tracker, _read_tracker_lock
+
+    n = protected_native
+    path = '/cas/revoked-after-metadata.txt'
+    n.python('import json;from pathlib import Path;Path(' + repr(path) + ').write_text("secret");print(json.dumps(True))')
+    original = file_tools._file_metadata
+    original_target = n.env.target
+    reached = []
+    targets_after_metadata = []
+    def observe_target(target_path):
+        if reached and target_path == path:
+            targets_after_metadata.append(target_path)
+        return original_target(target_path)
+    def revoke_after_metadata(target):
+        result = original(target)
+        if str(target) == path and not reached:
+            assert result is not None
+            n.python('import json,os;fd=os.open("/cas/revoked-replacement.txt",os.O_WRONLY|os.O_CREAT|os.O_EXCL,0);os.write(fd,b"secret");os.close(fd);os.replace("/cas/revoked-replacement.txt",' + repr(path) + ');print(json.dumps(True))')
+            reached.append(True)
+        return result
+    monkeypatch.setattr(file_tools, '_file_metadata', revoke_after_metadata)
+    monkeypatch.setattr(n.env, 'target', observe_target)
+    value = n.tool('read_file', {'path': path})
+    assert reached == [True] and targets_after_metadata == [path]
+    assert value.get('error') and not value.get('not_found') and not value.get('content'), value
+    with _read_tracker_lock:
+        data = _read_tracker[n.task]
+        assert path not in data['full_write_baselines']
+        assert path not in data['protected_tickets']
+
+
+def test_read_rejects_invalid_path_and_generation_tickets(protected_native):
+    from tools import file_tools
+    from tools.file_backend_probe import FileBackendUnavailable
+
+    n = protected_native
+    path = '/cas/lawful.txt'
+    ticket = n.env.target(path)
+    operations = file_tools._get_file_ops(n.task)
+    assert n.env.read_file(operations, path, 1, 2000, ticket=ticket).content == '1|lawful'
+    for invalid in (object(), replace(ticket, path='/cas/other.txt'),
+                    replace(ticket, generation='stale-generation')):
+        with pytest.raises(FileBackendUnavailable, match='ticket is invalid'):
+            n.env.read_file(operations, path, 1, 2000, ticket=invalid)
+
+
+def test_missing_read_in_inaccessible_parent_is_not_absence(protected_native):
+    n = protected_native
+    path = '/cas/locked/missing.txt'
+    n.python('import json,os;os.mkdir("/cas/locked",0);print(json.dumps(True))')
+    direct = n.python('import json,os\ntry: os.stat(' + repr(path) + ')\nexcept OSError as exc: print(json.dumps({"errno":exc.errno}))')
+    assert direct == {'errno': 13}, direct
+    value = n.tool('read_file', {'path': path})
+    assert value.get('error') and not value.get('not_found') and not value.get('content'), value
+
+
+def test_absent_ticket_refuses_concurrent_creation(protected_native):
+    n = protected_native
+    path = '/cas/created-concurrently.txt'
+    ticket = n.env.target(path)
+    assert ticket.absent
+    n.python('import json;from pathlib import Path;Path(' + repr(path) + ').write_text("concurrent");print(json.dumps(True))')
+    result = n.env.publish(ticket, 'must not overwrite')
+    assert result.exit_code != 0
+    assert n.bytes(path) == b'concurrent'

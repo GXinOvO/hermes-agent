@@ -55,3 +55,25 @@ def test_shell_runner_forwards_the_upgrade_suite_ref_knobs(tmp_path):
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.platforms("posix")
+def test_shell_runner_forwards_protected_qualification_paths(tmp_path):
+    knobs = {"R19_QUALIFICATION_ROOT": str(tmp_path / "qualification"),
+             "R19_AUTHORITY_ROOT": str(tmp_path / "authority")}
+    case = tmp_path / "test_protected_knobs_canary.py"
+    case.write_text(
+        "import os\n"
+        "def test_canary():\n"
+        f"    expected = {knobs!r}\n"
+        "    assert {k: os.environ.get(k) for k in expected} == expected\n",
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        ["bash", str(root / "scripts/run_tests.sh"), "-j", "1", str(case)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=180,
+        env={**os.environ, "HERMES_PYTHON": sys.executable, "HERMES_TEST_FILE_RETRIES": "0", **knobs},
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
