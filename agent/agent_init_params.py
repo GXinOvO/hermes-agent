@@ -9,7 +9,7 @@ _PASSTHROUGH_PARAMS = (
     "providers_allowed", "providers_ignored", "providers_order", "provider_sort",
     "provider_require_parameters", "provider_data_collection", "openrouter_min_coding_score",
     # Toolset filtering
-    "enabled_toolsets", "disabled_toolsets",
+    "enabled_toolsets", "disabled_toolsets", "allowed_tools",
     # Model response configuration (None = provider/model default)
     "max_tokens", "reasoning_config", "service_tier",
     "side_agent", "memory_agent_context",

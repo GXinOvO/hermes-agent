@@ -156,6 +156,10 @@ def ensure_message_agent_tool(agent: Any) -> bool:
         if not present:
             if not message_agent_authorized(agent):
                 return False
+            from tools.delegate_tool_allowlist import explicit_allowed_tools
+            allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+            if allowed is not None and MESSAGE_AGENT_TOOL_NAME not in set(allowed):
+                return False
             if agent.tools is None:
                 agent.tools = []
             agent.tools.append(message_agent_tool_schema())

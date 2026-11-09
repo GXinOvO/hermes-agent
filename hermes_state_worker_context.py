@@ -48,7 +48,7 @@ def worker_tool_names(db, conn, session_id, payload):
     """The tools[] pin, same contract as ``SessionDB.update_session_tool_names``: any JSON pin
     (``{"version", "tools"[, "delegation_backend"]}`` today; a legacy name list) content-addressed through ``system_prompts``,
     ``None`` clears. Bounded so a worker cannot write an unbounded blob into the shared table."""
-    if set(payload) != {'tool_names'}:
+    if not {'tool_names'} <= set(payload) <= {'tool_names', 'preserve_cache'} or type(payload.get('preserve_cache', False)) is not bool:
         raise RuntimeStoreError('invalid_params')
     pin = payload['tool_names']
     if pin is not None:
@@ -58,16 +58,22 @@ def worker_tool_names(db, conn, session_id, payload):
             raise RuntimeStoreError('invalid_params')
         # ``delegation_backend``: the backend the pinned delegate_task was built from (agent/delegation_backends.py).
         backend = pin.get('delegation_backend', '') if isinstance(pin, dict) else ''
-        if isinstance(pin, dict) and (not {'version', 'tools'} <= set(pin) <= {'version', 'tools', 'delegation_backend'}
+        if isinstance(pin, dict) and (not {'version', 'tools'} <= set(pin) <= {'version', 'tools', 'delegation_backend', 'allowed_tools'}
                                       or not isinstance(pin['version'], str) or not isinstance(pin['tools'], list)
                                       or not isinstance(backend, str) or len(backend) > 64):
             raise RuntimeStoreError('invalid_params')
+        if isinstance(pin, dict) and 'allowed_tools' in pin:
+            from tools.delegate_tool_allowlist import _validate_value
+            if _validate_value(0, pin['allowed_tools']) is not None:
+                raise RuntimeStoreError('invalid_params')
     encoded = None if pin is None else json.dumps(pin)
     if encoded is not None and len(encoded) > 4 * 1024 * 1024:
         raise RuntimeStoreError('invalid_params')
-    conn.execute('UPDATE sessions SET tool_names=? WHERE id=?',
-                 (db._store_system_prompt(conn, encoded), session_id))
-    db._delete_unreferenced_system_prompts(conn)
+    from hermes_state_tool_permissions import write_tool_pin
+    try:
+        write_tool_pin(db, conn, session_id, pin, preserve_cache=payload.get("preserve_cache", False))
+    except ValueError as exc:
+        raise RuntimeStoreError('permission_denied') from exc
     return {'value': None}
 
 

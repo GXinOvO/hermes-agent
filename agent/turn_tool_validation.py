@@ -101,7 +101,7 @@ def validate_tool_calls(
     # Repair mismatched tool names before validating (model hallucinations).
     repaired_ids = set()
     for tc in tool_calls:
-        if tc.function.name not in valid_names:
+        if tc.function.name not in valid_names and getattr(agent, "allowed_tools", None) is None:
             repaired = agent._repair_tool_call(tc.function.name)
             if repaired:
                 agent._vprint(f"{agent.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'",

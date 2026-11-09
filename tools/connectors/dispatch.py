@@ -22,7 +22,7 @@ def dispatch_connector_call(name, arguments, tool_call_id, turn_id=None, task_id
 
 
 def dispatch_connector_batch(calls, ids, *, user_task, enabled_tools,
-                             middleware_trace, enabled_toolsets, disabled_toolsets):
+                             middleware_trace, enabled_toolsets, disabled_toolsets, allowed_tools=None):
     from dataclasses import replace
 
     from model_tools import handle_function_call, suppress_post_tool_call_hook
@@ -53,6 +53,7 @@ def dispatch_connector_batch(calls, ids, *, user_task, enabled_tools,
                 skip_pre_tool_call_hook=False, skip_tool_request_middleware=False,
                 skip_tool_execution_middleware=False,
                 enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
+                allowed_tools=allowed_tools,
             )
         try:
             value = json.loads(payload) if isinstance(payload, str) else payload

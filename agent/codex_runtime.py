@@ -750,6 +750,8 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
                               turn_id: Any = None) -> dict[str, Any]:
     """Hand the turn to a ``codex app-server`` subprocess and project its events into ``messages``.
     Returns the chat_completions result shape. The user message is ALREADY in ``messages`` — never append it again."""
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent, {"api_mode": "codex_app_server"})
     # Defense in depth for compression.checkpoint_required: agent init refuses the combination, but
     # api_mode is mutable. Explicit-True check matches compress_context().
     if getattr(agent, "compression_checkpoint_required", False) is True:

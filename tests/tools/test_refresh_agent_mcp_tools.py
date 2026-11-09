@@ -58,6 +58,43 @@ def test_refresh_adds_late_landing_tools(monkeypatch):
     assert "manage_connections" not in [t["function"]["name"] for t in side.tools]
 
 
+def test_explicit_empty_allowlist_stays_empty_through_refresh_and_restore(monkeypatch):
+    """An explicit [] is a zero-tool child, including late registry and pinned restore paths."""
+    agent = _agent(["read_file", "terminal"])
+    agent.allowed_tools = []
+    import model_tools
+    monkeypatch.setattr(model_tools, "get_tool_definitions", lambda **kw: [_tool("read_file"), _tool("terminal")])
+
+    _mcp_agent.refresh_agent_mcp_tools(agent, quiet_mode=True, preserve_prefix=True)
+    assert agent.tools == []
+    assert agent.valid_tool_names == set()
+
+    rebuilt = _agent(["read_file"])
+    rebuilt.allowed_tools = []
+    _mcp_agent.restore_agent_tool_prefix(
+        rebuilt,
+        {"version": _mcp_agent.tool_pin_version(), "tools": [_tool("read_file"), _tool("terminal")]},
+    )
+    assert rebuilt.tools == []
+    assert rebuilt.valid_tool_names == set()
+
+
+def test_restricted_allowlist_does_not_gain_late_registration(monkeypatch):
+    agent = _agent(["read_file"])
+    agent.allowed_tools = ["read_file"]
+    import model_tools
+    monkeypatch.setattr(
+        model_tools,
+        "get_tool_definitions",
+        lambda **kw: [_tool("read_file"), _tool("mcp_late_write")],
+    )
+
+    _mcp_agent.refresh_agent_mcp_tools(agent, quiet_mode=True)
+
+    assert [t["function"]["name"] for t in agent.tools] == ["read_file"]
+    assert agent.valid_tool_names == {"read_file"}
+
+
 def test_refresh_preserves_memory_provider_and_context_engine_tools(monkeypatch):
     """B1 regression: a rebuild must NOT drop post-build-injected tools.
 

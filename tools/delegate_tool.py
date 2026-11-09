@@ -49,6 +49,7 @@ from tools.delegate_tool_registry import (
 )
 from tools.delegate_tool_tasks import (
     _MAX_TASK_IMAGES, _coerce_task_images, _coerce_task_schemas, _normalize_task_images, _normalize_task_list,
+    _validate_task_allowed_tools,
 )
 from tools.delegate_tool_tuning import pin_child_service_tier
 from tools.delegate_tool_toolsets import (
@@ -230,10 +231,16 @@ def _build_child_agent(
     override_reasoning_effort: Any = None,
     profile_home: Optional[Path] = None,
     override_service_tier: Optional[str] = None,  # a route's checked speed tier (tools/delegate_tool_tuning.py)
+    allowed_tools: Optional[list[str]] = None,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair. ``profile_home`` builds (and later runs,
     see ``_ChildRun.await_child``) the child inside that profile's scope; it never shares the parent's pool."""
+    from tools.delegate_tool_allowlist import validate_task_allowed_tools
+    if allowed_tools is not None:
+        error = validate_task_allowed_tools([{"allowed_tools": allowed_tools}], parent_agent)
+        if error:
+            raise ValueError(error)
     import uuid as _uuid
     from run_agent import AIAgent
     from agent.delegation_context import delegated_child_context
@@ -296,7 +303,7 @@ def _build_child_agent(
         child_checkpoint_required = checkpoint_required_from_config()
         with delegated_child_context():
             try:
-                child = AIAgent(
+                child_kwargs = dict(
                     **rt, max_iterations=max_iterations, prefill_messages=getattr(parent_agent, "prefill_messages", None),
                     enabled_toolsets=child_toolsets, disabled_toolsets=child_disabled_toolsets, quiet_mode=True,
                     ephemeral_system_prompt=child_prompt, log_prefix=f"[subagent-{task_index}]", platform="subagent",
@@ -314,6 +321,17 @@ def _build_child_agent(
                     # A profile route carries that profile's identity (its SOUL.md under the bound home).
                     **({"load_soul_identity": True} if profile_home is not None else {}),
                 )
+                inherited_allowed_tools = allowed_tools
+                if inherited_allowed_tools is None:
+                    from tools.delegate_tool_allowlist import explicit_allowed_tools
+                    inherited_allowed_tools = explicit_allowed_tools(getattr(parent_agent, "allowed_tools", None))
+                if inherited_allowed_tools is not None:
+                    child_kwargs["allowed_tools"] = list(inherited_allowed_tools)
+                child = AIAgent(**child_kwargs)
+                if allowed_tools is not None and (missing := set(allowed_tools) - child.valid_tool_names):
+                    child.close()
+                    child_session_db = None
+                    raise ValueError(f"Child cannot expose allowed_tools {sorted(missing)!r} on the selected route.")
             except BaseException:
                 # No child close() will ever run: release the dedicated handle here.
                 if child_session_db is not None:
@@ -480,12 +498,15 @@ def _build_children(
         if _task_schema is not None:
             _child_context = append_output_contract(_child_context, _task_schema)
         try:
-            child = _build_child_preserving_parent_tools(
+            child_kwargs = dict(
                 task_index=i, goal=t["goal"], context=_child_context,
                 toolsets=None,  # always inherit the parent's toolsets
                 model=route.creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **_route_overrides(route),
             )
+            if "allowed_tools" in t:
+                child_kwargs["allowed_tools"] = list(t["allowed_tools"])
+            child = _build_child_preserving_parent_tools(**child_kwargs)
         except ValueError as exc:
             # An owner refusal can land mid-batch: the siblings built so far hold reservations.
             for _, _, built in children:
@@ -615,6 +636,8 @@ def delegate_task(
         )
     max_children = _get_max_concurrent_children()
     task_list, err = _normalize_task_list(goal, context, tasks, output_schema, top_role, max_children)
+    if not err:
+        err = _validate_task_allowed_tools(task_list or [], parent_agent)
     if not err:
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if not err:
@@ -838,6 +861,14 @@ DELEGATE_TASK_SCHEMA = {
                             "screenshot the user sent, a design mock, a chart. Vision-capable children receive the "
                             "pixels on their first turn; non-vision children get path hints for vision_analyze. Text "
                             "files do NOT belong here — put paths in 'context' instead.",
+                            items={"type": "string"},
+                        ),
+                        "allowed_tools": _p(
+                            "array",
+                            "Optional exact native/MCP tool names this child may use. Omit to inherit the "
+                            "legacy child surface; [] gives the child zero tools. Names are case-sensitive and "
+                            "must already be available on the parent; wildcards, aliases, disabled tools, and "
+                            "role-blocked tools are refused.",
                             items={"type": "string"},
                         ),
                         "group": _p(

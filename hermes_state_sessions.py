@@ -24,6 +24,7 @@ from hermes_state_common import (
     _source_match_clause, emit_session_deleted, launch_stub_filter_sql,
 )
 from hermes_state_compression import _CHAIN_CAP, _UNSET_CREATED_SQL
+from hermes_state_tool_permissions import SessionToolPermissionMixin
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
@@ -336,7 +337,7 @@ _INHERIT_PARENT_ROUTING_SQL = (
 )
 
 
-class SessionSessionsMixin:
+class SessionSessionsMixin(SessionToolPermissionMixin):
     """Session rows: create/inherit, lifecycle flags, model_config, listing, deletion."""
 
     def _own_profile_name(self) -> Optional[str]:
@@ -367,6 +368,14 @@ class SessionSessionsMixin:
         shape reported in #92859."""
         conn.execute(_INHERIT_PARENT_META_SQL, (session_id,))
         conn.execute(_INHERIT_PARENT_ROUTING_SQL, (session_id,))
+
+    def _publish_child_session_row(self, conn, parent, *, parent_session_id, child_session_id, source,
+                                   model, model_config, system_prompt, cwd, profile_name) -> None:
+        from hermes_state_tool_permissions import inherited_tool_config
+        super()._publish_child_session_row(
+            conn, parent, parent_session_id=parent_session_id, child_session_id=child_session_id,
+            source=source, model=model, model_config=inherited_tool_config(conn, parent_session_id, model_config),
+            system_prompt=system_prompt, cwd=cwd, profile_name=profile_name)
 
     def _insert_session_row(
         self, session_id: str, source: str, model: str | None = None, model_config: dict[str, Any] | None = None,
@@ -684,15 +693,6 @@ class SessionSessionsMixin:
             ("", ActivityProvenance.UNKNOWN.value, session_id), patience_s=self._ACTIVITY_WRITE_PATIENCE_S,
         )
 
-    def update_session_meta(
-        self, session_id: str, model_config_json: str, model: Optional[str] = None,
-    ) -> None:
-        """Update model_config and (COALESCE) optionally model."""
-        self.flush_token_counts()  # barrier against queued token deltas — see update_session_model
-        self._write_sql(
-            "UPDATE sessions SET model_config = ?, model = COALESCE(?, model) WHERE id = ?",
-            (model_config_json, model, session_id),
-        )
 
     def update_system_prompt(self, session_id: str, system_prompt: Optional[str]) -> None:
         """Store the full assembled system prompt snapshot."""
@@ -704,17 +704,6 @@ class SessionSessionsMixin:
             self._delete_unreferenced_system_prompts(conn)
         self._execute_write(_do)
 
-    def update_session_tool_names(self, session_id: str, pin: Any) -> None:
-        """Persist the session's ``tools[]`` pin (JSON-serializable) so a rebuilt AIAgent sends the
-        same bytes; ``None`` clears. The array repeats across sessions like a system prompt does, so it
-        is stored in the same content-addressed ``system_prompts`` table and the column holds its hash
-        (legacy rows: an inline JSON name list); ``get_session`` resolves either."""
-        payload = json.dumps(pin) if pin is not None else None
-        def _do(conn):
-            conn.execute("UPDATE sessions SET tool_names = ? WHERE id = ?",
-                         (self._store_system_prompt(conn, payload), session_id))
-            self._delete_unreferenced_system_prompts(conn)
-        self._execute_write(_do)
 
     def update_session_model(
         self, session_id: str, model: str, provider: Optional[str] = None, *,
@@ -771,6 +760,8 @@ class SessionSessionsMixin:
             if on_missing == "raise":
                 raise ValueError(f"Session not found: {session_id}")
             return _MODEL_CONFIG_ROW_MISSING
+        from hermes_state_tool_permissions import preserve_tool_permission
+        preserve_tool_permission(row[0], patch)
         config = _parse_model_config(row[0])
         for key, value in patch.items():
             if value is None:

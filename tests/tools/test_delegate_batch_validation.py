@@ -17,7 +17,7 @@ import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
-from tools.delegate_tool import delegate_task
+from tools.delegate_tool import DELEGATE_TASK_SCHEMA, delegate_task
 
 
 def _make_mock_parent(depth=0):
@@ -175,6 +175,101 @@ class TestValidBatchStillRuns(unittest.TestCase):
             }
             result = json.loads(delegate_task(goal="test", parent_agent=parent))
         self.assertNotIn("error", result)
+
+
+class TestTaskAllowedTools(unittest.TestCase):
+    def test_schema_advertises_optional_exact_allowed_tools(self):
+        properties = DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["properties"]
+        self.assertEqual(properties["allowed_tools"]["type"], "array")
+        self.assertEqual(properties["allowed_tools"]["items"], {"type": "string"})
+        self.assertNotIn("allowed_tools", DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["required"])
+
+    def test_explicit_empty_allowlist_is_forwarded_to_child_builder(self):
+        with (
+            patch("tools.delegate_tool._build_child_preserving_parent_tools") as build,
+            patch("tools.delegate_tool._run_single_child") as run,
+        ):
+            child = MagicMock()
+            build.return_value = child
+            run.return_value = {
+                "task_index": 0, "status": "completed", "summary": "ok",
+                "api_calls": 1, "duration_seconds": 1.0, "_child_role": None,
+            }
+            result = _call([{"goal": GOOD_A, "allowed_tools": []}])
+        self.assertNotIn("error", result)
+        self.assertEqual(build.call_args.kwargs["allowed_tools"], [])
+
+    def test_valid_exact_allowlist_is_forwarded_unchanged(self):
+        parent = _make_mock_parent()
+        parent.tools = [{"type": "function", "function": {"name": "read_file", "parameters": {}}}]
+        parent.valid_tool_names = {"read_file"}
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+        with (
+            patch("tools.delegate_tool._build_child_preserving_parent_tools") as build,
+            patch("tools.delegate_tool._run_single_child") as run,
+        ):
+            build.return_value = MagicMock()
+            run.return_value = {
+                "task_index": 0, "status": "completed", "summary": "ok",
+                "api_calls": 1, "duration_seconds": 1.0, "_child_role": None,
+            }
+            result = json.loads(delegate_task(
+                tasks=[{"goal": GOOD_A, "allowed_tools": ["read_file"]}], parent_agent=parent,
+            ))
+        self.assertNotIn("error", result)
+        self.assertEqual(build.call_args.kwargs["allowed_tools"], ["read_file"])
+
+    def test_omitted_allowlist_preserves_legacy_builder_call(self):
+        with (
+            patch("tools.delegate_tool._build_child_preserving_parent_tools") as build,
+            patch("tools.delegate_tool._run_single_child") as run,
+        ):
+            child = MagicMock()
+            build.return_value = child
+            run.return_value = {
+                "task_index": 0, "status": "completed", "summary": "ok",
+                "api_calls": 1, "duration_seconds": 1.0, "_child_role": None,
+            }
+            result = _call([{"goal": GOOD_A}])
+        self.assertNotIn("error", result)
+        self.assertNotIn("allowed_tools", build.call_args.kwargs)
+
+    def test_invalid_allowlist_refuses_before_any_child_build(self):
+        with patch("tools.delegate_tool._build_child_preserving_parent_tools") as build:
+            result = _call([{"goal": GOOD_A, "allowed_tools": ["terminal", 7]}])
+        self.assertIn("error", result)
+        self.assertIn("allowed_tools", result["error"])
+        build.assert_not_called()
+
+    def test_unknown_disabled_and_role_blocked_names_refuse_precisely(self):
+        parent = _make_mock_parent()
+        parent.tools = [{"type": "function", "function": {"name": "read_file", "parameters": {}}}]
+        parent.valid_tool_names = {"read_file"}
+        parent.enabled_toolsets = ["file"]
+        parent.disabled_toolsets = []
+        cases = [
+            (["not_registered"], "unknown"),
+            (["terminal"], "disabled or outside"),
+            (["memory"], "blocked for child role"),
+        ]
+        for names, reason in cases:
+            result = json.loads(delegate_task(
+                tasks=[{"goal": GOOD_A, "allowed_tools": names}], parent_agent=parent,
+            ))
+            self.assertIn("error", result)
+            self.assertIn(reason, result["error"])
+
+    def test_exact_allowlist_rejects_wildcard_and_legacy_alias_without_normalizing(self):
+        parent = _make_mock_parent()
+        parent.tools = [{"type": "function", "function": {"name": "process_manage", "parameters": {}}}]
+        parent.valid_tool_names = {"process_manage"}
+        parent.enabled_toolsets = ["terminal"]
+        for token in ("process*", "process", "PROCESS_MANAGE"):
+            result = json.loads(delegate_task(
+                tasks=[{"goal": GOOD_A, "allowed_tools": [token]}], parent_agent=parent,
+            ))
+            self.assertIn("error", result)
 
 
 if __name__ == "__main__":
