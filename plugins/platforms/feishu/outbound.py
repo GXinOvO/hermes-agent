@@ -4,7 +4,8 @@ import json
 import logging
 from typing import Any, Optional
 
-from gateway.platforms.base import SendResult
+from gateway.platforms.base import SendResult, describe_proxy_error, env_proxy_for_redaction
+from gateway.platforms.helpers import send_chunks
 from gateway.strict_transport import single_attempt_transport, strict_transport
 
 logger = logging.getLogger(__name__)
@@ -43,38 +44,40 @@ class FeishuOutboundMixin:
         formatted = self.format_message(content)
         chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
         prefer_post = bool(_MARKDOWN_HINT_RE.search(formatted))
-        last_response = None
 
         async def plain(chunk):
             return await self._feishu_send_with_retry(chat_id=chat_id, msg_type="text",
                 payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
                 reply_to=reply_to, metadata=metadata)
 
+        async def send_one(chunk):
+            msg_type, payload = self._build_outbound_payload(chunk, prefer_post=prefer_post)
+            try:
+                response = await self._feishu_send_with_retry(chat_id=chat_id, msg_type=msg_type,
+                    payload=payload, reply_to=reply_to, metadata=metadata)
+            except Exception as exc:
+                if strict_transport() or msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
+                    raise
+                logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
+                response = await plain(chunk)
+            if (not strict_transport() and msg_type == "post" and not self._response_succeeded(response)
+                    and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))):
+                logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
+                response = await plain(chunk)
+            return self._finalize_send_result(response, "send failed")
+
         try:
-            for chunk in chunks:
-                msg_type, payload = self._build_outbound_payload(chunk, prefer_post=prefer_post)
-                try:
-                    response = await self._feishu_send_with_retry(chat_id=chat_id, msg_type=msg_type,
-                        payload=payload, reply_to=reply_to, metadata=metadata)
-                except Exception as exc:
-                    if strict_transport() or msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
-                        raise
-                    logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
-                    response = await plain(chunk)
-                if (not strict_transport() and msg_type == "post" and not self._response_succeeded(response)
-                        and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))):
-                    logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
-                    response = await plain(chunk)
-                last_response = response
-                if strict_transport() and not self._response_succeeded(response):
-                    break
-            return self._finalize_send_result(last_response, "send failed")
+            return await send_chunks(chunks, send_one)
         except Exception as exc:
-            logger.error("[Feishu] Send error: %s", exc, exc_info=True)
-            return SendResult(success=False, error=str(exc))
+            from plugins.platforms.feishu.adapter import _onboard_open_base_url
+            shown = describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))
+            logger.error("[Feishu] Send error: %s", shown or exc, exc_info=not shown)
+            return SendResult(success=False, error=shown or str(exc))
 
     async def _feishu_send_with_retry(self, *, chat_id, msg_type, payload, reply_to, metadata):
-        from plugins.platforms.feishu.adapter import _FEISHU_SEND_ATTEMPTS, _FEISHU_REPLY_FALLBACK_CODES, _POST_CONTENT_INVALID_RE
+        from plugins.platforms.feishu.adapter import (
+            _FEISHU_SEND_ATTEMPTS, _FEISHU_REPLY_FALLBACK_CODES, _POST_CONTENT_INVALID_RE, _onboard_open_base_url,
+        )
         if strict_transport():
             return await self._send_raw_message(chat_id=chat_id, msg_type=msg_type, payload=payload,
                                                 reply_to=reply_to, metadata=metadata)
@@ -97,6 +100,7 @@ class FeishuOutboundMixin:
                     raise
                 wait_seconds = 2 ** attempt
                 logger.warning("[Feishu] Send attempt %d/%d failed for chat %s; retrying in %ds: %s",
-                               attempt + 1, _FEISHU_SEND_ATTEMPTS, chat_id, wait_seconds, exc)
+                               attempt + 1, _FEISHU_SEND_ATTEMPTS, chat_id, wait_seconds,
+                               describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name))) or exc)
                 await asyncio.sleep(wait_seconds)
         raise RuntimeError("Feishu send failed")

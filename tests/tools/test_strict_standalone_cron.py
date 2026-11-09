@@ -40,7 +40,7 @@ def forbidden(*args, **kwargs):
     raise AssertionError('completed result must not execute script or model')
 scheduler._run_no_agent_job = forbidden
 scheduler.run_job = forbidden
-scheduler.load_config = lambda: {'cron': {'wrap_response': False, 'mirror_to_session': False}}
+scheduler.load_config = lambda: {'cron': {'wrap_response': False, 'mirror_to_session': False, 'delivery': {'notify': mode != 'notify_off'}}}
 config = PlatformConfig(enabled=True, token=None if mode == 'notoken' else 'inert-preclaim')
 gateway.config.load_gateway_config = lambda: GatewayConfig(platforms={Platform(platform): config})
 queue.DELIVERY_DB = Path(home) / 'cron/deliveries.db'
@@ -190,3 +190,13 @@ async def test_cold_cron_telegram_lost_chunk_ack_stops_files_and_restart(tmp_pat
         assert second['pid'] != first['pid']
         assert second['processed'] == 0 and second['claimed'] == [] and second['status'] == 'unknown'
         assert len(wire.events) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode,silent', [('notify_on', False), ('notify_off', True)])
+async def test_cold_cron_telegram_notification_choice_is_frozen_before_claim(tmp_path, mode, silent):
+    async with fixtures.peer() as wire:
+        result = await child(tmp_path / 'state', 'telegram', wire.base, mode)
+        assert result['processed'] == 1 and result['status'] == 'delivered', result
+        assert len(wire.events) == 1
+        assert wire.events[0]['form'].get('disable_notification') == (['true'] if silent else None)

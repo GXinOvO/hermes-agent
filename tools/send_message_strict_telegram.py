@@ -17,9 +17,11 @@ class Plan:
 
 def prepare(pconfig, chat_id, message, *, thread_id=None, media_files=None, force_document=False, **kwargs):
     from gateway.platforms.base import BasePlatformAdapter, utf16_len, resolve_proxy_url
-    from tools.send_message_senders import (_telegram_format, _telegram_thread_kwargs,
+    from plugins.platforms.telegram.standalone import (_telegram_format, _telegram_thread_kwargs,
         _IMAGE_EXTS, _VIDEO_EXTS, _VOICE_EXTS, _TELEGRAM_SEND_AUDIO_EXTS)
     from tools.send_message_strict import media_bytes, TELEGRAM_API
+    from plugins.platforms.telegram.telegram_network import proxy_target_hosts
+    from plugins.platforms.telegram.telegram_outbound import notification_kwargs, resolve_notifications_mode
 
     token = pconfig.token
     if not isinstance(token, str) or not token.strip() or not chat_id:
@@ -36,10 +38,16 @@ def prepare(pconfig, chat_id, message, *, thread_id=None, media_files=None, forc
         files.append(replace(file, kind=kind))
     if not chunks and not files:
         raise RuntimeError('strict Telegram empty payload')
-    common = tuple({'chat_id': str(chat_id), **_telegram_thread_kwargs(thread_id)}.items())
-    proxy = resolve_proxy_url('TELEGRAM_PROXY', target_hosts=['api.telegram.org'])
-    return Plan(token, proxy, TELEGRAM_API, common, chunks, mode,
-                bool(pconfig.extra.get('disable_link_previews')), tuple(files))
+    extra = pconfig.extra or {}
+    base_url = extra.get('base_url')
+    if base_url is not None and not isinstance(base_url, str):
+        raise RuntimeError('strict Telegram base URL unavailable')
+    notifications = notification_kwargs(resolve_notifications_mode(), kwargs.get('notify'))
+    common = tuple({'chat_id': str(chat_id), **_telegram_thread_kwargs(thread_id),
+                    **{key: 'true' if value is True else str(value) for key, value in notifications.items()}}.items())
+    proxy = resolve_proxy_url('TELEGRAM_PROXY', target_hosts=proxy_target_hosts(base_url), configured=extra.get('proxy_url'))
+    return Plan(token, proxy, base_url or TELEGRAM_API + '/bot', common, chunks, mode,
+                bool(extra.get('disable_link_previews')), tuple(files))
 
 
 async def send(plan):
@@ -47,7 +55,7 @@ async def send(plan):
     delivered = []
 
     async def post(session, operation, data):
-        async with session.post(f'{plan.api}/bot{plan.token}/{operation}',
+        async with session.post(f'{plan.api}{plan.token}/{operation}',
                 data=data, proxy=plan.proxy, allow_redirects=False) as response:
             if response.status != 200:
                 raise RuntimeError('HTTP ' + str(response.status))

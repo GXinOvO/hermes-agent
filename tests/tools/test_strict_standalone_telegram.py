@@ -13,7 +13,7 @@ from tests.tools import test_strict_standalone_dispatch as fixtures
 @pytest.mark.asyncio
 async def test_telegram_freezes_proxy_format_types_voice_and_all_bytes(tmp_path, monkeypatch):
     from gateway.platforms import base
-    from tools import send_message_senders as senders
+    from plugins.platforms.telegram import standalone as senders
     files = []
     for name, voice in [('photo.png', False), ('clip.mp4', False), ('voice.ogg', True), ('song.mp3', False), ('report.txt', False)]:
         file = tmp_path / name
@@ -84,7 +84,7 @@ async def test_strict_dispatcher_without_plan_refuses_without_dynamic_prepare(mo
 
 @pytest.mark.asyncio
 async def test_manual_standalone_telegram_keeps_canonical_sender(tmp_path, monkeypatch):
-    from tools import send_message_senders as senders
+    from plugins.platforms.telegram import standalone as senders
     from telegram import Bot
     from aiohttp import web
     posts = []
@@ -102,7 +102,8 @@ async def test_manual_standalone_telegram_keeps_canonical_sender(tmp_path, monke
     site = web.TCPSite(runner, '127.0.0.1', 0)
     await site.start()
     base = 'http://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
-    monkeypatch.setattr(senders, '_telegram_bot', lambda _token: Bot('123:inert', base_url=base + '/bot', local_mode=True))
+    monkeypatch.setattr('tools.send_message_tool._plugin_standalone_sender', lambda name: (senders.standalone_send, None))
+    monkeypatch.setattr(senders, '_telegram_bot', lambda _token, extra=None: Bot('123:inert', base_url=base + '/bot', local_mode=True))
     try:
         result = await _send_to_platform(Platform.TELEGRAM, PlatformConfig(token='inert'),
                                                 '555', 'sealed', thread_id='777')

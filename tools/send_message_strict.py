@@ -42,7 +42,7 @@ def _binding(platform, chat_id, message, media_files, kwargs, execution_id, clai
     thread = kwargs.get('thread_id')
     return PlanBinding(str(get_hermes_home().resolve()), platform, str(chat_id), message,
         tuple((str(path), bool(voice)) for path, voice in media_files or ()),
-        (str(thread) if thread else None, bool(kwargs.get('force_document')), kwargs.get('caption')),
+        (str(thread) if thread else None, bool(kwargs.get('force_document')), kwargs.get('caption'), kwargs.get('notify')),
         execution_id, claim_id)
 
 

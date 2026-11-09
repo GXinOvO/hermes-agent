@@ -54,7 +54,7 @@ def standalone_send(state, content, media, *, prepared_plan=None, execution_id=N
     async def send():
         with strict_transport_scope():
             result = await asyncio.wait_for(_send_to_platform(state.platform, state.pconfig,
-                state.chat_id, content, thread_id=state.thread_id, media_files=media,
+                state.chat_id, content, thread_id=state.thread_id, media_files=media, notify=state.notify_delivery,
                 prepared_plan=prepared_plan, execution_id=execution_id, claim_id=claim_id), timeout=timeout)
         if not isinstance(result, dict) or not result.get('success') or result.get('ambiguous') or result.get('warnings'):
             raise RuntimeError(str(result.get('error') if isinstance(result, dict) else 'ACK missing'))
@@ -191,7 +191,8 @@ def prepare(job, content, for_failure, *, adapters, loop):
             if durable_media is None:
                 execution_id, durable_media = _durable_media(job, content, for_failure)
             plan = prepare_standalone(state.platform, state.pconfig, state.chat_id, text,
-                media_files=retained, thread_id=state.thread_id, execution_id=execution_id, claim_id=claim_id)
+                media_files=retained, thread_id=state.thread_id, notify=state.notify_delivery,
+                execution_id=execution_id, claim_id=claim_id)
             if prepared_media_identity(plan) != durable_media:
                 raise RuntimeError('cron frozen media identity differs from durable result')
             plans.append((target, state, text, plan))

@@ -343,6 +343,12 @@ class AIAgent(
                 origin_json=_gateway_origin_json(self), parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source), profile_name=profile_for_session,
             )
+            if getattr(self, "_session_db_reserved", False) is True:
+                from agent.runtime_session_store import RuntimeSessionStore
+                if not isinstance(self._session_db, RuntimeSessionStore):
+                    patch = {k: v for k, v in (self._session_row_model_config() or {}).items() if v is not None}
+                    if patch:
+                        self._session_db.patch_session_model_config(self.session_id, patch)
             self._session_db_created = True
         except ValueError:
             # Permission/config contract failures are permanent for this constructor

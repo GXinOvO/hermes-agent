@@ -73,7 +73,7 @@ _LARK_SDK_IMPORTS = (
     ("lark_oapi.core", ("AccessTokenType", "HttpMethod")),
     ("lark_oapi.core.const", ("FEISHU_DOMAIN", "LARK_DOMAIN")),
     ("lark_oapi.core.model", ("BaseRequest",)),
-    ("lark_oapi.event.callback.model.p2_card_action_trigger", ("CallBackCard", "P2CardActionTriggerResponse")),
+    ("lark_oapi.event.callback.model.p2_card_action_trigger", ("CallBackCard", "CallBackToast", "P2CardActionTriggerResponse")),
     ("lark_oapi.event.dispatcher_handler", ("EventDispatcherHandler",)),
 )
 lark = FeishuWSClient = None  # type: ignore[assignment]
@@ -87,11 +87,12 @@ FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 from gateway.config import Platform, PlatformConfig
 from agent.i18n import t
 from gateway.platforms.base import (
-    BasePlatformAdapter, ExecApprovalPrompt, SendResult,
+    BasePlatformAdapter, ExecApprovalPrompt, SendResult, describe_proxy_error, env_proxy_for_redaction,
     SUPPORTED_DOCUMENT_TYPES, cache_document_from_bytes_async, cache_image_from_url,
     cache_audio_from_bytes_async, cache_image_from_bytes_async,
 )
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
+from gateway.platforms.helpers import send_chunks
 from plugins.platforms.feishu.adapter_choice_cards import FeishuChoiceCardsMixin
 from plugins.platforms.feishu.outbound import FeishuOutboundMixin
 from gateway.strict_transport import single_attempt_transport, strict_transport
@@ -1684,8 +1685,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                 result.message_id = message_id
             return result
         except Exception as exc:
-            logger.error("[Feishu] Failed to edit message %s: %s", message_id, exc, exc_info=True)
-            return SendResult(success=False, error=str(exc))
+            logger.error("[Feishu] Failed to edit message %s: %s", message_id, (shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))) or exc, exc_info=not shown)
+            return SendResult(success=False, error=shown or str(exc))
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
         """Delete a bot-posted message (used by stream-consumer preview cleanup)."""
@@ -1748,8 +1749,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                              "request_id": prompt.request_id or ""},
             )
         except Exception as exc:
-            logger.warning("[Feishu] send_exec_approval failed: %s", exc)
-            return SendResult(success=False, error=str(exc))
+            logger.warning("[Feishu] send_exec_approval failed: %s", shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name))) or str(exc))
+            return SendResult(success=False, error=shown)
 
     async def _send_interactive_card(
         self, chat_id: str, card: dict[str, Any], metadata: Optional[dict[str, Any]], failure_message: str, *,
@@ -1796,8 +1797,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                 state_map=self._update_prompt_state, state_id=prompt_id, session_key=session_key,
             )
         except Exception as exc:
-            logger.warning("[Feishu] send_update_prompt failed: %s", exc)
-            return SendResult(success=False, error=str(exc))
+            logger.warning("[Feishu] send_update_prompt failed: %s", shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name))) or str(exc))
+            return SendResult(success=False, error=shown)
 
     @staticmethod
     def _build_resolved_approval_card(*, choice: str, user_name: str, body: str | None = None) -> dict[str, Any]:
@@ -1904,8 +1905,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
             )
             return self._finalize_send_result(message_response, "image send failed")
         except Exception as exc:
-            logger.error("[Feishu] Failed to send image %s: %s", image_path, exc, exc_info=True)
-            return SendResult(success=False, error=str(exc))
+            logger.error("[Feishu] Failed to send image %s: %s", image_path, (shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))) or exc, exc_info=not shown)
+            return SendResult(success=False, error=shown or str(exc))
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """Feishu bot API does not expose a typing indicator."""
@@ -1920,9 +1921,10 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
         try:
             image_path = await self._download_remote_image(image_url)
         except Exception as exc:
-            logger.error("[Feishu] Failed to download image %s: %s", image_url, exc, exc_info=True)
+            shown = describe_proxy_error(exc, env_proxy_for_redaction(image_url))
+            logger.error("[Feishu] Failed to download image %s: %s", image_url, shown or exc, exc_info=not shown)
             if strict_transport():
-                return SendResult(success=False, error=str(exc))
+                return SendResult(success=False, error=shown or str(exc))
             return await super().send_image(
                 chat_id=chat_id, image_url=image_url, caption=caption, reply_to=reply_to, metadata=metadata,
             )
@@ -1941,9 +1943,10 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                 animation_url, default_ext=".gif", preferred_name="animation.gif",
             )
         except Exception as exc:
-            logger.error("[Feishu] Failed to download animation %s: %s", animation_url, exc, exc_info=True)
+            shown = describe_proxy_error(exc, env_proxy_for_redaction(animation_url))
+            logger.error("[Feishu] Failed to download animation %s: %s", animation_url, shown or exc, exc_info=not shown)
             if strict_transport():
-                return SendResult(success=False, error=str(exc))
+                return SendResult(success=False, error=shown or str(exc))
             return await super().send_animation(
                 chat_id=chat_id, animation_url=animation_url, caption=caption, reply_to=reply_to, metadata=metadata,
             )
@@ -2236,13 +2239,17 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
             response.card = card
         return response
 
+    def _card_toast(self, text: str) -> Any:
+        """Card-callback response that leaves the card as is and shows *text* to the clicker only."""
+        if (response := self._card_response()) is not None and (toast := CallBackToast) is not None:  # health: allow F821 -- bound with the other SDK names by _load_lark_oapi
+            response.toast, response.toast.type, response.toast.content = toast(), "warning", text
+        return response
+
     def _validate_card_action(
         self, *, event: Any, state: dict[str, str], label: str, ident: Any,
     ) -> Optional[tuple[str, str, str, str, str]]:
-        """Shared operator/chat checks for approval + update-prompt clicks.
-
-        Returns ``(open_id, callback_chat_id, user_name, user_id, union_id)`` or None (already logged).
-        """
+        """Shared operator/chat checks for approval + update-prompt clicks: ``(open_id, callback_chat_id,
+        user_name, user_id, union_id)`` or None (already logged)."""
         operator = getattr(event, "operator", None)
         open_id = str(getattr(operator, "open_id", "") or "")
         user_id = str(getattr(operator, "user_id", "") or "")
@@ -2250,15 +2257,12 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
         callback_chat_id = str(getattr(getattr(event, "context", None), "open_chat_id", "") or "")
         expected_chat_id = str(state.get("chat_id", "") or "")
         if not self._is_interactive_operator_authorized(
-            open_id, user_id=user_id, union_id=union_id, chat_id=expected_chat_id or callback_chat_id,
-        ):
+                open_id, user_id=user_id, union_id=union_id, chat_id=expected_chat_id or callback_chat_id):
             logger.warning("[Feishu] Unauthorized %s click by %s", label, open_id or "<unknown>")
             return None
         if callback_chat_id and expected_chat_id and callback_chat_id != expected_chat_id:
-            logger.warning(
-                "[Feishu] %s callback chat mismatch for %s (expected=%s, got=%s)",
-                label.capitalize(), ident, expected_chat_id, callback_chat_id,
-            )
+            logger.warning("[Feishu] %s callback chat mismatch for %s (expected=%s, got=%s)",
+                           label.capitalize(), ident, expected_chat_id, callback_chat_id)
             return None
         return open_id, callback_chat_id, self._get_cached_sender_name(open_id) or open_id, user_id, union_id
 
@@ -2277,11 +2281,13 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
         if checked is None:
             return self._card_response()
         open_id, chat_id, user_name, user_id, union_id = checked
-        coro = self._resolve_approval(
-            approval_id=approval_id, choice=choice, user_name=user_name, open_id=open_id, chat_id=chat_id,
-            user_id=user_id, union_id=union_id,
-        )
-        if not self._submit_on_loop(loop, coro):
+        from gateway.approval_actor import approval_refusal, refusal_text
+        # SessionSource.user_id is the tenant user_id when the app can see it, else the open_id.
+        if requester := approval_refusal(state["session_key"], user_id or open_id, extra=self.config.extra, request_id=state.get("request_id")):
+            return self._card_toast(refusal_text(requester))  # only the clicker sees it; card unchanged
+        if not self._submit_on_loop(loop, self._resolve_approval(
+                approval_id=approval_id, choice=choice, user_name=user_name, open_id=open_id, chat_id=chat_id,
+                user_id=user_id, union_id=union_id)):
             return self._card_response()
         return self._card_response(self._build_resolved_approval_card(choice=choice, user_name=user_name, body=state.get("body")))
 
@@ -2347,7 +2353,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
             return
         try:
             from tools.approval import resolve_gateway_approval_card
-            count = resolve_gateway_approval_card(state["session_key"], choice, state.get("request_id"))
+            count = resolve_gateway_approval_card(state["session_key"], choice, state.get("request_id"),
+                                                  actor_id=user_id or open_id, extra=self.config.extra)
             logger.info(
                 "Feishu button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                 count, state["session_key"], choice, user_name,
@@ -2359,10 +2366,7 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                 _chat = str(state.get("chat_id", "") or chat_id or "")
                 if _chat:
                     try:
-                        await self.send(
-                            _chat,
-                            t("platform.shared.approval_expired"),
-                        )
+                        await self.send(_chat, t("platform.shared.approval_expired"))
                     except Exception:
                         logger.debug("[Feishu] expired-approval notice failed", exc_info=True)
         except Exception as exc:
@@ -3522,8 +3526,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                             "[Feishu] FEISHU_BOT_NAME differs from /bot/v3/info; using hydrated bot name for group @mention gating."
                         )
                     self._bot_name = bot_name
-        except Exception:
-            logger.debug("[Feishu] /bot/v3/info probe failed during hydration", exc_info=True)
+        except Exception as exc:
+            logger.debug("[Feishu] /bot/v3/info probe failed during hydration%s", f": {shown}" if (shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))) else "", exc_info=not shown)
 
         if self._bot_name:
             return
@@ -3544,8 +3548,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
             app_name = (getattr(app, "app_name", None) or "").strip()
             if app_name and not self._bot_name:
                 self._bot_name = app_name
-        except Exception:
-            logger.debug("[Feishu] Failed to hydrate bot name from application info", exc_info=True)
+        except Exception as exc:
+            logger.debug("[Feishu] Failed to hydrate bot name from application info%s", f": {shown}" if (shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))) else "", exc_info=not shown)
 
     # --- Deduplication — seen message ID cache (persistent) ---
     def _load_seen_message_ids(self) -> None:
@@ -3710,8 +3714,8 @@ class FeishuAdapter(FeishuOutboundMixin, FeishuChoiceCardsMixin, BasePlatformAda
                     )
             return self._finalize_send_result(message_response, "file send failed")
         except Exception as exc:
-            logger.error("[Feishu] Failed to send file %s: %s", file_path, exc, exc_info=True)
-            return SendResult(success=False, error=str(exc))
+            logger.error("[Feishu] Failed to send file %s: %s", file_path, (shown := describe_proxy_error(exc, env_proxy_for_redaction(_onboard_open_base_url(self._domain_name)))) or exc, exc_info=not shown)
+            return SendResult(success=False, error=shown or str(exc))
 
     async def _send_uploaded_key(
         self, *, chat_id: str, reply_to: Optional[str], metadata: Optional[dict[str, Any]], caption: Optional[str],
@@ -4297,7 +4301,7 @@ async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_f
             return send_error("No deliverable text or media remained after processing MEDIA tags")
         return {"success": True, "platform": "feishu", "chat_id": chat_id, "message_id": last_result.message_id}
     except Exception as e:
-        return send_error(f"Feishu send failed: {e}")
+        return send_error(f"Feishu send failed: {describe_proxy_error(e, env_proxy_for_redaction(*_ONBOARD_OPEN_URLS.values())) or e}")  # lark-oapi's requests reads HTTPS_PROXY
 
 
 def interactive_setup() -> None:

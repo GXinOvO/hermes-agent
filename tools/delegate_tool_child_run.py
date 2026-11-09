@@ -36,9 +36,11 @@ def _reserve_child_transcript(child: Any) -> None:
         return
     try:
         if not isinstance(db, RuntimeSessionStore):
+            parent_sid = child._parent_session_id
             db.create_session(
                 session_id=child.session_id, source="subagent",
-                parent_session_id=child._parent_session_id,
+                parent_session_id=parent_sid,
+                model_config={"_delegate_from": parent_sid} if parent_sid else None,
             )
         child._session_db_reserved = True
         if getattr(child, "allowed_tools", None) is not None:
