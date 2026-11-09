@@ -247,3 +247,48 @@ def test_publication_holds_history_lock_until_native_commit(marker_session, monk
         worker.join(5)
     assert not worker.is_alive() and not failures
     assert len(session["history"]) == len(db.get_messages("chat")) == 1
+
+
+def test_first_switch_in_a_draft_chat_creates_the_row_it_writes_to(tmp_path, monkeypatch):
+    """A draft chat has no ``sessions`` row until its first submit, and ``messages.session_id`` is a hard
+    foreign key — "the agent holds a live db handle" says nothing about the row behind it, so the pivot
+    must create that row or the switch loses the very notice it describes."""
+    db = SessionDB(db_path=tmp_path / "state.db")
+    agent = SimpleNamespace(_session_db=db, session_id="chat", model="new-model", provider="test-provider")
+    session = {"session_key": "chat", "_sid": "marker-test", "agent": agent, "history": [],
+               "history_lock": threading.RLock(), "history_version": 0, "test_notices": []}
+    monkeypatch.setattr(server, "_emit",
+                        lambda event, sid, payload: session["test_notices"].append((event, sid, payload)))
+    # The lazily persisted row is written through the launch handle, not the agent's copy of it.
+    monkeypatch.setattr(server, "_db", db, raising=False)
+    try:
+        assert db.get_session("chat") is None
+        _pivot(session)
+        assert db.get_session("chat") is not None
+        assert [(row["role"], row["display_kind"]) for row in db.get_messages("chat", include_inactive=True)] == [
+            ("user", "model_switch")]
+        assert session["history"][-1].get(_DB_PERSISTED_MARKER) is True
+        assert [payload for event, _sid, payload in session["test_notices"] if event == "error"] == []
+    finally:
+        db.close()
+
+
+def test_switch_after_the_row_exists_does_not_recreate_it(tmp_path, monkeypatch):
+    """The existing-row path stays a no-op: one row, one marker, same ``started_at``."""
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session("chat", "desktop")
+    agent = SimpleNamespace(_session_db=db, session_id="chat", model="new-model", provider="test-provider")
+    session = {"session_key": "chat", "_sid": "marker-test", "agent": agent, "history": [],
+               "history_lock": threading.RLock(), "history_version": 0, "test_notices": []}
+    monkeypatch.setattr(server, "_emit",
+                        lambda event, sid, payload: session["test_notices"].append((event, sid, payload)))
+    monkeypatch.setattr(server, "_db", db, raising=False)
+    try:
+        before = db.get_session("chat")
+        _pivot(session)
+        after = db.get_session("chat")
+        assert after is not None and before is not None
+        assert after["started_at"] == before["started_at"]
+        assert [row["display_kind"] for row in db.get_messages("chat", include_inactive=True)] == ["model_switch"]
+    finally:
+        db.close()
