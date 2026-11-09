@@ -32,18 +32,18 @@ def _reserve_child_transcript(child: Any) -> None:
     from agent.runtime_session_store import RuntimeSessionStore
 
     db = child._session_db
-    if db is None or child._persist_disabled or isinstance(db, RuntimeSessionStore):
-        # Managed workers already have an owner-reserved row. Persistence-disabled
-        # children retain their existing no-transcript behavior.
+    if db is None or child._persist_disabled:
         return
     try:
-        # Leave model_config and the prompt unset. The constructor upsert keeps
-        # existing values, so a partial config here would freeze first-turn state.
-        db.create_session(
-            session_id=child.session_id, source="subagent",
-            parent_session_id=child._parent_session_id,
-        )
+        if not isinstance(db, RuntimeSessionStore):
+            db.create_session(
+                session_id=child.session_id, source="subagent",
+                parent_session_id=child._parent_session_id,
+            )
         child._session_db_reserved = True
+        if getattr(child, "allowed_tools", None) is not None:
+            from tools.mcp_tool_agent import persist_agent_tool_names
+            persist_agent_tool_names(child)
     except BaseException:
         # Ownership has transferred, but the child is not attached or published yet.
         child.close()

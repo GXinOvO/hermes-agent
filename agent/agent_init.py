@@ -929,6 +929,8 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
 def _build_client(agent, api_key, base_url, fallback_model):
     # LLM client per wire mode (raw_codex=True: the main agent needs direct
     # responses.stream()). One provider/model timeout up front so every path applies it.
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent)
     agent._anthropic_client = None
     agent._is_anthropic_oauth = False
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
@@ -1015,9 +1017,18 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     agent._configured_disabled_toolsets, disabled_toolsets = disabled_toolsets, session_disabled_toolsets(
         disabled_toolsets, getattr(agent, "platform", None), oneshot=agent_is_oneshot(agent))  # pin restore reads both
     agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
+    from tools.delegate_tool_allowlist import explicit_allowed_tools, filter_tool_defs_by_allowlist
+    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     agent._tool_snapshot_selection = tool_selection_key(enabled_toolsets, disabled_toolsets)  # tools[] freeze gate
     agent.tools = agent_tool_surface(agent, model_tools.get_tool_definitions(
-        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode) or [])
+        enabled_toolsets=enabled_toolsets,
+        disabled_toolsets=disabled_toolsets,
+        quiet_mode=agent.quiet_mode,
+        skip_tool_search_assembly=allowed_tools is not None,
+    ) or [])
+    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    if allowed_tools is not None:
+        agent.tools = filter_tool_defs_by_allowlist(agent.tools, allowed_tools)
     agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools} if agent.tools else set()
     # Kanban guidance is session-static for the dispatcher-owned worker only. Profiles may
     # expose kanban_show interactively, and children/cron runs inherit the env var, without
@@ -1962,57 +1973,6 @@ def _warn_nonagentic_hermes_model(agent):
             _ra().logger.warning(_hermes_warn)
 
 
-def _inject_context_engine_tools(agent):
-    # Context engine tool schemas (lcm_*), deduped against existing names (plugins may
-    # register the same schemas; duplicates 400 provider-side) and gated on enabled_toolsets
-    # so `platform_toolsets: telegram: []` can't leak them.
-    # Skip names that are already present — the model_tools.get_tool_definitions() quiet_mode cache returned a
-    # shared list pre-#17335, so a stray mutation here would poison subsequent agent inits in the same
-    # Gateway process and trip provider-side 'duplicate tool name' errors. Even with the cache fix, dedup is
-    # the right defense against plugin paths that may register the same schemas via ctx.register_tool().
-    # Mirrors the memory tools dedup above. Respect the platform's enabled_toolsets configuration (#5544):
-    # context engine tools follow the same gating pattern as memory provider tools — without the gate,
-    # `platform_toolsets: telegram: []` would still leak lcm_* tools into the tool surface and incur the
-    # same local-model latency penalty.
-    agent._context_engine_tool_names: set = set()
-    if (
-        agent.context_compressor
-        and agent.tools is not None
-        and (agent.enabled_toolsets is None or "context_engine" in agent.enabled_toolsets)
-    ):
-        _existing_tool_names = {
-            t.get("function", {}).get("name") for t in agent.tools if isinstance(t, dict)
-        }
-        from agent.memory_manager_tools import normalize_tool_schema
-        for _raw_schema in agent.context_compressor.get_tool_schemas():
-            _schema = normalize_tool_schema(_raw_schema)
-            if _schema is None:
-                # A nameless tool makes strict providers 400 and disables the whole toolset.
-                _ra().logger.warning(
-                    # Skip it. See #47707.
-                    "Context engine returned a tool schema with no resolvable "
-                    "name; skipping to avoid poisoning the request (%r)",
-                    _raw_schema,
-                )
-                continue
-            _tname = _schema["name"]
-            if _tname in _existing_tool_names:
-                continue  # already registered via plugin/cache path
-            agent.tools.append({"type": "function", "function": _schema})
-            for _names in (agent.valid_tool_names, agent._context_engine_tool_names, _existing_tool_names):
-                _names.add(_tname)
-
-    if agent.context_compressor:
-        try:
-            agent.context_compressor.on_session_start(
-                agent.session_id, hermes_home=str(get_hermes_home()),
-                platform=agent.platform or "cli", model=agent.model,
-                context_length=getattr(agent.context_compressor, "context_length", 0),
-                conversation_id=getattr(agent, "_gateway_session_key", None),
-            )
-        except Exception as _ce_err:
-            _ra().logger.debug("Context engine on_session_start: %s", _ce_err)
-
 
 def _init_usage_state(agent):
     from agent.runtime_cwd import scope_terminal_cwd
@@ -2092,6 +2052,7 @@ def init_agent(
     requested_provider: str | None = None, capabilities: Optional[dict[str, bool]] = None, cwd: Optional[str] = None,
     side_agent: bool = False, memory_manager=None, memory_agent_context: str | None = None,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
+    allowed_tools: list[str] | None = None,
 ):
     from agent.safe_worker_policy import safe_worker_enabled
 
@@ -2102,6 +2063,8 @@ def init_agent(
         fallback_model = {}
     _install_safe_stdio()
 
+    from tools.delegate_tool_allowlist import normalize_constructor_allowed_tools
+    allowed_tools = normalize_constructor_allowed_tools(allowed_tools)
     _params = locals()
     for _name in _PASSTHROUGH_PARAMS:
         setattr(agent, _name, _params[_name])
@@ -2139,6 +2102,8 @@ def init_agent(
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
     _resolve_api_mode(agent, api_mode, provider_name, base_url)
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent)
     _finalize_routing(agent, api_mode, credential_pool)
 
     # Platform callbacks are stored under their parameter names verbatim.
@@ -2201,7 +2166,8 @@ def init_agent(
     _configure_ollama_num_ctx(agent, _model_cfg, _config_context_length)
     _enforce_minimum_context(agent)
     _warn_nonagentic_hermes_model(agent)
-    _inject_context_engine_tools(agent)
+    from agent.agent_init_tools import inject_context_engine_tools
+    inject_context_engine_tools(agent)
     _init_usage_state(agent)
     _clamp_compressor_to_ollama_num_ctx(agent)
     _emit_compression_summary(agent, cs)

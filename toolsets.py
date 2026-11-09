@@ -482,7 +482,13 @@ def agent_tool_surface(agent: Any, tools: list[dict[str, Any]]) -> list[dict[str
     from tools.delegate_tool_config import agent_joins_delegation
     drops = agent_tool_drops(agent)
     tools = [tool for tool in tools if (tool.get("function") or {}).get("name") not in drops] if drops else list(tools)
-    return oneshot_tool_schemas(tools) if agent_is_oneshot(agent) or agent_joins_delegation(agent) else tools
+    surface = oneshot_tool_schemas(tools) if agent_is_oneshot(agent) or agent_joins_delegation(agent) else tools
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    if allowed is not None:
+        from tools.delegate_tool_allowlist import filter_tool_defs_by_allowlist
+        surface = filter_tool_defs_by_allowlist(surface, allowed)
+    return surface
 
 
 def validate_toolset(name: str) -> bool:

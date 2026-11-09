@@ -52,6 +52,34 @@ delegate_task(tasks=[
 ])
 ```
 
+## Per-task tool restrictions (`allowed_tools`)
+
+A task may specify exact native or MCP tool names:
+
+```python
+delegate_task(tasks=[{
+    "goal": "Read the authorized source and return the relevant definition",
+    "allowed_tools": ["read_file", "search_files"]
+}])
+```
+
+Omitting `allowed_tools` preserves the existing inherited child surface. An explicit `[]`
+creates a zero-tool child. Names are case-sensitive: aliases, wildcards, unknown names,
+parent-disabled tools and tools blocked for the child role are refused before dispatch.
+An invalid restriction refuses the batch before any child starts.
+
+Explicitly selected deferred tools are exposed by their concrete schemas; do not select
+`tool_search`, `tool_describe` or `tool_call` bridge names. MCP inheritance cannot expand the
+list. Refresh and saved-session restoration retain the restriction; a new explicit
+restriction can only narrow a saved one. Descendants also inherit their parent's restriction.
+ACP, Codex app-server and other external-agent routes are refused when `allowed_tools` is
+present because their independent file/MCP/tool channels are not governed by this native
+allowlist; omit the field to retain their existing behavior.
+
+This limits Hermes tool invocation, not filesystem, network or credential access by arbitrary
+code. Granting `terminal`, `execute_code` or other host-execution tools requires the same care
+as granting those tools directly. The caller still owns task authorization and result acceptance.
+
 ## Structured Output (`output_schema`)
 
 Each task can carry an optional `output_schema`, a JSON Schema object the child's final answer must validate against. The child sees the schema up front as an output contract ("return ONLY the JSON value — no prose, no code fence"); when the answer comes back the parent validates it, and on failure sends the child exactly one bounded correction turn carrying the validation errors verbatim (the schema is not re-pasted). The task's result then gains `schema_valid` (true/false) and, on failure, `schema_errors`.

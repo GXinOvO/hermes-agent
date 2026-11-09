@@ -358,6 +358,14 @@ def _append_skipped_tool_results(
     return True
 
 
+def _allowed_tool_error(name: str) -> str:
+    return f"Tool '{name}' is not permitted in this child execution context. The call was rejected before dispatch."
+
+
+def _tool_name_allowed(agent: Any, name: str) -> bool:
+    from tools.delegate_tool_scope import tool_name_allowed
+    return tool_name_allowed(agent, name)
+
 def _tool_search_scoped_names(agent) -> frozenset:
     """Deferrable tool names the session may invoke via ``tool_call``; the unwrap bypasses
     the bridge's scope check in ``model_tools.handle_function_call``, so restricted sessions
@@ -371,11 +379,14 @@ def _tool_search_scoped_names(agent) -> frozenset:
     except Exception:
         return frozenset()
     try:
-        return _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
+        names = _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
             enabled_toolsets=getattr(agent, "enabled_toolsets", None),
             disabled_toolsets=getattr(agent, "disabled_toolsets", None),
             quiet_mode=True, skip_tool_search_assembly=True,
         ) or [])
+        from tools.delegate_tool_allowlist import explicit_allowed_tools
+        allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+        return names if allowed is None else frozenset(name for name in names if name in allowed)
     except Exception:
         return frozenset()
 
@@ -416,6 +427,8 @@ def _unwrap_tool_search_call(
             # Session-gated GUI tools name their missing surface (#120413);
             # anything else keeps the generic block.
             return function_name, function_args, _ts.scope_block_reason(underlying)
+        if not _tool_name_allowed(agent, underlying):
+            return function_name, function_args, _allowed_tool_error(underlying)
         # Validate before unwrapping: the generic bridge hides the concrete
         # parameter schema from provider-native tool-call validation.
         scope_block = _ts.validate_deferred_call_args(underlying, underlying_args)
@@ -449,10 +462,11 @@ class _ParsedCall:
 
 
 def _parse_tool_call(agent, tool_call, *, flatten_probe: bool = False) -> _ParsedCall:
-    name = _canonical_tool_name(tool_call.function.name)
+    raw_name = tool_call.function.name
+    name = _canonical_tool_name(raw_name)
     args, parse_error = _parse_tool_arguments(tool_call.function.arguments)
-    scope_block = None
-    if parse_error is None:
+    scope_block = None if _tool_name_allowed(agent, raw_name) else _allowed_tool_error(raw_name)
+    if parse_error is None and scope_block is None:
         name, args, scope_block = _unwrap_tool_search_call(agent, name, args, flatten_probe=flatten_probe)
     return _ParsedCall(tool_call, name, args, [], parse_error, scope_block)
 
@@ -1678,6 +1692,8 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
     function_name, function_args, effective_task_id, tool_call_id, middleware_trace = (
         ref.name, ref.args, ref.task_id, ref.call_id, ref.trace,
     )
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     if function_name != "delegate_task" and function_name in INLINE_TOOL_EXECUTORS:
         # Agent-level tools that need live AIAgent state; table shared with invoke_tool.
         inline_executor = INLINE_TOOL_EXECUTORS[function_name]
@@ -1721,6 +1737,7 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
                 turn_id=getattr(agent, "_current_turn_id", "") or "",
                 api_request_id=getattr(agent, "_current_api_request_id", "") or "",
                 enabled_tools=list(agent.valid_tool_names) if agent.valid_tool_names else None,
+                allowed_tools=allowed_tools,
                 skip_pre_tool_call_hook=True,
                 skip_tool_request_middleware=True,
                 skip_tool_execution_middleware=True,

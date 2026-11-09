@@ -99,6 +99,10 @@ def inject_memory_provider_tools(agent: Any) -> int:
                 "name; skipping to avoid poisoning the request (%r)", raw_schema,
             )
         elif schema["name"] not in existing_tool_names:
+            from tools.delegate_tool_allowlist import explicit_allowed_tools
+            allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+            if allowed is not None and schema["name"] not in set(allowed):
+                continue
             tools.append({"type": "function", "function": schema})
             agent.valid_tool_names.add(schema["name"])
             existing_tool_names.add(schema["name"])

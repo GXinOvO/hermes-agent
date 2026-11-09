@@ -30,6 +30,22 @@ def tool_hook_ids(agent, effective_task_id: str, tool_call_id: Optional[str]) ->
     }
 
 
+def pre_tool_block_message(agent, function_name, function_args, effective_task_id, tool_call_id, middleware_trace):
+    """Plugin pre-tool-call hook verdict: ``(block_message, function_args)``; failures never block."""
+    try:
+        from hermes_cli.plugins import _dispatch_pre_tool_call_hooks
+        block_message, modified_args = _dispatch_pre_tool_call_hooks(
+            function_name, function_args, task_id=effective_task_id or "",
+            session_id=getattr(agent, "session_id", "") or "", tool_call_id=tool_call_id or "",
+            turn_id=getattr(agent, "_current_turn_id", "") or "",
+            api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+            middleware_trace=list(middleware_trace),
+        )
+        return block_message, (modified_args if modified_args is not None else function_args)
+    except Exception:
+        return None, function_args
+
+
 def emit_terminal_post_tool_call(
     agent,
     *,
@@ -365,6 +381,9 @@ def resolve_invoke_tool_executor(agent, function_name: str) -> Optional[InlineTo
     Precedence: todo_list/session_search/memory, then memory-manager tools, then the
     remaining inline tools (``message_agent`` excluded).
     """
+    from tools.delegate_tool_scope import tool_name_allowed
+    if not tool_name_allowed(agent, function_name):
+        return None
     if function_name in INVOKE_TOOL_PRE_MEMORY_MANAGER_NAMES:
         return INLINE_TOOL_EXECUTORS[function_name]
     memory_manager = agent._memory_manager

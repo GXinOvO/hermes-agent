@@ -17,6 +17,7 @@ def update_conversation_model_config_value(db, session_id: str, key: str,
     the old copy). ``update`` may run more than once (lock retry) and must be pure; returning None
     removes the key. Returns the id written, None when the row does not exist."""
     from hermes_state_sessions import _parse_model_config
+    from hermes_state_tool_permissions import preserve_tool_permission
 
     def _do(conn) -> Optional[str]:
         tip = db._compression_tip_on(conn, session_id)
@@ -24,7 +25,9 @@ def update_conversation_model_config_value(db, session_id: str, key: str,
         if row is None:
             return None
         config = _parse_model_config(row[0])
-        if (value := update(config.get(key))) is None:
+        value = update(config.get(key))
+        preserve_tool_permission(row[0], {key: value})
+        if value is None:
             config.pop(key, None)
         else:
             config[key] = value

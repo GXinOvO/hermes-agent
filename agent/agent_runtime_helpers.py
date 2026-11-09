@@ -1098,6 +1098,8 @@ def recover_with_credential_pool(
 def _apply_primary_runtime_fields(agent, rt: dict[str, Any]) -> None:
     """Copy the identity/transport fields of a ``_primary_runtime`` snapshot onto ``agent``
     (shared by transport recovery and turn-start restore; the caller rebuilds the client)."""
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent, rt)
     agent.model = rt["model"]
     agent.provider = rt["provider"]
     agent.requested_provider = rt.get("requested_provider", agent.provider)
@@ -1940,6 +1942,8 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
         _validate_proxy_env_urls,
     )
     from agent.ssl_verify import resolve_httpx_verify
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent, client_kwargs)
     # Treat client_kwargs as read-only: callers pass agent._client_kwargs, and in-place mutation
     # leaks into later requests (a torn-down httpx transport got reused).
     # Callers pass agent._client_kwargs (or shallow copies of it) in; any in-place mutation leaks back into
@@ -2220,6 +2224,8 @@ def _build_switched_client(agent, new_provider, api_key, base_url, api_mode, new
 
 def _swap_switch_runtime(agent, new_model, new_provider, api_key, base_url, api_mode, old_provider, old_norm, new_norm) -> None:
     """Swap identity/transport fields, reload the pool, rebuild the client (rolled back by the caller on error)."""
+    from tools.delegate_tool_scope import validate_restricted_route
+    validate_restricted_route(agent, {"provider": new_provider, "api_mode": api_mode, "base_url": base_url})
     # Clear the per-config override so the new model's context window is re-resolved.
     agent._config_context_length = None
     agent.model = new_model
@@ -2445,21 +2451,6 @@ def switch_model(
     _persist_switch_billing_route(agent)
 
 
-def _pre_tool_block_message(agent, function_name, function_args, effective_task_id, tool_call_id, middleware_trace):
-    """Plugin pre-tool-call hook verdict: ``(block_message, function_args)``; failures never block."""
-    try:
-        from hermes_cli.plugins import _dispatch_pre_tool_call_hooks
-        block_message, modified_args = _dispatch_pre_tool_call_hooks(
-            function_name, function_args, task_id=effective_task_id or "",
-            session_id=getattr(agent, "session_id", "") or "", tool_call_id=tool_call_id or "",
-            turn_id=getattr(agent, "_current_turn_id", "") or "",
-            api_request_id=getattr(agent, "_current_api_request_id", "") or "",
-            middleware_trace=list(middleware_trace),
-        )
-        return block_message, (modified_args if modified_args is not None else function_args)
-    except Exception:
-        return None, function_args
-
 
 def invoke_tool(agent, function_name: str, function_args: dict, effective_task_id: str,
                  tool_call_id: Optional[str] = None, messages: list | None = None,
@@ -2472,10 +2463,15 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     invocation for display."""
     from agent.inline_tool_executors import (
         InlineToolContext, apply_transform_tool_result, emit_terminal_post_tool_call,
-        resolve_invoke_tool_executor, tool_hook_ids
+        pre_tool_block_message, resolve_invoke_tool_executor, tool_hook_ids
     )
     if not isinstance(function_args, dict):
         function_args = {}
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    from tools.delegate_tool_scope import tool_name_allowed
+    if not tool_name_allowed(agent, function_name):
+        return json.dumps({"error": f"Tool '{function_name}' is not permitted in this child execution context. The call was rejected before dispatch."})
     hook_ids = tool_hook_ids(agent, effective_task_id, tool_call_id)
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
     try:
@@ -2488,7 +2484,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         logger.debug("tool_request middleware error: %s", _mw_err)
     block_message: Optional[str] = None
     if not pre_tool_block_checked:
-        block_message, function_args = _pre_tool_block_message(
+        block_message, function_args = pre_tool_block_message(
             agent, function_name, function_args, effective_task_id, tool_call_id, _tool_middleware_trace
         )
     if block_message is not None:
@@ -2527,6 +2523,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 turn_id=getattr(agent, "_current_turn_id", "") or "",
                 api_request_id=getattr(agent, "_current_api_request_id", "") or "",
                 enabled_tools=list(agent.valid_tool_names) if agent.valid_tool_names else None,
+                allowed_tools=allowed,
                 skip_pre_tool_call_hook=True, skip_tool_request_middleware=True,
                 enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                 disabled_toolsets=getattr(agent, "disabled_toolsets", None),

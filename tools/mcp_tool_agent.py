@@ -106,6 +106,12 @@ def _publish_tool_snapshot(
             held = _frozen_tool_names(prefix_registered) if frozen else frozenset()
             new_defs, new_names = _merge_preserving_prefix(current_defs, new_defs, prefix_registered, held)
         new_defs, new_names = _drop_session_tools(agent, new_defs, new_names)
+        from tools.delegate_tool_allowlist import explicit_allowed_tools
+        allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+        if allowed is not None:
+            from tools.delegate_tool_allowlist import filter_tool_defs_by_allowlist
+            new_defs = filter_tool_defs_by_allowlist(new_defs, allowed)
+            new_names = {_def_name(t) for t in new_defs}
         # Record the generation (the one read BEFORE the build: a registration that landed during it may
         # be missing from these definitions) and selection even when unchanged, so an in-flight older
         # caller can't clobber.
@@ -152,14 +158,21 @@ def refresh_agent_mcp_tools(
     from model_tools import get_tool_definitions
     from tools.registry import registry
     from toolsets import agent_tool_surface, tool_selection_key
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
     enabled, disabled = _resolve_refresh_toolsets(agent, enabled_override, disabled_override)
+    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     # Generation captured BEFORE the slow get_tool_definitions call (a slower caller holding an
     # OLDER set must not clobber a newer one); definitions computed OUTSIDE the lock.
     snapshot_generation = registry._generation
     from agent.delegation_backends import adopt_built_backend, saved_backend
     built_backend = saved_backend()
     new_defs = agent_tool_surface(agent, list(
-        get_tool_definitions(enabled_toolsets=enabled, disabled_toolsets=disabled, quiet_mode=quiet_mode) or []))
+        get_tool_definitions(
+            enabled_toolsets=enabled,
+            disabled_toolsets=disabled,
+            quiet_mode=quiet_mode,
+            skip_tool_search_assembly=allowed_tools is not None,
+        ) or []))
     new_names = {_def_name(t) for t in new_defs}
     # Post-build families re-appended on LOCALS only; live attributes untouched until publish.
     staged_engine_names = _reinject_post_build_tools(agent, new_defs, new_names)
@@ -221,12 +234,28 @@ def persist_agent_tool_names(agent) -> None:
     session_id = getattr(agent, "session_id", None)
     if not db or not session_id:
         return
+    if getattr(agent, "_tool_authority_unknown", False):
+        return  # restore already refused before execution; preserve the unknown raw state
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    pin_unusable = getattr(agent, "_tool_pin_unusable", False)
+    if pin_unusable and allowed is None:
+        raise ValueError("Cannot persist unrestricted permission with unusable tool cache")
+    if pin_unusable:
+        from hermes_state_tool_permissions import write_tool_permission_sidecar
+        write_tool_permission_sidecar(db, session_id, allowed)
+        _record_pinned_snapshot(agent, session_id)
+        return
     try:
         pin = {"version": tool_pin_version(), "tools": _agent_tool_defs(agent)}
+        if allowed is not None:
+            pin["allowed_tools"] = list(allowed)
         if isinstance(backend := getattr(agent, "_delegation_backend", None), str) and backend:
             pin["delegation_backend"] = backend  # what its delegate_task was built from: the session routes on it
         db.update_session_tool_names(session_id, pin)
     except Exception:
+        if allowed is not None:
+            raise  # restriction persistence is an authorization boundary, not a cache hint
         logger.debug("tool_names persist skipped", exc_info=True)
         return
     _record_pinned_snapshot(agent, session_id)
@@ -334,9 +363,11 @@ def restore_agent_tool_prefix(agent, saved) -> bool:
     process that wrote the pin a pinned Tool Search bridge tool keeps its slot (it is synthesized, never
     registered, exactly as the between-turns refresh keeps it) and a tool new only because its ``check_fn``
     flipped stays out (``_pin_restore_held``)."""
+    from tools.delegate_tool_allowlist import restore_saved_restriction
+    restriction_changed = restore_saved_restriction(agent, saved)
     pinned, same_code, pinned_defs = _pinned_tool_defs(saved, {_def_name(t): t for t in _agent_tool_defs(agent)})
     if not pinned:
-        return False
+        return restriction_changed
     from tools.registry import registry
     fresh_defs = _agent_tool_defs(agent)
     fresh = {_def_name(t): t for t in fresh_defs}
@@ -354,7 +385,13 @@ def restore_agent_tool_prefix(agent, saved) -> bool:
     merged_names = {_def_name(t) for t in merged}
     _reinject_authorized_dynamic_tools(agent, merged, merged_names)
     merged, merged_names = _drop_session_tools(agent, merged, merged_names)
-    changed = merged != fresh_defs
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    if allowed is not None:
+        from tools.delegate_tool_allowlist import filter_tool_defs_by_allowlist
+        merged = filter_tool_defs_by_allowlist(merged, allowed)
+        merged_names = {_def_name(t) for t in merged}
+    changed = restriction_changed or merged != fresh_defs
     if changed:
         with _agent_tools_lock:
             agent.tools = merged
@@ -409,7 +446,9 @@ def _reinject_authorized_dynamic_tools(agent, tools_list: list, name_set: set) -
 
     tools_list[:] = [entry for entry in tools_list if _def_name(entry) != MESSAGE_AGENT_TOOL_NAME]
     name_set.discard(MESSAGE_AGENT_TOOL_NAME)
-    if message_agent_authorized(agent):
+    from tools.delegate_tool_allowlist import explicit_allowed_tools
+    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+    if message_agent_authorized(agent) and (allowed is None or MESSAGE_AGENT_TOOL_NAME in set(allowed)):
         tools_list.append(message_agent_tool_schema())
         name_set.add(MESSAGE_AGENT_TOOL_NAME)
 
@@ -422,6 +461,10 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
     def _add(schema) -> bool:
         name = schema.get("name", "") if isinstance(schema, dict) else ""
         if not name or name in name_set:
+            return False
+        from tools.delegate_tool_allowlist import explicit_allowed_tools
+        allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
+        if allowed is not None and name not in set(allowed):
             return False
         tools_list.append({"type": "function", "function": schema})
         name_set.add(name)

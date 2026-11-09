@@ -35,8 +35,11 @@ def worker_create(db, conn, session_id, payload):
     if config:
         # An owner-reserved child row already holds its lineage marker, so the keep-existing upsert
         # would drop these facts; merge them beside it (keys are the constructor set only).
-        conn.execute("UPDATE sessions SET model_config=json_patch(model_config,?) WHERE id=? "
-                     "AND json_type(model_config,'$._delegate_from') IS NOT NULL", (json.dumps(config), session_id))
+        from hermes_state_tool_permissions import merge_model_config
+        row = conn.execute("SELECT model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
+        merged = merge_model_config(row[0] if row else None, config)
+        conn.execute("UPDATE sessions SET model_config=? WHERE id=? "
+                     "AND json_type(model_config,'$._delegate_from') IS NOT NULL", (json.dumps(merged), session_id))
     return {'value': session_id}
 
 
@@ -218,6 +221,16 @@ def insert_session_row_in_transaction(
     validated before entry; this helper never opens or commits a DB.
     """
     from hermes_state_sessions import _UPSERT_KEEP_EXISTING_SQL
+    existing_before = conn.execute(
+        "SELECT s.model_config, COALESCE(p.prompt,s.tool_names) FROM sessions s "
+        "LEFT JOIN system_prompts p ON p.hash=s.tool_names WHERE s.id=?", (session_id,)
+    ).fetchone()
+    if not parent_session_id and isinstance(model_config, dict) and "_tool_permissions" in model_config:
+        raise ValueError("Tool permission metadata is reserved for session.tools")
+    if parent_session_id:
+        from hermes_state_tool_permissions import prepare_child_model_config
+        model_config = prepare_child_model_config(
+            conn, parent_session_id, existing_before[0:2] if existing_before else None, model_config)
     from hermes_state_mutation_retirement import RETIRED_PREFIX
     # A delayed constructor/accounting backfill must not recreate a deleted session
     # beside its durable tombstone (the exact delete retry would then report a stale
@@ -280,6 +293,12 @@ def insert_session_row_in_transaction(
             display_name, time.time(),
         ),
     )
+    if model_config:
+        from hermes_state_tool_permissions import merge_model_config
+        row = conn.execute("SELECT model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
+        merged = merge_model_config(
+            row[0] if row else None, model_config, allow_permission=bool(parent_session_id))
+        conn.execute("UPDATE sessions SET model_config=? WHERE id=?", (json.dumps(merged), session_id))
     if system_prompt_hash is not None:
         self._delete_unreferenced_system_prompts(conn)
     if parent_session_id:

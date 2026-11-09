@@ -7,7 +7,7 @@ instead of rebuilding).  Covers:
   * Successful restore from a stored prompt (present row).
   * Legitimate first-turn build (no history).
   * Silent-failure recovery paths:
-      - DB read raises → WARNING + fresh build
+      - DB read raises → WARNING + fail-closed authority refusal
       - Row has system_prompt=NULL → WARNING + fresh build
       - Row has system_prompt="" → WARNING + fresh build
       - DB write fails → WARNING (subsequent turns will miss cache)
@@ -308,11 +308,15 @@ class TestStoredPromptReuse:
             assert "skill_manage" in agent.valid_tool_names
             assert json.loads(db.get_session("test-session-id")["tool_names"])["tools"] == pinned
 
-    def test_a_swept_pin_row_is_re_pinned_on_the_next_turn(self, tmp_path):
-        """``hermes sessions recover`` from an older build deleted pin rows it did not know about,
-        leaving ``tool_names`` a hash that resolves to itself. The next turn must pin what it sends,
-        or every later surface hop re-derives tools[] for the rest of the session."""
+    def test_a_swept_pin_row_fails_closed_without_trusted_permission_metadata(self, tmp_path):
+        """A swept hash is ambiguous when no independent permission metadata exists.
+
+        The next turn must not treat an unreadable pin as unrestricted or overwrite the
+        original hash with a newly derived tool surface. Legacy unrestricted rows use the
+        separate trusted marker covered by ``test_trusted_unrestricted_marker_allows_swept_pin_rebuild``.
+        """
         from hermes_state import SessionDB
+        from agent.conversation_loop import _restore_pinned_tools
 
         tools = [{"type": "function", "function": {"name": "read_file", "description": "", "parameters": {}}}]
         with SessionDB(db_path=tmp_path / "state.db") as db:
@@ -320,14 +324,23 @@ class TestStoredPromptReuse:
             db.update_system_prompt("test-session-id", "BUILT_PROMPT")
             db._conn.execute("UPDATE sessions SET tool_names = ? WHERE id = 'test-session-id'", ("ab" * 32,))
             db._conn.commit()
+            row = db.get_session("test-session-id")
+            assert row is not None
+            before = row["tool_names"]
             agent = _make_agent(session_db=db)
             agent._persist_disabled = False
             agent.tools = list(tools)
-            with patch("agent.conversation_loop._stored_prompt_matches_runtime", return_value=True):
-                _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+            agent.valid_tool_names = {"read_file"}
+            agent.allowed_tools = None
+            with pytest.raises(ValueError, match="permission|pin"):
+                _restore_pinned_tools(agent, db.get_session("test-session-id"))
 
-            assert agent._cached_system_prompt == "BUILT_PROMPT"
-            assert json.loads(db.get_session("test-session-id")["tool_names"])["tools"] == tools
+            assert agent.tools == []
+            assert agent.valid_tool_names == set()
+            assert agent.allowed_tools == []
+            row_after = db.get_session("test-session-id")
+            assert row_after is not None
+            assert row_after["tool_names"] == before
 
 
 # ---------------------------------------------------------------------------
@@ -336,16 +349,16 @@ class TestStoredPromptReuse:
 
 
 class TestLegitimateFreshBuild:
-    def test_no_history_skips_db_and_builds_fresh(self, caplog):
-        """First turn with empty history → build fresh, don't touch the DB."""
+    def test_no_history_checks_authority_and_builds_fresh(self, caplog):
+        """A new session has no authority row; history does not decide that lookup."""
         db = MagicMock()
+        db.get_session.return_value = None
         agent = _make_agent(session_db=db)
 
         with caplog.at_level(logging.WARNING, logger="agent.conversation_loop"):
             _restore_or_build_system_prompt(agent, None, [])
 
-        # No history → DB read skipped entirely
-        db.get_session.assert_not_called()
+        db.get_session.assert_called_once_with(agent.session_id)
         agent._build_system_prompt.assert_called_once_with(None)
         assert agent._cached_system_prompt == "BUILT_PROMPT"
         # Persisted to DB

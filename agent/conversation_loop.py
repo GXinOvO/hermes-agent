@@ -737,25 +737,38 @@ def _persist_system_prompt(agent, failure_message: str, *, persist_tools: bool =
     this row every turn, so a silent failure breaks prefix-cache reuse."""
     if not agent._session_db:
         return
+    if persist_tools and callable(ensure := getattr(agent, "_ensure_db_session", None)):
+        ensure()
     try:
         agent._session_db.update_system_prompt(agent.session_id, agent._cached_system_prompt)
-        if persist_tools:
-            from tools.mcp_tool_agent import persist_agent_tool_names
-            persist_agent_tool_names(agent)
     except Exception as exc:
-        logger.warning(failure_message, agent.session_id, exc)
+        logger.warning(failure_message, agent.session_id, exc, exc_info=True)
+    if persist_tools:
+        from tools.mcp_tool_agent import persist_agent_tool_names
+        persist_agent_tool_names(agent)
 
 
 def _restore_pinned_tools(agent, session_row) -> list:
     """Pin ``agent.tools`` to the session's persisted array (tools freeze); returns the names
     this surface built BEFORE the pin merged a previous surface's tools back in."""
     from tools.mcp_tool_agent import agent_tool_names, persist_agent_tool_names, restore_agent_tool_prefix
+    from hermes_state_tool_permissions import restore_session_tool_permission, usable_tool_cache
     built_for_this_surface = agent_tool_names(agent)
     saved_tools = session_row.get("tool_names") if session_row else None
+    restriction = restore_session_tool_permission(agent, session_row)
+    agent._tool_pin_unusable = False
     try:
         pin = json.loads(saved_tools) if saved_tools else None
     except ValueError:
-        pin = None  # a pin hash whose row an older build's cleanup swept resolves to itself
+        # Known authorization is independent of this disposable cache. Preserve bad
+        # restricted bytes for diagnosis; only proven unrestricted rows may re-pin.
+        if restriction is not None:
+            agent._tool_pin_unusable = True
+            return built_for_this_surface
+        pin = None
+    if saved_tools is not None and not usable_tool_cache(pin) and restriction is not None:
+        agent._tool_pin_unusable = True
+        return built_for_this_surface
     try:
         if pin:
             restore_agent_tool_prefix(agent, pin)
@@ -764,6 +777,8 @@ def _restore_pinned_tools(agent, session_row) -> list:
             # or every later hop re-derives tools[] until the next compaction.
             persist_agent_tool_names(agent)
     except Exception:
+        if getattr(agent, "allowed_tools", None) is not None:
+            raise
         logger.debug("tool prefix restore skipped", exc_info=True)
     return built_for_this_surface
 
@@ -808,19 +823,24 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     stored_prompt = None
     stored_state = "missing"
     session_row = None
-    if conversation_history and agent._session_db:
+    if agent._session_db:
         try:
             session_row = agent._session_db.get_session(agent.session_id)
-            if session_row is not None:
+            agent._tool_authority_unknown = False
+            if session_row is not None and conversation_history:
                 raw_prompt = session_row.get("system_prompt")
                 stored_state = "null" if raw_prompt is None else ("empty" if raw_prompt == "" else "present")
                 stored_prompt = raw_prompt or None
         except Exception as exc:
+            agent.allowed_tools, agent.tools, agent.valid_tool_names = [], [], set()
+            agent._tool_pin_unusable = True
+            agent._tool_authority_unknown = True
             logger.warning(
-                "Session DB get_session failed for system-prompt restore (session=%s): %s. "
-                "Falling back to fresh build — prefix cache will miss for this turn.",
+                "Session DB get_session failed for tool authority restore (session=%s): %s. "
+                "Refusing execution with unknown session permissions.",
                 agent.session_id, exc,
             )
+            raise RuntimeError("Cannot restore session tool authority") from exc
 
     if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
         # NULL/empty rows never reach this probe: they already rebuild below.
@@ -840,6 +860,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 clear_skills_system_prompt_cache(clear_snapshot=True)
             except Exception:
                 pass
+            _restore_pinned_tools(agent, session_row)
             _refresh_bot_chat_tools(agent)
             agent._cached_system_prompt = agent._build_system_prompt(system_message)
             record_cache_break(agent, "toolset_change")

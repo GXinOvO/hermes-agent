@@ -160,3 +160,10 @@ def _coerce_task_images(
             return [], err
         task_images.append(cleaned)
     return task_images, None
+
+
+def _validate_task_allowed_tools(task_list: list[dict[str, Any]], parent_agent: Any) -> Optional[str]:
+    """Validate explicit per-task exact tool allowlists before child construction."""
+    from tools.delegate_tool_allowlist import validate_task_allowed_tools
+
+    return validate_task_allowed_tools(task_list, parent_agent)
