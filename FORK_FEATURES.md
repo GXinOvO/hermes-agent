@@ -113,7 +113,7 @@
 
 | 编号 | 实现与验证入口 |
 | --- | --- |
-| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；代码合入和服务器部署状态分别核对 |
+| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)；代码合入和服务器部署状态分别核对 |
 
 ## 后续维护规则
 
@@ -124,4 +124,4 @@
 
 根目录 [AGENTS.md](AGENTS.md) 同时提示后续 Agent 更新本表；F18 在合入后补漏。Agent 应在功能交付中主动补记，不必等待自动工作流。自动化验证的是结构与写入范围，不替代人工审阅和功能验收。
 
-<!-- fork-catalog:last-reviewed=a57a51d425ac12df760fd82b1bf4247275a07f90 -->
+<!-- fork-catalog:last-reviewed=7826b9496f1cb1b823797b21a772d379d84a0c63 -->
