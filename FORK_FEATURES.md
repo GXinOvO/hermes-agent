@@ -115,6 +115,12 @@
 | --- | --- |
 | F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)；代码合入和服务器部署状态分别核对 |
 
+### 2026-11-10 上游同步兼容
+
+本轮协调 F05/F08/F09/F10/F15：保留子 Agent 结果找回、工具白名单、辅助请求回执和 owned 进程结果恢复，同时接入官方 [Anthropic timeout 修复](https://github.com/NousResearch/hermes-agent/commit/710b62c59a2c5a1c29d2448826e5071ef8c6b7a1)、[路由客户端共用解析](https://github.com/NousResearch/hermes-agent/commit/42be36381f3115225b8130ea2d278b0bb69279b9)、子任务结果分组和环境回收／退出竞争修复。上游覆盖这些基础能力，不据此认定已吸收本表增强；各条历史和默认值保留。
+
+新增 [owned 进程环境关闭回归](tests/tools/test_owned_process_env_teardown.py)，覆盖自然退出、清理取消、输出待排空时的保活与结果发布，以及后端失联后坏环境回收和新命令重建；未验证的旧进程结果仍不伪造完成。接口快照由合并后的代码重新生成。该测试入口不代表整分支或实际安装通过验收，执行结果随同步 PR 记录；本次 Git 同步不更新运行安装。
+
 ## 后续维护规则
 
 1. 新增、改变、移除个人增强时，在**同一交付**更新对应条目：用户用途、入口／开关、默认值、代码／启用状态、PR 或提交、验证证据。后续修复优先补到原编号，新增功能再分配稳定编号。
