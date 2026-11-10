@@ -4,6 +4,8 @@
 
 # Hermes Agent ☤
 
+> **本分支的个人增强 → [功能清单](FORK_FEATURES.md)**：查看加了什么、怎么用、哪些需要启用，以及对应 PR 和维护状态。
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>

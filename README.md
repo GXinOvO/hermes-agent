@@ -3,6 +3,9 @@
 </p>
 
 # Hermes Agent ☤
+
+> **GXinOvO fork · [个人增强功能清单 / Fork features](FORK_FEATURES.md)** — 查看本分支加了什么、怎么用、哪些需要启用，以及对应 PR 和维护状态。
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
 </p>

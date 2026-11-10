@@ -7,6 +7,13 @@ and every root-to-area chain at 30k, so it loads whole on 128k+ models: long for
 
 **Never give up on the right solution.**
 
+## GXinOvO fork maintenance
+
+[FORK_FEATURES.md](FORK_FEATURES.md) is this fork's feature inventory. Update it in the same
+delivery when adding, changing or removing a fork enhancement: purpose, entry point/default,
+source and verification/deployment status. During upstream sync, record confirmed upstream
+coverage without deleting the history. Code merged, enabled and behavior verified are separate.
+
 ## What Hermes Is
 
 Hermes is a personal AI agent that runs the same agent core across a CLI, a messaging
