@@ -27,6 +27,7 @@
 | F15 | 进程归属终端与受保护项目卷 | 以具体命令代次管理子孙进程和完成结果；候选受保护卷约束读后写与发布 | `owned-process` 插件；`owned_process` 需配置与 Linux 依赖；`protected_owned` 仍有候选验收边界 |
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
+| F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
 
 ## 使用时需要记住的边界
 
@@ -43,6 +44,7 @@
 - **F14 数据库验证：** `sessions verify` 要求一致的离线备份，不接收正在使用的 profile 数据库；不是对活跃 WAL 数据库直接 `cp` 后检查。检查不自动恢复或替换数据，时间预算也不能硬中断阻塞的文件系统 I/O。
 - **F15 终端与项目卷：** [插件说明](plugins/owned-process/README.md)列出 `owned_process` 的命名空间、进程生命周期与依赖要求；失败不回退成本地执行，两种后端均不能据此标为生产采用。进程已退出但输出尚未排空时，`process_running=false, output_pending=true` 表示仍需读取最终输出。`protected_owned` 另需匹配的 authority 包、容器镜像及卷配置，仓库说明仍标为候选、待独立审查和生产采用；最近的受保护读取修复也不能单独证明可信身份完整绑定。合入源码不等于完成启用或整体安全验收。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
+- **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。串行运行并从下方隐藏标记聚合未处理差异；只允许原子写入本清单，失败不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；未处理差异超出单批上限时失败，不推进处理位置，需要 Agent 人工核对清单并更新标记。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
 
 ## 追溯证据
 
@@ -105,6 +107,14 @@
 
 </details>
 
+## 增量维护记录
+
+初始盘点的 53 条提交、34 个 PR 和 17 个分组保持原统计范围。此后新增维护条目单独追溯，不把历史盘点数字改成滚动总量。
+
+| 编号 | 实现与验证入口 |
+| --- | --- |
+| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；代码合入和服务器部署状态分别核对 |
+
 ## 后续维护规则
 
 1. 新增、改变、移除个人增强时，在**同一交付**更新对应条目：用户用途、入口／开关、默认值、代码／启用状态、PR 或提交、验证证据。后续修复优先补到原编号，新增功能再分配稳定编号。
@@ -112,4 +122,6 @@
 3. “已合入”“本地测试通过”“当前安装已启用”“真实行为验收通过”“收益已测量”分别记录；未知就写未知。测试入口不冒充测试回执，预计提速不冒充测量结果。
 4. README 只保留入口和一句用途；本文件作为唯一功能总表，不再复制一份容易失步的清单。提交历史保留实现细节，本表负责让人记得功能。
 
-根目录 [AGENTS.md](AGENTS.md) 同时提示后续 Agent 更新本表。这个约定已经写入仓库；它是维护规则，不是能阻止漏记的自动检查。
+根目录 [AGENTS.md](AGENTS.md) 同时提示后续 Agent 更新本表；F18 在合入后补漏。Agent 应在功能交付中主动补记，不必等待自动工作流。自动化验证的是结构与写入范围，不替代人工审阅和功能验收。
+
+<!-- fork-catalog:last-reviewed=a57a51d425ac12df760fd82b1bf4247275a07f90 -->
