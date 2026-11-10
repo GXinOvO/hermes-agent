@@ -119,6 +119,8 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("runs-on: [fork-catalog]", text)
         self.assertIn("cancel-in-progress: false", text)
         self.assertIn("paths-ignore:", text)
+        self.assertIn("sparse-checkout: |", text)
+        self.assertIn("sparse-checkout-cone-mode: false", text)
         self.assertIn('git add -- FORK_FEATURES.md', text)
         self.assertNotIn("pull_request_target:", text)
 

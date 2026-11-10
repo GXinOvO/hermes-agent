@@ -25,6 +25,10 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+          sparse-checkout: |
+            FORK_FEATURES.md
+            scripts/ci/update_fork_catalog.py
+          sparse-checkout-cone-mode: false
       - name: Update the catalog and publish
         env:
           FORK_CATALOG_API_KEY: ${{ secrets.FORK_CATALOG_API_KEY }}
