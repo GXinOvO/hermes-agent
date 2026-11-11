@@ -457,8 +457,13 @@ async def test_slack_strict_chunks_ack_control():
         adapter.MAX_MESSAGE_LENGTH = 80
         with strict_transport_scope():
             result = await adapter.send('C555', 'x' * 200)
-        assert len(wire.events) == 3, wire.events
         assert result.success
+        texts = [json.loads(event['body'])['text'] for event in wire.events]
+        assert len(texts) > 1
+        assert all(text.endswith(f' ({index}/{len(texts)})') and len(text) <= adapter.MAX_MESSAGE_LENGTH
+                   for index, text in enumerate(texts, 1))
+        assert ''.join(text.rsplit(' (', 1)[0] for text in texts) == 'x' * 200
+        assert len(result.raw_response['message_ids']) == len(texts)
 
 
 @pytest.mark.asyncio

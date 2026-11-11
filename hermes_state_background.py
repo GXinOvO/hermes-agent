@@ -264,12 +264,14 @@ def pending_deliveries(db):
     return db._execute_write(read)
 
 
-def claim_delivery(db, task_id):
+def claim_delivery(db, task_id, *, expected=None):
     from gateway.status import get_process_start_time
     def write(conn):
         key = _key(task_id)
         record = _load(conn, key)
         if record is None or record['status'] != 'completed' or record['delivery'] != 'pending':
+            return False
+        if expected is not None and _encoded(record) != _encoded(expected):
             return False
         if record['profile_id'] != str(Path(db.db_path).parent.resolve()) or not _target_matches(conn, record):
             return False
@@ -280,7 +282,25 @@ def claim_delivery(db, task_id):
     return db._execute_write(write)
 
 
-def finish_delivery(db, task_id, outcome):
+def _delivery_matches(conn, db, record, expected):
+    from gateway.status import get_process_start_time
+    if (record is None or record['status'] != 'completed' or record['delivery'] != 'delivering'
+            or record['profile_id'] != str(Path(db.db_path).parent.resolve()) or not _target_matches(conn, record)
+            or (record.get('delivery_pid'), record.get('delivery_started_at')) != (
+                os.getpid(), get_process_start_time(os.getpid()))
+            or record.get('delivery_epoch') != _current_epoch(conn)):
+        return False
+    fields = ('delivery', 'delivery_pid', 'delivery_started_at', 'delivery_epoch')
+    return _encoded({k:v for k,v in record.items() if k not in fields}) == _encoded(
+        {k:v for k,v in expected.items() if k not in fields})
+
+
+def delivery_current(db, task_id, expected):
+    with db._read_ctx() as conn:
+        return _delivery_matches(conn, db, _load(conn, _key(task_id)), expected)
+
+
+def finish_delivery(db, task_id, outcome, *, expected=None):
     from gateway.status import get_process_start_time
     if outcome not in ('delivered', 'unknown'):
         raise ValueError('invalid background delivery outcome')
@@ -293,7 +313,9 @@ def finish_delivery(db, task_id, outcome):
             raise ValueError('background delivery owner identity conflict')
         if record.get('delivery_epoch') is not None and record['delivery_epoch'] != _current_epoch(conn):
             raise ValueError('background delivery owner epoch conflict')
-        record['delivery'] = outcome
+        final_outcome = 'unknown' if expected is not None and not _delivery_matches(conn, db, record, expected) else outcome
+        record['delivery'] = final_outcome
         record['updated_at'] = time.time()
         _save(conn, key, record)
-    db._execute_write(write)
+        return final_outcome == 'delivered'
+    return db._execute_write(write)

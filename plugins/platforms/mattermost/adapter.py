@@ -191,6 +191,13 @@ class MattermostAdapter(BasePlatformAdapter):
         return (any(marker in body for marker in ("root_id", "rootid", "root id", "thread", "post"))
                 and any(marker in body for marker in ("invalid", "not found", "does not exist", "missing")))
 
+    def _post_may_have_landed(self) -> bool:
+        """Whether the POST that just failed may already be in the channel: ``_api`` records no
+        status when the request got no answer (network error) and Mattermost's own 5xx can follow
+        the write, while a 4xx is its refusal — nothing was created."""
+        status = self._last_post_status
+        return status is None or status >= 500
+
     async def _post_preserving_thread(
         self, chat_id: str, payload: dict[str, Any], metadata: _Metadata) -> dict[str, Any]:
         """Post once, optionally falling back flat for final notify content."""
@@ -353,6 +360,7 @@ class MattermostAdapter(BasePlatformAdapter):
     async def _send_url_as_file(self, chat_id: str, url: str, caption: Optional[str], reply_to: Optional[str],
                                 kind: str = "file", metadata: _Metadata = None) -> SendResult:
         """Download a URL and upload it as a file attachment (text fallback with the URL on failure)."""
+        from gateway.platforms.base import read_httpx_body_with_limit
         from tools.url_safety import is_safe_url
 
         async def fallback() -> SendResult:
@@ -381,8 +389,13 @@ class MattermostAdapter(BasePlatformAdapter):
                     elif resp.status >= 400:
                         return await fallback()
                     else:
-                        file_data, ct = await resp.read(), resp.content_type or "application/octet-stream"
+                        file_data = await read_httpx_body_with_limit(
+                            resp, media_type="image", body=resp.content.iter_chunked(65536))
+                        ct = resp.content_type or "application/octet-stream"
                         break
+            except ValueError as exc:  # over gateway.max_inbound_media_bytes; a retry would refetch it
+                logger.warning("Mattermost: refusing %s: %s", url[:80], exc)
+                return await fallback()
             except (TimeoutError, aiohttp.ClientError) as exc:
                 if attempt == 2:
                     logger.warning("Mattermost: failed to download %s after %d attempts: %s", url, attempt + 1, exc)
@@ -417,6 +430,7 @@ class MattermostAdapter(BasePlatformAdapter):
                 logger.warning("Mattermost: skipping missing image %s", local_path)
                 return None
             return p.read_bytes(), p.name, mimetypes.guess_type(p.name)[0] or "image/png"
+        from gateway.platforms.base import read_httpx_body_with_limit
         from tools.url_safety import is_safe_url
         if not is_safe_url(image_url):
             logger.warning("Mattermost: blocked unsafe image URL in batch")
@@ -433,7 +447,9 @@ class MattermostAdapter(BasePlatformAdapter):
                 if resp.status >= 400:
                     logger.warning("Mattermost: failed to download image (HTTP %d): %s", resp.status, image_url[:80])
                     return None
-                file_data, ct = await resp.read(), resp.content_type or "image/png"
+                file_data = await read_httpx_body_with_limit(
+                    resp, media_type="image", body=resp.content.iter_chunked(65536))
+                ct = resp.content_type or "image/png"
         except Exception as dl_err:
             logger.warning("Mattermost: download failed for %s: %s", image_url[:80], dl_err)
             return None
@@ -443,7 +459,14 @@ class MattermostAdapter(BasePlatformAdapter):
     async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
                                    metadata: _Metadata = None, human_delay: float = 0.0) -> SendResult:
         """Send a batch of images as one post; chunked at Mattermost's 5-``file_ids`` cap, each chunk
-        falling back to the base per-image loop on failure."""
+        falling back to the base per-image loop on failure.
+
+        A refused (unsafe/failed/oversized) image keeps its link as a text post, which leaves the
+        retry set only once Mattermost confirmed it: a 4xx refusal created no post, so the link
+        stays owed and is re-attempted even when the sibling upload succeeded, while a failure that
+        may have landed (no answer, 5xx) is never re-sent and is reported as
+        ``raw_response["delivery_uncertain"]``.
+        """
         if strict_transport():
             from plugins.platforms.mattermost.strict_delivery import send_images
             return await send_images(self, chat_id, images, metadata)
@@ -451,34 +474,62 @@ class MattermostAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="no images to send")
         chunks = [images[i:i + 5] for i in range(0, len(images), 5)]  # Mattermost post file_ids cap
         delivered = False
+        uncertain = False
         for chunk_idx, chunk in enumerate(chunks):
             if human_delay > 0 and chunk_idx > 0:
                 await asyncio.sleep(human_delay)
             file_ids, caption_parts = [], []
+            retry = list(chunk)  # what the per-image fallback still owes after a failed batch
+            owed_links: list[tuple[str, str]] = []  # refused links a definite refusal left unposted
             try:
                 for image_url, alt_text in chunk:
+                    loaded = await self._load_batch_image(image_url, len(file_ids))
+                    if loaded is None and not image_url.startswith("file://"):
+                        # Refused/failed remote image already left the reply text: keep the link.
+                        pair = (image_url, alt_text)
+                        sent = await self.send(
+                            chat_id, f"{alt_text}\n{image_url}" if alt_text else image_url, metadata=metadata)
+                        if sent.success:
+                            delivered = True
+                            retry.remove(pair)
+                        elif self._post_may_have_landed():  # a copy would duplicate the link
+                            logger.warning(
+                                "Mattermost: link for %s may already be posted; not re-sending",
+                                image_url[:80])
+                            uncertain = True
+                            retry.remove(pair)
+                        else:  # Mattermost refused the post: nothing was created, still owed
+                            owed_links.append(pair)
+                        continue
                     if alt_text:
                         caption_parts.append(alt_text)
-                    loaded = await self._load_batch_image(image_url, len(file_ids))
                     if loaded is not None and (fid := await self._upload_file(chat_id, *loaded)):
                         file_ids.append(fid)
-                if not file_ids:
-                    continue
-                logger.info("Mattermost: sending %d image(s) as single post (chunk %d/%d)",
-                            len(file_ids), chunk_idx + 1, len(chunks))
-                data = await self._post_message(chat_id, "\n".join(caption_parts), None, metadata, file_ids)
-                if data and "id" in data:
-                    delivered = True
-                else:
-                    logger.warning("Mattermost: multi-image post failed, falling back")
-                    fallback = await super().send_multiple_images(chat_id, chunk, metadata, human_delay=human_delay)
-                    delivered = delivered or fallback.success
+                if file_ids:
+                    logger.info("Mattermost: sending %d image(s) as single post (chunk %d/%d)",
+                                len(file_ids), chunk_idx + 1, len(chunks))
+                    data = await self._post_message(chat_id, "\n".join(caption_parts), None, metadata, file_ids)
+                    if data and "id" in data:
+                        delivered = True
+                    else:
+                        logger.warning("Mattermost: multi-image post failed, falling back")
+                        fallback = await super().send_multiple_images(
+                            chat_id, retry, metadata, human_delay=human_delay)
+                        delivered = delivered or fallback.success
+                        owed_links = []  # the per-image loop above already covered them
             except Exception as e:
                 logger.warning("Mattermost: multi-image send failed (chunk %d/%d), falling back: %s",
                                chunk_idx + 1, len(chunks), e, exc_info=True)
-                fallback = await super().send_multiple_images(chat_id, chunk, metadata, human_delay=human_delay)
+                fallback = await super().send_multiple_images(
+                    chat_id, retry, metadata, human_delay=human_delay)
                 delivered = delivered or fallback.success
-        return SendResult(success=delivered, error=None if delivered else "all images failed to send")
+                owed_links = []  # the per-image loop above already covered them
+            if owed_links:
+                fallback = await super().send_multiple_images(
+                    chat_id, owed_links, metadata, human_delay=human_delay)
+                delivered = delivered or fallback.success
+        return SendResult(success=delivered, error=None if delivered else "all images failed to send",
+                          raw_response={"delivery_uncertain": True} if uncertain else None)
 
     # --- WebSocket ---
 
