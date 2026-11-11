@@ -44,7 +44,7 @@
 - **F14 数据库验证：** `sessions verify` 要求一致的离线备份，不接收正在使用的 profile 数据库；不是对活跃 WAL 数据库直接 `cp` 后检查。检查不自动恢复或替换数据，时间预算也不能硬中断阻塞的文件系统 I/O。
 - **F15 终端与项目卷：** [插件说明](plugins/owned-process/README.md)列出 `owned_process` 的命名空间、进程生命周期与依赖要求；失败不回退成本地执行，两种后端均不能据此标为生产采用。进程已退出但输出尚未排空时，`process_running=false, output_pending=true` 表示仍需读取最终输出。`protected_owned` 另需匹配的 authority 包、容器镜像及卷配置，仓库说明仍标为候选、待独立审查和生产采用；最近的受保护读取修复也不能单独证明可信身份完整绑定。合入源码不等于完成启用或整体安全验收。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
-- **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。串行运行并从下方隐藏标记聚合未处理差异；只允许原子写入本清单，失败不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；未处理差异超出单批上限时失败，不推进处理位置，需要 Agent 人工核对清单并更新标记。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
+- **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，全部批次成功后才原子写入本清单并推进隐藏检查点，失败不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
 
 ## 追溯证据
 

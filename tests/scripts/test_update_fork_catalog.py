@@ -108,6 +108,78 @@ class CatalogTests(unittest.TestCase):
                 updater.evidence_for(Path("."), "catalog", "a" * 40, "b" * 40, ["feature.py"])
             request.assert_not_called()
 
+    def test_large_change_is_split_into_bounded_path_batches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = lambda *args: subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            run("init", "-q", "-b", "dev")
+            run("config", "user.name", "Test")
+            run("config", "user.email", "test@example.invalid")
+            (root / "baseline.txt").write_text("baseline\n")
+            run("add", ".")
+            run("commit", "-qm", "baseline")
+            for name in ("first.txt", "second.txt"):
+                (root / name).write_text("x" * 60_000)
+            run("add", ".")
+            run("commit", "-qm", "large change")
+            head = run("rev-parse", "HEAD")
+            base = run("rev-parse", "HEAD^")
+            batches = updater.split_paths(root, base, head, ["first.txt", "second.txt"])
+            self.assertEqual(batches, [["first.txt"], ["second.txt"]])
+
+    def test_batched_update_is_atomic_when_a_later_batch_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = lambda *args: subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            run("init", "-q", "-b", "dev")
+            run("config", "user.name", "Test")
+            run("config", "user.email", "test@example.invalid")
+            path = root / "FORK_FEATURES.md"
+            path.write_text("# Catalog\n| F01 | old |\n")
+            run("add", ".")
+            run("commit", "-qm", "baseline")
+            base = run("rev-parse", "HEAD")
+            path.write_text(updater.set_checkpoint(path.read_text(), base))
+            (root / "first.py").write_text("first = True\n")
+            (root / "second.py").write_text("second = True\n")
+            run("add", ".")
+            run("commit", "-qm", "features")
+            before = path.read_text()
+            with patch.object(updater, "split_paths", return_value=[["first.py"], ["second.py"]]), patch.object(
+                updater, "request_edits", side_effect=[{"edits": [{"old": "| F01 | old |", "new": "| F01 | first |"}]}, RuntimeError("offline")]
+            ):
+                with self.assertRaises(RuntimeError):
+                    updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash")
+            self.assertEqual(path.read_text(), before)
+
+    def test_batched_update_applies_edits_sequentially_before_advancing_checkpoint(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = lambda *args: subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            run("init", "-q", "-b", "dev")
+            run("config", "user.name", "Test")
+            run("config", "user.email", "test@example.invalid")
+            path = root / "FORK_FEATURES.md"
+            path.write_text("# Catalog\n| F01 | old |\n")
+            run("add", ".")
+            run("commit", "-qm", "baseline")
+            base = run("rev-parse", "HEAD")
+            path.write_text(updater.set_checkpoint(path.read_text(), base))
+            (root / "first.py").write_text("first = True\n")
+            (root / "second.py").write_text("second = True\n")
+            run("add", ".")
+            run("commit", "-qm", "features")
+            with patch.object(updater, "split_paths", return_value=[["first.py"], ["second.py"]]), patch.object(
+                updater, "request_edits", side_effect=[
+                    {"edits": [{"old": "| F01 | old |", "new": "| F01 | first |"}]},
+                    {"edits": [{"old": "| F01 | first |", "new": "| F01 | final |"}]},
+                ]
+            ) as request:
+                self.assertTrue(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
+            self.assertIn("| F01 | final |", path.read_text())
+            self.assertEqual(updater.checkpoint(path.read_text()), run("rev-parse", "HEAD"))
+            self.assertEqual(request.call_count, 2)
+
     def test_large_evidence_is_explicitly_marked(self):
         value = updater.bounded("a" * 100, 40)
         self.assertIn("TRUNCATED", value)
@@ -117,6 +189,7 @@ class CatalogTests(unittest.TestCase):
         text = (SCRIPT.parents[2] / ".github/workflows/fork-catalog.yml").read_text()
         self.assertIn("branches: [dev]", text)
         self.assertIn("runs-on: [fork-catalog]", text)
+        self.assertIn("timeout-minutes: 60", text)
         self.assertIn("cancel-in-progress: false", text)
         self.assertIn("paths-ignore:", text)
         self.assertIn("sparse-checkout: |", text)
