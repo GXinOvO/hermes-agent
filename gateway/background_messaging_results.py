@@ -38,20 +38,20 @@ async def prepare(runner, prompt, source, task_id, media_urls, media_types):
 async def seal(context, task_id, response, header='', metadata=None):
     from hermes_state_background import complete
     db, identity, _ = context
-    await asyncio.to_thread(complete, db, task_id, identity,
-                           {'task_id':task_id, 'text':str(response or ''), 'header':header, 'metadata':metadata})
+    return await asyncio.to_thread(complete, db, task_id, identity,
+                                  {'task_id':task_id, 'text':str(response or ''), 'header':header, 'metadata':metadata})
 
 
-async def claim(context, task_id):
+async def claim(context, task_id, *, expected=None):
     from hermes_state_background import claim_delivery
     db = context[0]
-    if not await asyncio.to_thread(claim_delivery, db, task_id):
+    if not await asyncio.to_thread(claim_delivery, db, task_id, expected=expected):
         raise ValueError('background delivery is already claimed; reconcile before retrying')
 
 
-async def finish(context, task_id, outcome):
+async def finish(context, task_id, outcome, *, expected=None):
     from hermes_state_background import finish_delivery
-    await asyncio.to_thread(finish_delivery, context[0], task_id, outcome)
+    return await asyncio.to_thread(finish_delivery, context[0], task_id, outcome, expected=expected)
 
 
 async def _sent(operation):
@@ -93,20 +93,37 @@ def delivery_plan(adapter, source, payload):
     return operations
 
 
-async def deliver_plan(adapter, plan):
+async def deliver_plan(adapter, plan, *, context=None, task_id=None, expected=None):
     from gateway.strict_transport import strict_call
     for method, kwargs in plan:
+        if expected is not None:
+            from hermes_state_background import delivery_current
+            if not await asyncio.to_thread(delivery_current, context[0], task_id, expected):
+                raise RuntimeError('background delivery claim changed')
         await _sent(strict_call(adapter, method, **kwargs))
 
 
-async def prepare_plan(adapter, plan):
-    from gateway.strict_transport import prepare_strict_transport
-    for method, kwargs in plan:
-        await prepare_strict_transport(adapter, method, **kwargs)
+async def prepare_plan(adapter, plan, *, record=None):
+    from gateway.platforms.docker_media_paths import hand_back_unreadable_media
+    from gateway.strict_transport import prepare_call
+    paths = [kwargs[key] for _, kwargs in plan
+             for key in ('image_path', 'audio_path', 'video_path', 'file_path') if kwargs.get(key)]
+    if paths:
+        await hand_back_unreadable_media(paths)
+    identity = {}
+    if record is not None:
+        from hermes_state_background import _encoded, _key
+        identity = {'execution_id': _key(record['task_id']) + ':' + record['binding_sha256'],
+                    'claim_id': hashlib.sha256(_encoded(plan).encode()).hexdigest()}
+    return [await prepare_call(adapter, method,
+            **({'execution_id': identity['execution_id'], 'claim_id': identity['claim_id'] + ':' + str(index)}
+               if identity else {}), **kwargs) for index, (method, kwargs) in enumerate(plan)]
 
 
 async def deliver(adapter, source, payload):
-    await deliver_plan(adapter, delivery_plan(adapter, source, payload))
+    plan = delivery_plan(adapter, source, payload)
+    prepared = await prepare_plan(adapter, plan)
+    await deliver_plan(adapter, prepared)
 
 
 async def recover(runner, db):
@@ -125,23 +142,22 @@ async def recover(runner, db):
             if adapter is None:
                 continue
             plan = delivery_plan(adapter, source, record['payload'])
-            await prepare_plan(adapter, plan)
+            prepared = await prepare_plan(adapter, plan, record=record)
         except (AttributeError, KeyError, TypeError, ValueError, RuntimeError, OverflowError):
             logger.warning('Background result %s transport unavailable', record['task_id'], exc_info=True)
             continue
-        if not await asyncio.to_thread(claim_delivery, db, record['task_id']):
+        if not await asyncio.to_thread(claim_delivery, db, record['task_id'], expected=record):
             continue
         context = (db, record['binding'], False)
         try:
-            await deliver_plan(adapter, plan)
+            await deliver_plan(adapter, prepared, context=context, task_id=record['task_id'], expected=record)
         except BaseException as exc:
-            await asyncio.shield(finish(context, record['task_id'], 'unknown'))
+            await asyncio.shield(finish(context, record['task_id'], 'unknown', expected=record))
             if isinstance(exc, asyncio.CancelledError):
                 raise
             logger.warning('Background result %s delivery unknown', record['task_id'], exc_info=True)
         else:
-            await finish(context, record['task_id'], 'delivered')
-            delivered += 1
+            delivered += int(await finish(context, record['task_id'], 'delivered', expected=record))
     return delivered
 
 

@@ -473,22 +473,66 @@ def agent_tool_drops(agent: Any) -> frozenset:
     return side_agent_tool_drops(agent) | session_platform_tool_drops(getattr(agent, "platform", None))
 
 
-def agent_tool_surface(agent: Any, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """*tools* as *agent* carries them: :func:`agent_tool_drops` removed and, in a one-shot session or a gateway
-    session that joins its delegations in the turn (``delegation.gateway_mode``), the joined ``delegate_task``
-    variant (``agent.oneshot_footprint.oneshot_tool_schemas``). Applied to FRESH definitions (load, MCP refresh)
-    before any merge: a pinned or carried entry keeps the bytes already sent."""
+def _tool_def_name(tool: dict[str, Any]) -> str:
+    return (tool.get("function") or {}).get("name") or ""
+
+
+def agent_scoped_tool_defs(agent: Any, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*tools* minus what *agent* never carries: the drops, the one-shot surface variant
+    (``agent.oneshot_footprint.oneshot_tool_schemas``) and an explicit child allowlist. The
+    pre-assembly form of :func:`agent_tool_surface`, for callers that only need the names."""
+    return _scope_tools(agent, tools)[0]
+
+
+def _scope_tools(agent: Any, tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """*tools* minus what *agent* never carries: the drops, the one-shot surface variant and an
+    explicit child allowlist. Returns ``(scoped, session_scoped)`` — *session_scoped* says this
+    session carries scope of its own, which the assembly it received could not have known (a
+    dropped DEFERRED tool is already collapsed into the bridge, so it is invisible in the list)."""
     from agent.oneshot_footprint import agent_is_oneshot, oneshot_tool_schemas
     from tools.delegate_tool_config import agent_joins_delegation
     drops = agent_tool_drops(agent)
-    tools = [tool for tool in tools if (tool.get("function") or {}).get("name") not in drops] if drops else list(tools)
-    surface = oneshot_tool_schemas(tools) if agent_is_oneshot(agent) or agent_joins_delegation(agent) else tools
+    surface = [tool for tool in tools if _tool_def_name(tool) not in drops] if drops else list(tools)
+    if agent_is_oneshot(agent) or agent_joins_delegation(agent):
+        surface = oneshot_tool_schemas(surface)
     from tools.delegate_tool_allowlist import explicit_allowed_tools
     allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     if allowed is not None:
         from tools.delegate_tool_allowlist import filter_tool_defs_by_allowlist
         surface = filter_tool_defs_by_allowlist(surface, allowed)
-    return surface
+    return surface, bool(drops) or allowed is not None
+
+
+def _rescope_bridge(agent: Any, surface: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Re-assemble the Tool Search bridge over this session's own surface when it removed tools.
+
+    The bridge schemas — and the deferred-tool listing embedded in ``tool_search``'s description
+    ("every tool listed below exists") — are built inside the assembly, before the session's drops
+    are known, so a surviving bridge keeps advertising a tool the session never carries. Assembly
+    consumed the deferrable tools, so the scoped set is rebuilt from the pre-assembly catalog for
+    the agent's own selection (memoized by ``model_tools``) rather than from *surface*."""
+    from tools.tool_search_catalog import BRIDGE_TOOL_NAMES
+    if not any(_tool_def_name(tool) in BRIDGE_TOOL_NAMES for tool in surface):
+        return surface  # assembly never ran (skipped by the caller): nothing to re-scope
+    import model_tools
+    from tools.tool_search import rebuild_for_surface
+
+    unscoped = model_tools.get_tool_definitions(
+        enabled_toolsets=getattr(agent, "enabled_toolsets", None),
+        disabled_toolsets=getattr(agent, "disabled_toolsets", None),
+        quiet_mode=True, skip_tool_search_assembly=True,
+    ) or []
+    return rebuild_for_surface(agent_scoped_tool_defs(agent, unscoped))
+
+
+def agent_tool_surface(agent: Any, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*tools* as *agent* carries them: :func:`agent_tool_drops` removed and, in a one-shot session or a gateway
+    session that joins its delegations in the turn (``delegation.gateway_mode``), the joined ``delegate_task``
+    variant (``agent.oneshot_footprint.oneshot_tool_schemas``). Applied to FRESH definitions (load, MCP refresh)
+    before any merge: a pinned or carried entry keeps the bytes already sent. A surviving Tool Search bridge is
+    re-assembled over the scoped surface, so its listing advertises only tools the session carries."""
+    surface, session_scoped = _scope_tools(agent, tools)
+    return _rescope_bridge(agent, surface) if session_scoped else surface
 
 
 def validate_toolset(name: str) -> bool:

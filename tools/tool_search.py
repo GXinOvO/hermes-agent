@@ -8,13 +8,15 @@ silently drops tools); bridge calls route through ``model_tools.handle_function_
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import json
 import logging
 import math
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from hermes_cli.config_defaults import DEFAULT_CONFIG
 from tools.registry import tool_error
@@ -37,6 +39,33 @@ logger = logging.getLogger("tools.tool_search")
 # maps to one gateway request. Describe has no such remote limit.
 _MAX_QUERIES_PER_CALL = 7
 _MAX_DESCRIBE_NAMES_PER_CALL = 10
+
+# Tool names the CALLING session proved it does not carry, for the duration of one bridge
+# dispatch. ``model_tools`` dispatches the bridge from the toolset selection alone (it has no
+# agent), so a session-level drop — a side agent's ``manage_connections``
+# (``toolsets.agent_tool_drops``) — is invisible there: the name would be listed by tool_search
+# and resolvable by tool_call while the session's own tools[] does not carry it. The agent loop
+# binds the drop set around the dispatch (``agent.tool_executor``); everything the bridge derives
+# from the tool-defs reads through :func:`_visible_defs`, so listing, describe, search and the
+# scope check all agree with the session. ContextVar, not a module global: one process serves
+# many sessions and profiles.
+_HIDDEN_TOOL_NAMES: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "tool_search_hidden_names", default=frozenset())
+
+
+def hidden_tool_names() -> frozenset:
+    """Names hidden from the bridge catalog in the current dispatch context."""
+    return _HIDDEN_TOOL_NAMES.get()
+
+
+@contextlib.contextmanager
+def scoped_hidden_tool_names(names: Iterable[str]) -> Iterator[None]:
+    """Hide *names* from every catalog read (and from ``tool_call`` resolution) in this context."""
+    token = _HIDDEN_TOOL_NAMES.set(frozenset(names))
+    try:
+        yield
+    finally:
+        _HIDDEN_TOOL_NAMES.reset(token)
 
 
 @dataclass(frozen=True)
@@ -143,7 +172,10 @@ _DIRECT_SURFACE_TOOLSETS = CLIENT_SURFACE_TOOLSETS | TOOLSET_SESSION_PLATFORMS.k
 # list in DEFAULT_CONFIG so config discovery and runtime behavior cannot drift. An explicit
 # ``defer`` list replaces this wholesale ([] = everything eager). ``clarify`` is deliberately
 # absent: A/B showed deferring it collapsed structured-clarify usage (18/18 -> 7/18) — the
-# ask-the-user affordance must be ambient, a stub is not enough.
+# ask-the-user affordance must be ambient, a stub is not enough. ``manage_connections`` is
+# deferred only because its catalog line names both of its jobs: with the old first sentence a
+# weak model installed MCP servers through the terminal (18/20 -> 10/20); with the line naming
+# MCP installs it matched eager (18/20, evals/tts_connections_deferral). Keep that sentence.
 _DEFAULT_DEFERRED_TOOLS = frozenset(DEFAULT_CONFIG["tools"]["tool_search"]["defer"])
 
 
@@ -167,11 +199,20 @@ def _tool_def_names(tool_defs: Iterable[dict[str, Any]]) -> Iterable[str]:
     return (_fn(td).get("name", "") for td in tool_defs)
 
 
+def _visible_defs(tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """:func:`_tool_def_names` filter honoring :func:`hidden_tool_names` (the calling session's
+    own drops). Every catalog read starts here, so a session never sees a tool it cannot call."""
+    hidden = _HIDDEN_TOOL_NAMES.get()
+    if not hidden:
+        return tool_defs
+    return [td for td, name in zip(tool_defs, _tool_def_names(tool_defs)) if name not in hidden]
+
+
 def session_tool_names(tool_defs: Iterable[dict[str, Any]]) -> frozenset[str]:
     """Every tool name in the session's ``tool_defs`` — what this session can actually
     reach. Public wrapper over the private name extractor so callers outside this module
     (the ``model_tools`` dispatcher) can scope error messages to the real session."""
-    return frozenset(n for n in _tool_def_names(tool_defs) if n)
+    return frozenset(n for n in _tool_def_names(_visible_defs(list(tool_defs))) if n)
 
 
 def classify_tools(tool_defs: list[dict[str, Any]], defer_tools: Optional[frozenset] = None,
@@ -188,7 +229,7 @@ def classify_tools(tool_defs: list[dict[str, Any]], defer_tools: Optional[frozen
 
 def _deferrable_in(tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deferrable subset of pre-assembly ``tool_defs`` under the read-only user config."""
-    return classify_tools(tool_defs, load_config_readonly().effective_defer_tools)[1]
+    return classify_tools(_visible_defs(tool_defs), load_config_readonly().effective_defer_tools)[1]
 
 
 def estimate_tokens_from_schemas(tool_defs: Iterable[dict[str, Any]]) -> int:
@@ -232,7 +273,7 @@ def _bridge_schema(name: str, description: str, properties: dict[str, Any],
 _CONNECTIONS_HINT = (
     " Searches also cover the user's connected app accounts, whose tools are hosted and so "
     "never listed here (results named `connectors__<app>__<tool>`); `manage_connections` checks "
-    "or connects an account.")
+    "or connects an account and installs MCP servers.")
 
 
 def _search_description(deferred_count: int, listing: Optional[str], listing_form: str,
@@ -383,6 +424,28 @@ def is_bridge_tool(name: str) -> bool:
     return name in BRIDGE_TOOL_NAMES
 
 
+def rebuild_for_surface(tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Assemble *tool_defs* so the bridge schemas and their embedded listing describe THIS surface.
+    ``toolsets.agent_tool_surface`` calls it after the session's own filters (side-agent drops, an
+    explicit child allowlist) removed entries: assembly already ran over the unfiltered catalog, and
+    a surviving listing would keep advertising a tool the session never carries.
+
+    *tool_defs* must be the PRE-assembly catalog: assembly consumes the deferrable tools, so handing
+    it an assembled surface would collapse nothing and return no bridge at all."""
+    return assemble_tool_defs(
+        tool_defs, context_length=_active_context_length(), config=load_config()).tool_defs
+
+
+def _active_context_length() -> Optional[int]:
+    """Active model window for the listing budget — ``model_tools``' resolver, which is what the
+    assembly being repaired used (imported late: that module imports this one at call time)."""
+    try:
+        from model_tools import _resolve_active_context_length
+        return _resolve_active_context_length() or None
+    except Exception:  # health: allow BLE001 -- fail-open listing budget: an unresolvable model context must never break tool-surface repair
+        return None
+
+
 def _clip_description(text: str, cap: int = 500) -> str:
     """Cap a record description, marking the cut so it reads as deliberate.
 
@@ -440,6 +503,7 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
                          config: Optional[ToolSearchConfig] = None,
                          connector_search: Optional[Any] = None, call: Optional[Any] = None) -> str:
     config = config or load_config()
+    current_tool_defs = _visible_defs(current_tool_defs)
     queries, err = _string_list_arg(args, "queries", dedupe=False, max_items=_MAX_QUERIES_PER_CALL,
                                     retry_hint="Retry with fewer, more targeted queries.")
     if err:
@@ -497,6 +561,7 @@ def dispatch_tool_describe(args: dict[str, Any], *, current_tool_defs: list[dict
                            config: Optional[ToolSearchConfig] = None,
                            connector_describe: Optional[Any] = None, call: Optional[Any] = None) -> str:
     config = config or load_config_readonly()
+    current_tool_defs = _visible_defs(current_tool_defs)
     names, err = _string_list_arg(
         args, "names", dedupe=True, max_items=_MAX_DESCRIBE_NAMES_PER_CALL,
         retry_hint="Retry with fewer names per call.")
@@ -547,7 +612,7 @@ def scoped_deferrable_names(tool_defs: list[dict[str, Any]]) -> frozenset[str]:
     universe ``tool_call`` may reach. Gates bridge dispatch AND the executor unwrap so a
     restricted session cannot invoke an out-of-scope tool via the bridge."""
     defer_tools = load_config_readonly().effective_defer_tools
-    return frozenset(n for n in _tool_def_names(tool_defs)
+    return frozenset(n for n in _tool_def_names(_visible_defs(tool_defs))
                      if n and is_deferrable_tool_name(n, defer_tools))
 
 
@@ -633,6 +698,7 @@ __all__ = [
     "dispatch_tool_describe",
     "dispatch_tool_search",
     "estimate_tokens_from_schemas",
+    "hidden_tool_names",
     "is_bridge_tool",
     "is_connector_name",
     "is_deferrable_tool_name",
@@ -643,6 +709,7 @@ __all__ = [
     "resolve_underlying_call",
     "scope_block_reason",
     "scoped_deferrable_names",
+    "scoped_hidden_tool_names",
     "search_catalog",
     "should_activate",
     "validate_deferred_call_args",

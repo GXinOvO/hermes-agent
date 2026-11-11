@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiohttp
 from aiohttp import web
@@ -108,3 +109,20 @@ async def test_ordinary_human_queue_still_dequeues_next_input():
     runner._pending_event_audio_paths = lambda event:[]
     runner._merge_leftover_steer = lambda result, adapter, source, key, event, text:(event, text)
     assert await runner._run_agent_drain_pending({'final_response':'human final'}, adapter, source, 'route') == (event, 'next input')
+
+
+@pytest.mark.asyncio
+async def test_uncertain_automation_final_does_not_enter_human_retry_ledger(tmp_path):
+    with SessionDB(tmp_path / 'state.db') as db:
+        _, route, row = admission(db)
+        source = SessionSource(platform=Platform.SLACK, chat_id='chat', chat_type='dm')
+        event = MessageEvent(text='completed result', source=source, message_id=row['request_id'], internal=True)
+        adapter = PeerAdapter(None, None)
+        adapter._extract_response_content = AsyncMock()
+        adapter._record_delivery_obligation = AsyncMock()
+
+        async with automation_delivery_scope(SimpleNamespace(db=db), row, event):
+            await adapter.ledger_attempted_final(event, route, 'sealed final', error='ACK lost')
+
+        adapter._extract_response_content.assert_not_awaited()
+        adapter._record_delivery_obligation.assert_not_awaited()

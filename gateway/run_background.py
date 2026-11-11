@@ -133,26 +133,32 @@ class GatewayBackgroundMixin:
 
             preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
             header = t("gateway.background.complete_header", preview=preview)
-            await durable.seal(durable_context, task_id, response, header, _thread_metadata)
-            payload = {'text':response, 'header':header, 'metadata':_thread_metadata}
+            from copy import deepcopy
+            payload = {'task_id':task_id, 'text':str(response or ''), 'header':header,
+                       'metadata':deepcopy(_thread_metadata)}
+            record = await durable.seal(durable_context, task_id, payload['text'], payload['header'], payload['metadata'])
             try:
+                from gateway.session_results import _redacted
+                from hermes_state_background import _encoded
+                if _encoded(_redacted(payload)) != _encoded(record['payload']):
+                    raise RuntimeError('background result differs from sealed copy')
                 plan = durable.delivery_plan(adapter, source, payload)
-                await durable.prepare_plan(adapter, plan)
-            except RuntimeError:
-                logger.warning('Background task %s result saved; transport unavailable', task_id, exc_info=True)
+                prepared = await durable.prepare_plan(adapter, plan, record=record)
+                await durable.claim(durable_context, task_id, expected=record)
+            except (RuntimeError, ValueError):
+                logger.warning('Background task %s result saved; delivery unavailable', task_id, exc_info=True)
                 return
-            await durable.claim(durable_context, task_id)
             delivery_started = True
-            await durable.deliver_plan(adapter, plan)
-            await durable.finish(durable_context, task_id, 'delivered')
+            await durable.deliver_plan(adapter, prepared, context=durable_context, task_id=task_id, expected=record)
+            await durable.finish(durable_context, task_id, 'delivered', expected=record)
 
         except asyncio.CancelledError:
             if durable_context is not None and delivery_started:
-                await asyncio.shield(durable.finish(durable_context, task_id, 'unknown'))
+                await asyncio.shield(durable.finish(durable_context, task_id, 'unknown', expected=record))
             raise
         except Exception:
             if durable_context is not None and delivery_started:
-                await durable.finish(durable_context, task_id, 'unknown')
+                await durable.finish(durable_context, task_id, 'unknown', expected=record)
             logger.exception("Background task %s failed", task_id)
             if delivery_started:
                 return

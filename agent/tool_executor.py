@@ -372,21 +372,23 @@ def _tool_search_scoped_names(agent) -> frozenset:
     validate against this set. Read through the ``get_tool_definitions`` memo on every call
     and never copied onto the agent: the memo expires with the check_fn verdicts it was
     filtered on, a per-agent copy keyed on registry generation would not, and a recovered
-    MCP server's tools would stay uncallable for the agent's lifetime."""
+    MCP server's tools would stay uncallable for the agent's lifetime.
+
+    The defs pass through :func:`toolsets.agent_scoped_tool_defs` first: the raw catalog knows
+    nothing of this session's drops (a side agent never carries ``manage_connections``) or of
+    an explicit child allowlist, and the bridge must not offer what the session cannot carry."""
     try:
         import model_tools
         from tools import tool_search as _ts
+        from toolsets import agent_scoped_tool_defs
     except Exception:
         return frozenset()
     try:
-        names = _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
+        return _ts.scoped_deferrable_names(agent_scoped_tool_defs(agent, model_tools.get_tool_definitions(
             enabled_toolsets=getattr(agent, "enabled_toolsets", None),
             disabled_toolsets=getattr(agent, "disabled_toolsets", None),
             quiet_mode=True, skip_tool_search_assembly=True,
-        ) or [])
-        from tools.delegate_tool_allowlist import explicit_allowed_tools
-        allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
-        return names if allowed is None else frozenset(name for name in names if name in allowed)
+        ) or []))
     except Exception:
         return frozenset()
 
@@ -830,19 +832,26 @@ def _run_agent_tool_execution_middleware(
             **tool_hook_ids(agent, effective_task_id, tool_call_id),
         )
 
-    state.result, _relay_args = relay_tools.execute(
-        function_name,
-        function_args,
-        _hermes_pipeline,
-        session_id=str(getattr(agent, "session_id", "") or ""),
-        tool_call_id=tool_call_id or None,
-        metadata={
-            "task_id": effective_task_id or "",
-            "turn_id": getattr(agent, "_current_turn_id", "") or "",
-            "api_request_id": getattr(agent, "_current_api_request_id", "") or "",
-            "tool_call_id": tool_call_id or "",
-        },
-    )
+    # One dispatch unit, one session scope: the bridge reads the toolset selection alone, so the
+    # agent's own drops ride this context for the duration of the handler call. Set here because
+    # both executors (sequential and concurrent) reach a handler through this function, and cleared
+    # before the result is published.
+    from tools.tool_search import scoped_hidden_tool_names
+    from toolsets import agent_tool_drops
+    with scoped_hidden_tool_names(agent_tool_drops(agent)):
+        state.result, _relay_args = relay_tools.execute(
+            function_name,
+            function_args,
+            _hermes_pipeline,
+            session_id=str(getattr(agent, "session_id", "") or ""),
+            tool_call_id=tool_call_id or None,
+            metadata={
+                "task_id": effective_task_id or "",
+                "turn_id": getattr(agent, "_current_turn_id", "") or "",
+                "api_request_id": getattr(agent, "_current_api_request_id", "") or "",
+                "tool_call_id": tool_call_id or "",
+            },
+        )
     return state
 
 
@@ -1702,7 +1711,12 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
     if function_name == "delegate_task":
         spinner = _start_quiet_tool_spinner(agent, function_name, function_args, label=_delegate_spinner_label(function_args))
         agent._delegate_spinner = spinner
-        return _SequentialDispatch(agent._dispatch_delegate_task, spinner=spinner, is_delegate=True)
+        from tools.arg_validation import call_with_arg_checks
+        from tools.registry import registry
+        return _SequentialDispatch(
+            lambda next_args: call_with_arg_checks(
+                registry.get_entry(function_name), next_args, agent._dispatch_delegate_task),
+            spinner=spinner, is_delegate=True)
     if agent._context_engine_tool_names and function_name in agent._context_engine_tool_names:
         return _SequentialDispatch(
             execute=lambda next_args: agent.context_compressor.handle_tool_call(function_name, next_args, messages=messages),

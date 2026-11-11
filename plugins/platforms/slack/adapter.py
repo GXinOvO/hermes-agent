@@ -65,11 +65,15 @@ try:  # sibling modules; support both package and flat plugin-dir import
     from .adapter_slash_lane import SlashHandoffLanes
     from .adapter_slash_payload import slash_command_text, slash_thread_id
     from .adapter_reactions_context import slack_reactions_marker
+    from .adapter_socket_lifecycle import SlackSocketLifecycleMixin
+    from .adapter_image_batch import collect_image_uploads
 except ImportError:  # pragma: no cover - plugin loaded outside package context
     from block_kit import render_blocks, sanitize_blocks  # type: ignore
     from adapter_slash_lane import SlashHandoffLanes  # type: ignore
     from adapter_slash_payload import slash_command_text, slash_thread_id  # type: ignore
     from adapter_reactions_context import slack_reactions_marker  # type: ignore
+    from adapter_socket_lifecycle import SlackSocketLifecycleMixin  # type: ignore
+    from adapter_image_batch import collect_image_uploads  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -941,9 +945,6 @@ def _is_slack_voice_clip(file_obj: dict[str, Any]) -> bool:
         file_obj.get("name") or "").strip().lower().startswith("audio_message")
 
 
-# content-type substring → upload filename extension (first match wins; default png).
-_IMAGE_CT_EXTS = (("jpeg", "jpg"), ("jpg", "jpg"), ("gif", "gif"), ("webp", "webp"))
-
 _TRANSIENT_UPLOAD_MARKERS = (
     "rate_limited", "ratelimited", "429", "connection reset", "service unavailable",
     "temporarily unavailable")
@@ -997,7 +998,7 @@ def _is_transient_transport_error(e: BaseException) -> bool:
 from gateway.strict_transport import single_attempt_transport, strict_transport
 
 
-class SlackAdapter(BasePlatformAdapter):
+class SlackAdapter(SlackSocketLifecycleMixin, BasePlatformAdapter):
     """Slack bot adapter (Socket Mode).
     Needs SLACK_BOT_TOKEN (xoxb-, API calls) and SLACK_APP_TOKEN (xapp-, Socket Mode). DMs +
     mention-gated channels, threads, attachments, slash commands, status text."""
@@ -1034,7 +1035,13 @@ class SlackAdapter(BasePlatformAdapter):
     _socket_first_ping_grace_s = 60.0
 
     def __init__(self, config: PlatformConfig):
+        import threading
+        import weakref
         super().__init__(config, Platform.SLACK)
+        self._strict_plan_lock = threading.RLock()
+        self._strict_live_claims = weakref.WeakValueDictionary()
+        self._strict_issued_plans = weakref.WeakKeyDictionary()
+        self._strict_consumed_claims = set()
         self._app: Optional[Any] = None
         self._handler: Optional[Any] = None
         self._socket_mode_task: Optional[asyncio.Task] = None
@@ -1362,20 +1369,6 @@ class SlackAdapter(BasePlatformAdapter):
             logger.warning("[Slack] Socket Mode watchdog exited; restarting")
         self._socket_watchdog_task = None
         self._ensure_socket_watchdog()
-
-    async def _cancel_socket_watchdog(self, failure_msg: str) -> None:
-        """Cancel and await the watchdog task (if any); exceptions are debug-logged."""
-        watchdog_task = self._socket_watchdog_task
-        self._socket_watchdog_task = None
-        if watchdog_task is None or watchdog_task.done():
-            return
-        watchdog_task.cancel()
-        try:
-            await watchdog_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # pragma: no cover - defensive logging
-            logger.debug(failure_msg, exc_info=True)
 
     def _ensure_socket_watchdog(self) -> None:
         if self._socket_watchdog_task is None or self._socket_watchdog_task.done():
@@ -2214,15 +2207,21 @@ class SlackAdapter(BasePlatformAdapter):
             raise
 
     async def _prepare_strict_transport(self, method, **kwargs):
-        from plugins.platforms.slack.strict_delivery import prepare
+        from plugins.platforms.slack.strict_delivery import prepare, prepare_plan
         prepare(self, method, **kwargs)
+        return await prepare_plan(self, method, **kwargs)
 
     @single_attempt_transport
     async def send(
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        metadata: Optional[dict[str, Any]] = None, *, prepared_plan=None,
+        execution_id=None, claim_id=None) -> SendResult:
         """Send a message to a Slack channel or DM."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send', prepared_plan, execution_id, claim_id,
+                                           chat_id=chat_id, content=content, reply_to=reply_to, metadata=metadata)
             from plugins.platforms.slack.strict_delivery import send_text
             return await send_text(self, chat_id, content, reply_to, metadata)
         blocked = self._outbound_blocked(chat_id, "outbound generic send to")
@@ -2973,10 +2972,22 @@ class SlackAdapter(BasePlatformAdapter):
     @single_attempt_transport
     async def send_multiple_images(
         self, chat_id: str, images: list[tuple[str, str]],
-        metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:
+        metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0, *,
+        prepared_plan=None, execution_id=None, claim_id=None) -> SendResult:
         """Send a batch of images as one message via ``files_upload_v2(file_uploads=...)`` (10 per
-        call, Slack cap) instead of N posts; falls back to the base per-image loop on failure."""
+        call, Slack cap) instead of N posts; falls back to the base per-image loop on failure.
+
+        A refused (unsafe/failed/oversized) image keeps its link as a text post, which leaves the
+        retry set only once Slack confirmed it: an answer of ``ok=false`` posted nothing, so the
+        link stays owed and is re-attempted even when the sibling upload succeeded, while a
+        transport failure (429/5xx/reset — the post may exist) is never re-sent and is reported as
+        ``raw_response["delivery_uncertain"]``.
+        """
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_multiple_images', prepared_plan, execution_id, claim_id,
+                                           chat_id=chat_id, images=images, metadata=metadata, human_delay=human_delay)
             from plugins.platforms.slack.strict_delivery import send_images
             return await send_images(self, chat_id, images, metadata)
         if self._suppressed_ignored(chat_id, "multi-image upload in"):
@@ -2995,69 +3006,54 @@ class SlackAdapter(BasePlatformAdapter):
         CHUNK = 10
         chunks = [images[i : i + CHUNK] for i in range(0, len(images), CHUNK)]
         delivered = False
+        uncertain = False
         for chunk_idx, chunk in enumerate(chunks):
             if human_delay > 0 and chunk_idx > 0:
                 await asyncio.sleep(human_delay)
+            retry = list(chunk)  # what the per-image fallback still owes after a failed batch
+            owed_links: list[tuple[str, str]] = []  # refused links a definite refusal left unposted
             try:
-                file_uploads, initial_comment_parts = await self._collect_image_uploads(
-                    chunk, _unquote, _is_safe_url, create_ssrf_safe_async_client)
-                if not file_uploads:
-                    continue
-                initial_comment = "\n".join(initial_comment_parts) if initial_comment_parts else ""
-                logger.info(
-                    "[Slack] Sending %d image(s) in single files_upload_v2 (chunk %d/%d)",
-                    len(file_uploads), chunk_idx + 1, len(chunks))
-                await self._client_for(chat_id, metadata).files_upload_v2(
-                    channel=chat_id, file_uploads=file_uploads, initial_comment=initial_comment,
-                    thread_ts=thread_ts)
-                self._record_uploaded_file_thread(chat_id, thread_ts, metadata)
-                delivered = True
+                file_uploads, initial_comment_parts, refused = await collect_image_uploads(
+                    chunk, _unquote, _is_safe_url, create_ssrf_safe_async_client, safe_url_for_log)
+                for image_url, alt_text in refused:  # already left the reply text: keep the link
+                    pair = (image_url, alt_text)
+                    sent = await self.send(
+                        chat_id, f"{alt_text}\n{image_url}" if alt_text else image_url, metadata=metadata)
+                    if sent.success:
+                        delivered = True
+                        retry.remove(pair)
+                    elif sent.retryable:  # the post may have landed: a copy would duplicate the link
+                        logger.warning(
+                            "[Slack] Link for %s may already be posted; not re-sending",
+                            safe_url_for_log(image_url))
+                        uncertain = True
+                        retry.remove(pair)
+                    else:  # Slack answered ok=false: nothing posted, the link is still owed
+                        owed_links.append(pair)
+                if file_uploads:
+                    initial_comment = "\n".join(initial_comment_parts) if initial_comment_parts else ""
+                    logger.info(
+                        "[Slack] Sending %d image(s) in single files_upload_v2 (chunk %d/%d)",
+                        len(file_uploads), chunk_idx + 1, len(chunks))
+                    await self._client_for(chat_id, metadata).files_upload_v2(
+                        channel=chat_id, file_uploads=file_uploads, initial_comment=initial_comment,
+                        thread_ts=thread_ts)
+                    self._record_uploaded_file_thread(chat_id, thread_ts, metadata)
+                    delivered = True
             except Exception as e:
                 logger.warning(
                     "[Slack] Multi-image files_upload_v2 failed (chunk %d/%d), falling back to per-image: %s",
                     chunk_idx + 1, len(chunks), e, exc_info=True)
                 fallback = await super().send_multiple_images(
-                    chat_id, chunk, metadata, human_delay=human_delay)
+                    chat_id, retry, metadata, human_delay=human_delay)
                 delivered = delivered or fallback.success
-        return SendResult(success=delivered, error=None if delivered else "all images failed to send")
-
-    @staticmethod
-    async def _collect_image_uploads(
-        chunk: list[tuple[str, str]], unquote_fn, is_safe_url_fn, client_factory
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        """``files_upload_v2`` entries for one batch: ``file://`` by path, remote via the SSRF-safe
-        client (unsafe/failed skipped). Returns ``(file_uploads, alt_texts)``."""
-        file_uploads: list[dict[str, Any]] = []
-        initial_comment_parts: list[str] = []
-        async with client_factory(
-            timeout=30.0, follow_redirects=True, event_hooks={"response": [ssrf_redirect_guard]}
-        ) as http_client:
-            for image_url, alt_text in chunk:
-                if alt_text:
-                    initial_comment_parts.append(alt_text)
-                if image_url.startswith("file://"):
-                    local_path = unquote_fn(image_url[7:])
-                    if not os.path.exists(local_path):
-                        logger.warning("[Slack] Skipping missing image: %s", local_path)
-                        continue
-                    file_uploads.append(
-                        {"file": local_path, "filename": os.path.basename(local_path)})
-                    continue
-                if not is_safe_url_fn(image_url):
-                    logger.warning("[Slack] Blocked unsafe image URL in batch")
-                    continue
-                try:
-                    response = await http_client.get(image_url)
-                    response.raise_for_status()
-                    ct = response.headers.get("content-type", "")
-                    ext = next((e for k, e in _IMAGE_CT_EXTS if k in ct), "png")
-                    file_uploads.append({
-                        "content": response.content, "filename": f"image_{len(file_uploads)}.{ext}"
-                    })
-                except Exception as dl_err:
-                    logger.warning(
-                        "[Slack] Download failed for %s: %s", safe_url_for_log(image_url), dl_err)
-        return file_uploads, initial_comment_parts
+                owed_links = []  # the per-image loop above already covered them
+            if owed_links:
+                fallback = await super().send_multiple_images(
+                    chat_id, owed_links, metadata, human_delay=human_delay)
+                delivered = delivered or fallback.success
+        return SendResult(success=delivered, error=None if delivered else "all images failed to send",
+                          raw_response={"delivery_uncertain": True} if uncertain else None)
 
     def _record_uploaded_file_thread(
         self, chat_id: str, thread_ts: Optional[str], metadata: Optional[dict[str, Any]] = None
@@ -3448,9 +3444,14 @@ class SlackAdapter(BasePlatformAdapter):
     @single_attempt_transport
     async def send_image_file(
         self, chat_id: str, image_path: str, caption: Optional[str] = None,
-        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, *,
+        prepared_plan=None, execution_id=None, claim_id=None) -> SendResult:
         """Send a local image file to Slack by uploading it."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_image_file', prepared_plan, execution_id, claim_id,
+                    chat_id=chat_id, image_path=image_path, caption=caption, reply_to=reply_to, metadata=metadata)
             from plugins.platforms.slack.strict_delivery import send_file
             return await send_file(self, chat_id, image_path, caption, reply_to, metadata)
         try:
@@ -3475,9 +3476,14 @@ class SlackAdapter(BasePlatformAdapter):
     @single_attempt_transport
     async def send_image(
         self, chat_id: str, image_url: str, caption: Optional[str] = None,
-        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, *,
+        prepared_plan=None, execution_id=None, claim_id=None) -> SendResult:
         """Send an image to Slack by uploading the URL as a file."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_image', prepared_plan, execution_id, claim_id,
+                    chat_id=chat_id, image_url=image_url, caption=caption, reply_to=reply_to, metadata=metadata)
             from plugins.platforms.slack.strict_delivery import send_url
             return await send_url(self, chat_id, image_url, caption, reply_to, metadata)
         if not self._app:
@@ -3496,16 +3502,18 @@ class SlackAdapter(BasePlatformAdapter):
                 if redirect_url and not is_safe_url(redirect_url):
                     raise ValueError("Blocked redirect to private/internal address")
 
+            from gateway.platforms.base import read_httpx_body_with_limit
             # Download the image first
             async with create_ssrf_safe_async_client(
                 timeout=30.0, follow_redirects=True,
                 event_hooks={"response": [_ssrf_redirect_guard]}) as client:
-                response = await client.get(image_url)
-                response.raise_for_status()
+                async with client.stream("GET", image_url) as response:
+                    response.raise_for_status()
+                    content = await read_httpx_body_with_limit(response, media_type="image")
             thread_ts = self._resolve_thread_ts(reply_to, metadata)
             chat_id = await self._dm_target(chat_id, metadata)
             return await self._upload_with_retry(
-                chat_id, None, "image.png", caption, thread_ts, metadata, content=response.content,
+                chat_id, None, "image.png", caption, thread_ts, metadata, content=content,
                 attempts=1)
         except Exception as e:  # pragma: no cover - defensive logging
             logger.warning(
@@ -3519,10 +3527,15 @@ class SlackAdapter(BasePlatformAdapter):
     @single_attempt_transport
     async def send_voice(
         self, chat_id: str, audio_path: str, caption: Optional[str] = None,
-        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, **kwargs,
+        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, *,
+        prepared_plan=None, execution_id=None, claim_id=None, **kwargs,
     ) -> SendResult:
         """Send an audio file to Slack."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_voice', prepared_plan, execution_id, claim_id,
+                    chat_id=chat_id, audio_path=audio_path, caption=caption, reply_to=reply_to, metadata=metadata, **kwargs)
             from plugins.platforms.slack.strict_delivery import send_file
             return await send_file(self, chat_id, audio_path, caption, reply_to, metadata)
         try:
@@ -3536,9 +3549,14 @@ class SlackAdapter(BasePlatformAdapter):
     @single_attempt_transport
     async def send_video(
         self, chat_id: str, video_path: str, caption: Optional[str] = None,
-        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None, *,
+        prepared_plan=None, execution_id=None, claim_id=None) -> SendResult:
         """Send a video file to Slack."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_video', prepared_plan, execution_id, claim_id,
+                    chat_id=chat_id, video_path=video_path, caption=caption, reply_to=reply_to, metadata=metadata)
             from plugins.platforms.slack.strict_delivery import send_file
             return await send_file(self, chat_id, video_path, caption, reply_to, metadata)
         return await self._send_local_file(
@@ -3549,10 +3567,16 @@ class SlackAdapter(BasePlatformAdapter):
     async def send_document(
         self, chat_id: str, file_path: str, caption: Optional[str] = None,
         file_name: Optional[str] = None, reply_to: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        metadata: Optional[dict[str, Any]] = None, *, prepared_plan=None,
+        execution_id=None, claim_id=None) -> SendResult:
         """Send a document/file attachment to Slack.
         Only ``display_name`` (never the host-local path) goes in the failure notice."""
         if strict_transport():
+            if prepared_plan is not None:
+                from plugins.platforms.slack.strict_delivery import send_prepared
+                return await send_prepared(self, 'send_document', prepared_plan, execution_id, claim_id,
+                    chat_id=chat_id, file_path=file_path, caption=caption, file_name=file_name,
+                    reply_to=reply_to, metadata=metadata)
             from plugins.platforms.slack.strict_delivery import send_file
             return await send_file(self, chat_id, file_path, caption, reply_to, metadata, file_name=file_name)
         display_name = file_name or os.path.basename(file_path)
@@ -5259,25 +5283,15 @@ class SlackAdapter(BasePlatformAdapter):
         user_name = body.get("user", {}).get("name", "unknown")
         user_id = body.get("user", {}).get("id", "")
 
-        if not self._is_interactive_user_authorized(
-            user_id,
-            channel_id=channel_id,
-            user_name=user_name,
-            team_id=team_id,
-        ):
-            logger.warning(
-                "[Slack] Unauthorized model picker click by %s (%s) - ignoring",
-                user_name, user_id,
-            )
+        if not self._is_interactive_user_authorized(user_id, channel_id=channel_id, user_name=user_name, team_id=team_id):
+            logger.warning("[Slack] Unauthorized model picker click by %s (%s) - ignoring", user_name, user_id)
             return
 
         # Look up the picker state. The send path may have stored it under a
         # bare ts (metadata-poor send, no team id) while this click event
         # carries a team id — that mismatch must not swallow a legitimate
         # interaction (mirrors _handle_approval_action's dual-key lookup).
-        marker = self._workspace_message_marker(team_id, msg_ts)
-        if msg_ts in self._model_picker_state:
-            marker = msg_ts
+        marker = msg_ts if msg_ts in self._model_picker_state else self._workspace_message_marker(team_id, msg_ts)
         state = self._model_picker_state.get(marker)
         if not state:
             logger.debug("[Slack] Model picker state not found for marker=%s", marker)
@@ -5293,6 +5307,10 @@ class SlackAdapter(BasePlatformAdapter):
 
         providers = state.get("providers", [])
         on_model_selected = state.get("on_model_selected")
+        from gateway.approval_actor import picker_refusal, refusal_text
+        if requester := picker_refusal(on_model_selected, user_id, extra=self.config.extra):  # someone else's card
+            return await self._get_client(channel_id, team_id=team_id or None).chat_postEphemeral(
+                channel=channel_id, user=user_id, text=refusal_text(requester), thread_ts=message.get("thread_ts"))
 
         # Cancel → dismiss.
         if action_id == _MODEL_PICKER_CANCEL_ACTION:
@@ -5664,7 +5682,8 @@ class SlackAdapter(BasePlatformAdapter):
         # The bare ts too: stored without a team id, clicked with one.
         approval_key = msg_ts if msg_ts in self._approval_resolved else self._workspace_message_marker(team_id, msg_ts)
         if await self._refuse_other_requester(approval_refusal(
-                session_key, user_id, extra=self.config.extra, request_id=self._approval_request_ids.get(approval_key)), body):
+                session_key, user_id, extra=self.config.extra, request_id=self._approval_request_ids.get(approval_key),
+                choice=choice), body):
             return
         if self._approval_resolved.pop(approval_key, True):  # double-click guard (atomic pop)
             return

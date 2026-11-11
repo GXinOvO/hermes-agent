@@ -1,9 +1,16 @@
 import json
 
+# Platforms whose cron freeze (``strict_thread_delivery.freeze_target``) builds the exact wire
+# plan itself. Handing them a prepared transport plan would bypass that freeze and its media
+# identity check, so this layer leaves their calls untouched.
+FROZEN_BY_PLATFORM = frozenset({'slack', 'telegram'})
+
 
 async def prepare(state, calls, execution, target, index):
     from cron.strict_thread_delivery import digest, encode
     from gateway.strict_transport import prepare_call
+    if state.platform_name in FROZEN_BY_PLATFORM:
+        return calls
     claim = 'target:' + str(index) + ':' + digest(target)
     prepared = [await prepare_call(state.runtime_adapter, method, chat_id=str(state.chat_id),
                 execution_id=execution, claim_id=claim + ':' + str(number), **kwargs)

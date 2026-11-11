@@ -35,6 +35,7 @@ async def test_weixin_lost_ack_is_not_retried_in_strict_scope():
     adapter._send_chunk_retry_delay_seconds = 0.0
     adapter.platform = Platform.WEIXIN
     adapter._send_session, adapter._base_url, adapter._token = object(), 'http://inert.invalid', 'inert'
+    adapter._cdn_base_url = 'http://inert.invalid'
     with patch('plugins.platforms.weixin.adapter._send_message', new=AsyncMock(side_effect=TimeoutError('lost ACK'))) as post:
         with strict_transport_scope(), pytest.raises(TimeoutError):
             await adapter._send_text_chunk(chat_id='inert', chunk='answer', context_token=None, client_id='one')
@@ -43,6 +44,29 @@ async def test_weixin_lost_ack_is_not_retried_in_strict_scope():
         with pytest.raises(TimeoutError):
             await adapter._send_text_chunk(chat_id='inert', chunk='answer', context_token=None, client_id='two')
         assert post.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_weixin_image_download_failure_falls_back_only_for_human_delivery():
+    from gateway.config import PlatformConfig
+    from gateway.platforms.base import SendResult
+    from gateway.strict_transport import single_attempt_transport
+    from plugins.platforms.weixin.adapter import WeixinAdapter
+
+    adapter = WeixinAdapter(PlatformConfig(enabled=True, token='inert', extra={'account_id':'inert'}))
+    adapter._download_remote_media = AsyncMock(side_effect=ValueError('download refused'))
+    adapter.send_document = single_attempt_transport(AsyncMock())
+    adapter.send = AsyncMock(return_value=SendResult(success=True))
+    url = 'https://example.invalid/image.png'
+
+    with strict_transport_scope(), pytest.raises(ValueError, match='download refused'):
+        await adapter.send_image('chat', url, caption='image')
+    adapter.send.assert_not_awaited()
+    adapter.send_document.assert_not_awaited()
+
+    result = await adapter.send_image('chat', url, caption='image')
+    assert result.success
+    adapter.send.assert_awaited_once_with(chat_id='chat', content='image\n' + url, reply_to=None, metadata=None)
 
 
 @pytest.mark.asyncio
