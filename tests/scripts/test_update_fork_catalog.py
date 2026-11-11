@@ -174,6 +174,40 @@ class CatalogTests(unittest.TestCase):
             batches = updater.split_paths(root, base, head, ["first.txt", "second.txt"])
             self.assertEqual(batches, [["first.txt"], ["second.txt"]])
 
+    def test_eval_result_dumps_stay_out_of_catalog_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = lambda *args: subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            run("init", "-q", "-b", "dev")
+            run("config", "user.name", "Test")
+            run("config", "user.email", "test@example.invalid")
+            path = root / "FORK_FEATURES.md"
+            path.write_text("# Catalog\n| F01 | old |\n")
+            run("add", ".")
+            run("commit", "-qm", "baseline")
+            base = run("rev-parse", "HEAD")
+            path.write_text(updater.set_checkpoint(path.read_text(), base))
+            run("add", ".")
+            run("commit", "-qm", "checkpoint")
+            results = root / "evals" / "schema_dedupe" / "results" / "2026-11-09" / "cells.jsonl"
+            results.parent.mkdir(parents=True)
+            results.write_text('{"cell": "' + "x" * 300_000 + '"}\n')
+            (root / "evals" / "schema_dedupe" / "worker.py").write_text("value = 1\n")
+            run("add", ".")
+            run("commit", "-qm", "eval run")
+            with patch.object(updater, "request_edits", return_value={
+                    "edits": [{"old": "| F01 | old |", "new": "| F01 | reviewed |"}]}) as request:
+                self.assertTrue(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(request.call_args.args[-1]["changed_paths"], "evals/schema_dedupe/worker.py")
+
+            results.write_text('{"cell": "' + "y" * 300_000 + '"}\n')
+            run("add", ".")
+            run("commit", "-qm", "another eval run")
+            with patch.object(updater, "request_edits") as request:
+                self.assertFalse(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
+                request.assert_not_called()
+
     def test_batched_update_is_atomic_when_a_later_batch_fails(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -209,6 +209,14 @@ def split_paths(root, base, head, paths):
     return split(paths)
 
 
+def reviewable(path):
+    """Changed paths the catalog reviews: fork source, not generated output.
+
+    ``evals/*/results/`` holds run artifacts the eval harness commits; one such dump crossed the
+    single-path evidence limit and stalled the whole catalog update."""
+    return path != "FORK_FEATURES.md" and not (path.startswith("evals/") and "/results/" in path)
+
+
 def evidence_for(root, source, base, head, paths):
     commits, diff, path_chars = _evidence_sizes(root, base, head, paths)
     if len(commits) > MAX_COMMITS_CHARS or len(diff) > MAX_DIFF_CHARS or path_chars > MAX_PATH_CHARS:
@@ -250,7 +258,7 @@ def update(root, key, base_url, model):
     base, head = checkpoint(source), git(root, "rev-parse", "HEAD")
     git(root, "merge-base", "--is-ancestor", base, head)
     paths = [path for path in git(root, "diff", "--name-only", "--no-renames", base, head, "--", ".").splitlines()
-             if path != "FORK_FEATURES.md"]
+             if reviewable(path)]
     if not paths:
         print("No unreviewed changes outside the catalog")
         return False
