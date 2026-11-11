@@ -114,13 +114,17 @@ def parse_response(response, model):
         raise ValueError("endpoint returned a different model")
     choices = response.get("choices", [])
     if len(choices) != 1 or choices[0].get("finish_reason") != "stop":
-        raise ValueError("model response was incomplete")
+        raise IncompleteModelResponse("model response was incomplete")
     return json.loads(choices[0]["message"]["content"])
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class IncompleteModelResponse(ValueError):
+    pass
 
 
 def request_edits(key, base_url, model, evidence):
@@ -217,6 +221,20 @@ def evidence_for(root, source, base, head, paths):
             "source_samples": blobs, "merged_prs": pull_requests(root, {line.split()[0] for line in commits.splitlines()})}
 
 
+def review_batch(root, key, base_url, model, source, base, head, paths):
+    try:
+        evidence = evidence_for(root, source, base, head, paths)
+        edits = request_edits(key, base_url, model, evidence)
+        return apply_edits(source, edits), [len(edits["edits"])]
+    except IncompleteModelResponse:
+        if len(paths) == 1:
+            raise
+        midpoint = len(paths) // 2
+        left, left_counts = review_batch(root, key, base_url, model, source, base, head, paths[:midpoint])
+        right, right_counts = review_batch(root, key, base_url, model, left, base, head, paths[midpoint:])
+        return right, left_counts + right_counts
+
+
 def update(root, key, base_url, model):
     path = root / "FORK_FEATURES.md"
     if path.is_symlink():
@@ -234,10 +252,9 @@ def update(root, key, base_url, model):
     candidates = []
     batches = split_paths(root, base, head, paths)
     for batch in batches:
-        evidence = evidence_for(root, source, base, head, batch)
-        edits = request_edits(key, base_url, model, evidence)
-        source = apply_edits(source, edits)
-        candidates.append(len(edits["edits"]))
+        reviewed, counts = review_batch(root, key, base_url, model, source, base, head, batch)
+        source = reviewed
+        candidates.extend(counts)
     candidate = set_checkpoint(source, head)
     if checkpoint(candidate) != head:
         raise ValueError("candidate checkpoint does not match reviewed head")
