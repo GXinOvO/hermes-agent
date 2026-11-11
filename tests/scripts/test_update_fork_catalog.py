@@ -72,6 +72,26 @@ class CatalogTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 updater.parse_response(bad, "deepseek-v4.1-flash")
 
+    def test_incomplete_model_response_is_retryable(self):
+        response = {"model": "deepseek-v4.1-flash", "choices": [{"finish_reason": "length", "message": {"content": "{}"}}]}
+        with self.assertRaises(updater.IncompleteModelResponse):
+            updater.parse_response(response, "deepseek-v4.1-flash")
+
+    def test_incomplete_batch_is_split_and_retried(self):
+        source = "# Catalog\n| F01 | old |\n"
+        responses = iter([
+            updater.IncompleteModelResponse("model response was incomplete"),
+            {"edits": [{"old": "| F01 | old |", "new": "| F01 | left |"}]},
+            {"edits": []},
+        ])
+        with patch.object(updater, "evidence_for", return_value={"catalog": source}), patch.object(
+            updater, "request_edits", side_effect=responses
+        ) as request:
+            reviewed, counts = updater.review_batch(Path("."), "unused", "http://localhost/v1", "deepseek-v4.1-flash", source, "a" * 40, "b" * 40, ["left.py", "right.py"])
+        self.assertEqual(reviewed, "# Catalog\n| F01 | left |\n")
+        self.assertEqual(counts, [1, 0])
+        self.assertEqual(request.call_count, 3)
+
     def test_updater_checkpoint_recovers_missed_push_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
