@@ -77,10 +77,29 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(updater.IncompleteModelResponse):
             updater.parse_response(response, "deepseek-v4.1-flash")
 
+    def test_model_edit_mismatch_is_retryable(self):
+        with self.assertRaises(updater.ModelEditMismatch):
+            updater.apply_edits("# Catalog\n", {"edits": [{"old": "missing", "new": "wrong"}]})
+
     def test_incomplete_batch_is_split_and_retried(self):
         source = "# Catalog\n| F01 | old |\n"
         responses = iter([
             updater.IncompleteModelResponse("model response was incomplete"),
+            {"edits": [{"old": "| F01 | old |", "new": "| F01 | left |"}]},
+            {"edits": []},
+        ])
+        with patch.object(updater, "evidence_for", return_value={"catalog": source}), patch.object(
+            updater, "request_edits", side_effect=responses
+        ) as request:
+            reviewed, counts = updater.review_batch(Path("."), "unused", "http://localhost/v1", "deepseek-v4.1-flash", source, "a" * 40, "b" * 40, ["left.py", "right.py"])
+        self.assertEqual(reviewed, "# Catalog\n| F01 | left |\n")
+        self.assertEqual(counts, [1, 0])
+        self.assertEqual(request.call_count, 3)
+
+    def test_mismatched_batch_is_split_and_retried(self):
+        source = "# Catalog\n| F01 | old |\n"
+        responses = iter([
+            {"edits": [{"old": "missing", "new": "wrong"}]},
             {"edits": [{"old": "| F01 | old |", "new": "| F01 | left |"}]},
             {"edits": []},
         ])
