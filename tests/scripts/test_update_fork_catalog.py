@@ -51,6 +51,13 @@ class CatalogTests(unittest.TestCase):
             updater.set_checkpoint(source + marker, "c" * 40)
         self.assertEqual(updater.checkpoint(updater.set_checkpoint(source, "c" * 40)), "c" * 40)
 
+    def test_model_catalog_redacts_checkpoint_identity(self):
+        sha = "a" * 40
+        source = "# Catalog\n| F01 | old |\n" + updater.set_checkpoint("", sha)
+        model_catalog = updater.catalog_for_model(source)
+        self.assertNotIn("last-reviewed", model_catalog)
+        self.assertNotIn(sha, model_catalog)
+
     def test_response_requires_exact_model_and_complete_json(self):
         response = {"model": "deepseek-v4.1-flash", "choices": [{"finish_reason": "stop", "message": {"content": '{"edits": []}'}}]}
         self.assertEqual(updater.parse_response(response, "deepseek-v4.1-flash"), {"edits": []})
@@ -94,6 +101,7 @@ class CatalogTests(unittest.TestCase):
                 evidence = call.call_args.args[-1]
                 self.assertIn("feature 0", evidence["commits"])
                 self.assertIn("feature 1", evidence["commits"])
+                self.assertNotIn("fork-catalog:last-reviewed", evidence["catalog"])
             head = run("rev-parse", "HEAD")
             self.assertEqual(updater.checkpoint(path.read_text()), head)
             run("add", ".")
