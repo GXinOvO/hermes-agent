@@ -30,21 +30,24 @@ _parallel_call_id: ContextVar[str] = ContextVar("ptc_parallel_call_id", default=
 
 def _default_dispatch(task_id):
     from model_tools import handle_function_call
+    from tools.file_tools_read_tracking import programmatic_file_read
+
     def dispatch(tool_name, tool_args):
-        if call_id := _parallel_call_id.get():
-            from tools.approval_context import (get_current_observability_context,
-                                                reset_current_observability_context,
-                                                set_current_observability_context)
-            scope = get_current_observability_context()
-            scope["tool_call_id"] = call_id
-            tokens = set_current_observability_context(**scope)
-            try:
-                return handle_function_call(tool_name, tool_args, task_id=task_id,
-                                            tool_call_id=call_id, turn_id=scope["turn_id"],
-                                            session_id=scope["session_id"])
-            finally:
-                reset_current_observability_context(tokens)
-        return handle_function_call(tool_name, tool_args, task_id=task_id)
+        with programmatic_file_read():
+            if call_id := _parallel_call_id.get():
+                from tools.approval_context import (get_current_observability_context,
+                                                    reset_current_observability_context,
+                                                    set_current_observability_context)
+                scope = get_current_observability_context()
+                scope["tool_call_id"] = call_id
+                tokens = set_current_observability_context(**scope)
+                try:
+                    return handle_function_call(tool_name, tool_args, task_id=task_id,
+                                                tool_call_id=call_id, turn_id=scope["turn_id"],
+                                                session_id=scope["session_id"])
+                finally:
+                    reset_current_observability_context(tokens)
+            return handle_function_call(tool_name, tool_args, task_id=task_id)
     return dispatch
 
 

@@ -38,9 +38,9 @@ from tools.file_tools_write_guards import (
     _is_internal_file_tool_content, _stale_overwrite_blocker, _stale_write_refusal)
 from tools.file_tools_read_tracking import (
     _bump_consecutive, _cap_read_tracker_data, _carry_full_write_baselines, _check_file_staleness,
-    _check_not_found_cache, _known_full_content_sha256,
+    _check_not_found_cache, _dedup_lookup, _known_full_content_sha256,
     _file_metadata, _file_version,
-    _mark_full_write_baseline, _mark_verification_stale, _note_read_coverage, _patch_failure_lock,
+    _mark_full_write_baseline, _mark_verification_stale, _note_read_coverage, _note_read_served, _patch_failure_lock,
     _patch_failure_tracker, _read_tracker, _read_tracker_lock, _record_not_found,
     _record_patch_failure, _reset_patch_failures, _task_data, _update_read_timestamp)
 
@@ -563,16 +563,14 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
         if (task_data.get('io_revision', 0) != revision or task_data.get('backend_binding') != binding
                 or _read_tracker.get(task_id) is not task_data):
             return 0
-        task_data["dedup_hits"].pop(dedup_key, None)
-        task_data["dedup_generation_reads"].add(dedup_key)
+        count, dedup = _note_read_served(task_data, dedup_key, path, offset, limit)
         task_data["read_history"].add((path, offset, limit))
-        count = _bump_consecutive(task_data, ("read", path, offset, limit))
         if _mtime_now is not None:
             task_data.setdefault("read_timestamps", {})[resolved_str] = _mtime_now
         task_data.setdefault('storage_paths', {})[resolved_str] = key
         baselines = task_data["full_write_baselines"]
         if stable and version is not None and count < 4:
-            task_data["dedup"][dedup_key] = version_before
+            dedup[dedup_key] = version_before
             # A narrower view does not undo knowledge of these same bytes. Do
             # not revive a baseline after a partial read of a different version.
             complete = baselines.get(resolved_str) == version
@@ -683,13 +681,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         # Dedup: identical (path, offset, limit) on an unchanged file returns a
         # lightweight stub instead of re-sending the content.
         dedup_key = (resolved_str, offset, limit)
-        with _read_tracker_lock:
-            task_data = _task_data(task_id)
-            cached_version = task_data["dedup"].get(dedup_key)
-            # First unchanged read after a compaction boundary serves full content
-            # (the summary may have dropped exact bytes); later ones get the stub.
-            content_served_in_generation = dedup_key in task_data["dedup_generation_reads"]
-            read_revision = task_data.get('io_revision', 0)
+        task_data, cached_version, content_served_in_generation, read_revision = _dedup_lookup(task_id, dedup_key)
         # Same rule as skill_view: the review fork shares the parent's task_id and its
         # read-before-write guard needs a real read, which the stub path never records (#95976).
         file_ops = _get_file_ops(task_id)

@@ -13,6 +13,36 @@ from tools.file_operations import ShellFileOperations
 remote_project = backend_fixtures.remote_project
 
 
+def test_revocation_during_read_lookup_requires_another_read(remote_project, monkeypatch):
+    project, environment, task = remote_project
+    path = '/workspace/lookup-revocation.txt'
+    target = project / 'lookup-revocation.txt'
+    target.write_text('original\n', encoding='utf-8')
+    lookup = ft._dedup_lookup
+    triggered = []
+
+    def revoke_during_lookup(*args, **kwargs):
+        result = lookup(*args, **kwargs)
+        io.revoke_backend_reads(environment)
+        with io.backend_io_scope(task):
+            pass
+        triggered.append(True)
+        return result
+
+    monkeypatch.setattr(ft, '_dedup_lookup', revoke_during_lookup)
+    stale_read = json.loads(ft.read_file_tool(path, task_id=task))
+    monkeypatch.setattr(ft, '_dedup_lookup', lookup)
+    refused = json.loads(ft.write_file_tool(path, 'stale write\n', task_id=task))
+    assert triggered == [True]
+    assert 'content' in stale_read
+    assert refused.get('error') and not refused.get('verified'), refused
+    assert target.read_text(encoding='utf-8') == 'original\n'
+    assert 'content' in json.loads(ft.read_file_tool(path, task_id=task))
+    recovered = json.loads(ft.write_file_tool(path, 'fresh write\n', task_id=task))
+    assert recovered.get('verified'), recovered
+    assert target.read_text(encoding='utf-8') == 'fresh write\n'
+
+
 def test_midcall_remote_generation_loss_requires_new_read(remote_project):
     project, environment, task = remote_project
     path = '/workspace/revocation.txt'
