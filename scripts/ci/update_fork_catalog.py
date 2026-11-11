@@ -22,6 +22,7 @@ PROMPT = """维护 GXinOvO/hermes-agent 的 FORK_FEATURES.md，使用简洁中�
 测试文件存在不代表通过，工作流成功不代表产品验收通过。信息不足就写待核对。
 证据标为 TRUNCATED 时不能声称完整覆盖，保留遗漏风险和精确提交链接。
 只编辑需要变化的条目和追溯信息，不改历史盘点范围，不改 HTML 处理位置标记。
+输入中不包含隐藏检查点；不要创建或编辑检查点。
 """
 
 
@@ -53,6 +54,12 @@ def set_checkpoint(text, sha):
     if matches:
         return MARKER.sub(marker, text)
     return text.rstrip() + "\n\n" + marker + "\n"
+
+
+def catalog_for_model(text):
+    if MARKER.findall(text) != [checkpoint(text)]:
+        raise ValueError("catalog needs exactly one last-reviewed checkpoint")
+    return MARKER.sub("", text)
 
 
 def apply_edits(source, response):
@@ -204,7 +211,7 @@ def evidence_for(root, source, base, head, paths):
             continue
         if candidate.stat().st_size <= 60_000:
             blobs.append({"path": path, "source": bounded(candidate.read_text(encoding="utf-8-sig", errors="replace"), 6000)})
-    return {"catalog": source, "reviewed_base": base, "target": head,
+    return {"catalog": catalog_for_model(source), "reviewed_base": base, "target": head,
             "commit_url_prefix": "https://github.com/GXinOvO/hermes-agent/commit/",
             "commits": commits, "changed_paths": "\n".join(paths), "diff": diff,
             "source_samples": blobs, "merged_prs": pull_requests(root, {line.split()[0] for line in commits.splitlines()})}
