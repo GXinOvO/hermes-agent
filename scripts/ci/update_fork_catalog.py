@@ -74,11 +74,14 @@ def apply_edits(source, response):
             raise ValueError("each edit needs old and new")
         old, new = edit["old"], edit["new"]
         if not isinstance(old, str) or not isinstance(new, str) or not old or result.count(old) != 1:
-            raise ValueError("edit must match one exact nonempty source span")
+            raise ModelEditMismatch("edit must match one exact nonempty source span")
         if "fork-catalog:last-reviewed" in old + new:
-            raise ValueError("model cannot edit the checkpoint")
+            raise ModelEditMismatch("model cannot edit the checkpoint")
         result = result.replace(old, new, 1)
-    validate_preservation(source, result)
+    try:
+        validate_preservation(source, result)
+    except ValueError as exc:
+        raise ModelEditMismatch(str(exc)) from exc
     return result
 
 
@@ -124,6 +127,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class IncompleteModelResponse(ValueError):
+    pass
+
+
+class ModelEditMismatch(ValueError):
     pass
 
 
@@ -226,7 +233,7 @@ def review_batch(root, key, base_url, model, source, base, head, paths):
         evidence = evidence_for(root, source, base, head, paths)
         edits = request_edits(key, base_url, model, evidence)
         return apply_edits(source, edits), [len(edits["edits"])]
-    except IncompleteModelResponse:
+    except (IncompleteModelResponse, ModelEditMismatch):
         if len(paths) == 1:
             raise
         midpoint = len(paths) // 2
