@@ -45,10 +45,18 @@ class _InlineThread:
             self._target()
 
 @pytest.fixture
-def fake_session():
+def fake_session(tmp_path, monkeypatch):
     """A minimal session carrying a non-default ``profile_home``."""
+    profile_home = tmp_path / "profiles" / "work"
+    profile_home.mkdir(parents=True)
+    monkeypatch.setattr(__import__(__name__, fromlist=["PROFILE_HOME"]), "PROFILE_HOME", str(profile_home))
     agent = MagicMock()
-    return {"agent": agent, "session_key": "sess_k", "profile_home": PROFILE_HOME}
+    for name in ("model", "provider", "base_url", "api_key", "api_mode", "acp_command", "acp_args",
+                 "reasoning_config", "service_tier", "enabled_toolsets", "disabled_toolsets",
+                 "request_overrides", "_fallback_chain", "_session_db"):
+        setattr(agent, name, None)
+    agent.session_id = "sess_k"
+    return {"agent": agent, "session_key": "sess_k", "profile_home": str(profile_home)}
 
 @pytest.fixture
 def override_calls():
@@ -68,7 +76,7 @@ def override_calls():
 
     agent_instance.run_conversation.side_effect = _run_conversation
 
-    with patch("tui_gateway.server.threading.Thread", _InlineThread), \
+    with patch("tui_gateway.server._start_session_work", side_effect=lambda target, **kwargs: target() or object()), \
         patch("tui_gateway.server._background_agent_kwargs", return_value={}), \
         patch("tui_gateway.server._ephemeral_preview_agent_kwargs", return_value={}), \
         patch("tui_gateway.server._preview_restart_callbacks", return_value={}), \

@@ -355,12 +355,13 @@ def _listener_api_server_extra(listener_home: Path) -> dict:
     try:
         # Profile-scoped read through the CANONICAL loader (managed-scope overlay, ${ENV_VAR}
         # expansion) — never a raw yaml.safe_load (tests/hermes_cli/test_config_read_guard.py).
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-        token = set_hermes_home_override(str(listener_home))
+        from agent.runtime_scope import legacy_switch
+        from hermes_scope import push_state
+        token = legacy_switch(listener_home) or push_state(home=str(listener_home))
         try:
             profile_cfg = load_config()
         finally:
-            reset_hermes_home_override(token)
+            token.reset()
         extra = cfg_get(profile_cfg, "platforms", "api_server", "extra", default=None)
         return extra if isinstance(extra, dict) else {}
     except Exception:  # health: allow BLE001 -- moved from _gateway_fire_endpoint; unreadable config falls back to env

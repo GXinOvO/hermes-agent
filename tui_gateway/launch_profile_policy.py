@@ -209,6 +209,27 @@ def launch_profile_runtime_scope(launch_home: str | Path) -> Iterator[None]:
 
 
 @contextlib.contextmanager
+def _single_profile_launch_config_scope(launch: Path) -> Iterator[None]:
+    """The launch body's state on a SINGLE-profile host: no scope, no home override, the launch
+    secret scope unstamped, no terminal policy (the host's own ``TERMINAL_*`` env is its policy,
+    byte-identical to before multiplexing).
+
+    The three pieces still go in as ONE change, so an enclosing secondary's home cannot outlive its
+    terminal. When a scope is bound instead, the pieces may not be pushed apart from it (that state
+    is a mixed profile) — the launch profile is bound whole, and a hosted scope refuses, as it did.
+    """
+    from agent.runtime_scope import bind_profile_scope
+    from hermes_scope import BoundSecrets, current_scope, push_state
+
+    if current_scope() is not None:
+        with bind_profile_scope(launch, hydrate_secrets=False):
+            yield
+        return
+    with push_state(home=None, secrets=BoundSecrets(launch_secret_scope(launch), None), terminal=None):
+        yield
+
+
+@contextlib.contextmanager
 def profile_config_scope(home: str | Path, *, launch_home: str | Path | None = None) -> Iterator[None]:
     """Bind *home*'s home + secret + terminal scope for a body that reads and writes its config.
 
@@ -216,29 +237,24 @@ def profile_config_scope(home: str | Path, *, launch_home: str | Path | None = N
     scope with no home override or terminal scope (an enclosing secondary's are unbound for the
     body), or the full :func:`launch_profile_runtime_scope` once the process multiplexes. Any other
     home gets only its own files, stamped as foreign. No external-source hydration.
+
+    Each branch installs its pieces as ONE change (HX016): a foreign home binds its whole profile,
+    which is the home override, the stamped files-only secret scope and the prepared terminal policy
+    the legacy setters installed — and the scope they left unbound. The single-profile launch body
+    keeps the no-scope state a single-profile host has always had.
     """
-    from agent.secret_scope import build_profile_secret_scope, is_multiplex_active, reset_secret_scope, set_secret_scope
-    from hermes_constants import get_process_hermes_home, reset_hermes_home_override, set_hermes_home_override
-    from tools.terminal_scope import install_profile_terminal_scope, reset_terminal_scope, set_terminal_scope
+    from agent.runtime_scope import bind_profile_scope
+    from agent.secret_scope import is_multiplex_active
+    from hermes_constants import get_process_hermes_home
 
     home = Path(home)
     launch = Path(launch_home if launch_home is not None else get_process_hermes_home())
-    with contextlib.ExitStack() as stack:
-        if home.resolve() == launch.resolve():
-            if is_multiplex_active():
-                stack.enter_context(launch_profile_runtime_scope(launch))
-            else:
-                # Unbind an enclosing secondary's home and terminal, or the launch secrets would
-                # pair with that profile's config. Unset resolves to the process home, which is the
-                # launch home for every caller (``launch_home`` defaults to it; the RPC passes it).
-                stack.callback(reset_hermes_home_override, set_hermes_home_override(None))
-                stack.callback(reset_secret_scope, set_secret_scope(launch_secret_scope(launch)))
-                stack.callback(reset_terminal_scope, set_terminal_scope(None))
-        else:
-            secrets = build_profile_secret_scope(home)
-            stack.callback(reset_hermes_home_override, set_hermes_home_override(str(home)))
-            stack.callback(reset_secret_scope, set_secret_scope(secrets, profile_home=str(home)))
-            stack.callback(reset_terminal_scope, install_profile_terminal_scope(home))
+    if home.resolve() == launch.resolve():
+        scope = (launch_profile_runtime_scope(launch) if is_multiplex_active()
+                 else _single_profile_launch_config_scope(launch))
+    else:
+        scope = bind_profile_scope(home, hydrate_secrets=False)
+    with scope:
         yield
 
 

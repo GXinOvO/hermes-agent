@@ -567,3 +567,76 @@ def test_the_listener_port_is_the_one_the_gateway_binds(tmp_path, monkeypatch, e
         "platforms": {"api_server": {"extra": {"port": 8650, "key": "config-key-0123456789abcdef"}}}})
     monkeypatch.setattr(_web_server_cron, "_cron_default_profile", lambda: "default")
     assert _web_server_cron._gateway_api_target("default", tmp_path)[0] == expected
+
+
+def test_a_listener_config_read_moves_only_the_home(tmp_path, monkeypatch):
+    """``platforms.api_server.extra`` is read under the LISTENER profile's home and nothing else.
+
+    The caller's home, secret scope and terminal policy come back untouched: binding the listener's
+    secret scope here would resolve its ``${ENV_VAR}`` refs from another profile's mapping and
+    hydrate its external sources, and a terminal policy is not part of reading one dict."""
+    from agent.runtime_scope import bind_profile_scope
+    from agent.secret_scope import current_secret_scope, current_secret_scope_home
+    from hermes_scope import current_scope
+    from tools.terminal_scope import get_terminal_scope
+
+    root = tmp_path / "root"
+    worker = root / "profiles" / "worker_alpha"
+    worker.mkdir(parents=True)
+    (root / "config.yaml").write_text(
+        "platforms:\n  api_server:\n    extra:\n      port: 8650\n", encoding="utf-8")
+    (worker / "config.yaml").write_text(
+        "platforms:\n  api_server:\n    extra:\n      port: 8700\n      key: worker-config-key\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(root))
+
+    with bind_profile_scope(root):
+        home_before, secrets_before = get_hermes_home(), current_secret_scope()
+        secret_home_before, terminal_before = current_secret_scope_home(), get_terminal_scope()
+        scope_before = current_scope()
+        assert _web_server_cron._listener_api_server_extra(worker) == {
+            "port": 8700, "key": "worker-config-key"}
+        assert get_hermes_home() == home_before == root
+        assert current_secret_scope() is secrets_before
+        assert current_secret_scope_home() == secret_home_before
+        assert get_terminal_scope() is terminal_before
+        assert current_scope() is scope_before and scope_before is not None
+        assert scope_before.agent == str(root)
+
+
+def test_listener_read_binds_the_target_profiles_secrets(tmp_path, monkeypatch):
+    from agent.runtime_scope import bind_profile_scope
+    from agent.secret_scope import get_secret
+    from hermes_scope import current_scope
+
+    root = tmp_path / 'root'
+    worker = root / 'profiles' / 'worker'
+    worker.mkdir(parents=True)
+    (root / '.env').write_text('PROFILE_TEST_KEY=root-value\n')
+    (worker / '.env').write_text('PROFILE_TEST_KEY=worker-value\n')
+    monkeypatch.setenv('HERMES_HOME', str(root))
+    observed = []
+
+    def load():
+        observed.append((get_hermes_home(), current_scope().agent, get_secret('PROFILE_TEST_KEY')))
+        return {'platforms': {'api_server': {'extra': {'port': 8700}}}}
+
+    monkeypatch.setattr(_cfg_mod, 'load_config', load)
+    with bind_profile_scope(root, hydrate_secrets=False):
+        assert _web_server_cron._listener_api_server_extra(worker) == {'port': 8700}
+        assert observed == [(worker, str(worker), 'worker-value')]
+        assert get_hermes_home() == root
+        assert current_scope().agent == str(root)
+        assert get_secret('PROFILE_TEST_KEY') == 'root-value'
+
+
+def test_hosted_listener_read_does_not_access_local_profile(tmp_path, monkeypatch):
+    from agent.runtime_scope import bind_state
+    from hermes_scope import Principal, Scope, current_scope
+
+    hosted = Scope('tenant', 'agent', Principal('user'), owner=Principal('user'), can_administer=True)
+    observed = []
+    monkeypatch.setattr(_cfg_mod, 'load_config', lambda: observed.append(get_hermes_home()) or {})
+    with bind_state(hosted):
+        assert _web_server_cron._listener_api_server_extra(tmp_path) == {}
+        assert observed == []
+        assert current_scope() == hosted
