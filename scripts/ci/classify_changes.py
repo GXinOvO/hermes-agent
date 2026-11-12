@@ -231,6 +231,7 @@ _REMOTE_BACKEND_PATHS = (
     "tools/terminal_tool",
     "tests/tools/test_ssh_environment.py",
     "tests/tools/test_docker_backend_real.py",
+    "tests/tools/test_docker_backend_no_python.py",
     "scripts/ci/start_test_sshd.sh",
     "scripts/ci/test_sshd_container_setup.sh",
     "scripts/run_tests.sh",

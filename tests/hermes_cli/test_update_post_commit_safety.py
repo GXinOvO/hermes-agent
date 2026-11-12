@@ -141,6 +141,7 @@ _CHILD = textwrap.dedent('''
     (cell / "summary.json").write_text(json.dumps({
         "code": code, "outcome": latest.get("outcome"), "update_id": receipt["update_id"], "result": result,
         "followups": [row["step"] for row in latest.get("followups", [])],
+        "state_db_checks": latest.get("state_db_checks", []),
         "stages": {mark["name"]: mark["outcome"] for mark in latest.get("stages", [])},
         "config_version": yaml.safe_load((home / "config.yaml").read_text())["_config_version"],
         "latest_config_version": DEFAULT_CONFIG["_config_version"],
@@ -192,13 +193,15 @@ def test_unsafe_sqlite_runtime_keeps_exit_zero_but_vetoes_topology_migration(tmp
     # Committed code: success and exit 0 either way.
     assert summary["code"] == 0, summary["output"]
     assert summary["outcome"] == "success"
+    assert len(summary["state_db_checks"]) == 2
+    assert all(check["status"] == "missing" for check in summary["state_db_checks"])
     if safe:
-        assert summary["followups"] == []
+        assert summary["followups"] == ["state_db_check", "state_db_check"]
         assert summary["migration_entered"] is True
     else:
         # The unsafe runtime is a visible, owed step — and it must still veto the migration.
         assert f"SQLite ({sqlite})" in summary["output"]
-        assert summary["followups"] == ["sqlite_runtime"]
+        assert summary["followups"] == ["state_db_check", "state_db_check", "sqlite_runtime"]
         assert summary["migration_entered"] is False
 
 
@@ -208,11 +211,12 @@ def test_config_format_write_failure_is_owed_not_reported_complete(tmp_path):
     summary = _run_completion(tmp_path, "config-ro")
     assert summary["code"] == 0, summary["output"]
     assert summary["config_version"] == summary["latest_config_version"] - 1
-    # The receipt names the debt, the tail stays pending and nothing stamps the tree as done.
-    assert summary["followups"] == ["config_migration"]
+    # The missing databases and config failure are separate, explicit debts.
+    assert [check["status"] for check in summary["state_db_checks"]] == ["missing", "missing"]
+    assert summary["followups"] == ["state_db_check", "state_db_check", "config_migration"]
     assert summary["pending"] is True
     assert summary["stamp"] is False
-    # C3: the receipt names what actually failed. The build succeeded; only the config is owed.
+    # C3: the receipt names what actually failed. The build succeeded; config remains owed.
     assert summary["stages"].get("build") == "success", summary["stages"]
 
 
@@ -222,7 +226,8 @@ def test_profile_sync_followup_keeps_the_tail_owed(tmp_path):
     summary = _run_completion(tmp_path, "profile-sync")
     assert summary["code"] == 0, summary["output"]
     assert summary["outcome"] == "success"
-    assert summary["followups"] == ["profile_sync"]
+    assert [check["status"] for check in summary["state_db_checks"]] == ["missing", "missing"]
+    assert summary["followups"] == ["state_db_check", "state_db_check", "profile_sync"]
     # A profile sync that did not finish is tail work: retried by the next launch, never stamped done.
     assert summary["pending"] is True
     assert summary["stamp"] is False

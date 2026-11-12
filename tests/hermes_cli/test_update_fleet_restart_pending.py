@@ -489,7 +489,9 @@ def test_clean_update_escalates_surviving_serve_as_unaccounted(
     receipt = json.loads(latest.read_text(encoding="utf-8"))
     # (3) was "partial": a success that names the owed restart.
     assert receipt["outcome"] == "success"
-    assert [f["step"] for f in receipt["followups"]] == ["gateway_restart"]
+    assert [(check["profile"], check["status"]) for check in receipt["state_db_checks"]] == [
+        ("default home", "missing")]
+    assert [f["step"] for f in receipt["followups"]] == ["state_db_check", "gateway_restart"]
     from hermes_cli import update_cmd_fleet
     assert update_cmd_fleet._fleet_restart_obligation_armed()
     # (2) the reconciliation verdict is unchanged.
