@@ -462,13 +462,13 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
 
               return (
                 <button
-                  aria-label={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   aria-selected={index === selected}
                   className={cn(
                     'flex h-6 w-full items-center gap-2 px-2.5 ps-7 text-left text-xs text-(--ui-text-tertiary)',
                     'hover:bg-(--ui-row-hover-background) hover:text-(--ui-text-primary)',
                     index === selected && 'bg-(--ui-row-active-background) text-(--ui-text-primary)'
                   )}
+                  data-file-search-hit={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   key={key}
                   onClick={() => {
                     setSelected(index)

@@ -182,7 +182,7 @@ describe('FileSearchPanel', () => {
     await screen.findByText(/2 results in 2 files/)
 
     const row = window.document.querySelector<HTMLButtonElement>(
-      '[data-file-search-results] button[title="src/deep/app.py:2"]'
+      '[data-file-search-results] button[data-file-search-hit="src/deep/app.py:2"]'
     )!
 
     expect(row).toBeTruthy()
@@ -231,7 +231,7 @@ describe('FileSearchPanel', () => {
     await screen.findByText(/2 results in 2 files/)
 
     const row = window.document.querySelector<HTMLButtonElement>(
-      '[data-file-search-results] button[title="src/deep/view.ts:1"]'
+      '[data-file-search-results] button[data-file-search-hit="src/deep/view.ts:1"]'
     )!
 
     fireEvent.click(row)
