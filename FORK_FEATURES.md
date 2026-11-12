@@ -13,7 +13,7 @@
 | F01 | 文件树彩色类型图标 | 按文件类型和常见文件名区分图标，更容易扫读目录 | Desktop → Files；已合入 |
 | F02 | 鼠标跟随会话焦点开关 | 经过其他会话去 Files 时，可以选择不切走当前会话 | 设置 → 外观 → 鼠标经过时自动切换会话；默认开启，可关闭；已合入 |
 | F03 | 文件名与内容搜索、结果跳转 | 在当前项目或子目录搜文件／正文，逐步显示结果并跳到匹配行列 | Files 顶部搜索按钮；支持大小写、正则、范围；已合入 |
-| F04 | 会话任务概览面板 | 同时看原始目标、当前要求、todo、剩余事项及验收证据 | `task-overview` 插件；需后端和 Desktop 两端加载 |
+| F04 | 会话任务概览与独立事项面板 | 同时看原始目标、当前要求、todo、剩余事项及验收证据；另可建不依赖会话的事项，记名称、说明、备注、下一步、手动状态与优先级，并搜索、筛选、排序 | `task-overview` 插件；需后端和 Desktop 两端加载；事项在 Desktop 面板维护 |
 | F05 | 子 Agent 交付检查与结果找回 | 核对真实产物，复用有效验证证据；错过回调后读取原结果 | `delegate_task(action="result", delegation_id=...)`；结构化交付按需用检查脚本；已合入 |
 | F06 | 后台通知降噪与未完成工作提示 | 已消费的心跳和子任务内部进程退出不反复打断主任务；子任务未做完仍保留进展并提示 | 后台进程／委派自动路径；已合入 |
 | F07 | `execute_code` 显式只读并行批次 | 一次组织多个独立文件读取、搜索或网页读取，保留预算、取消和调用身份 | 本地 transport 的 `hermes_tools.parallel`；需 Agent 显式使用；已合入 |
@@ -32,7 +32,7 @@
 ## 使用时需要记住的边界
 
 - **F03 文件搜索：** 搜索绑定发起时的连接、profile、会话和目录；宿主侧执行有界搜索，支持取消。达到范围、数量或预览上限时会显示不完整，不能把返回片段当成全项目搜尽。
-- **F04 任务概览：** 读取持久化会话和原生 todo，展示实现、测试、审查、集成、启用五个阶段；缺少证据显示未验证。Agent 注册的状态不等于独立验收，插件也不会自动替你关闭任务。安装和两端加载方式见[插件说明](plugins/task-overview/README.md)。
+- **F04 任务概览：** 读取持久化会话和原生 todo，展示实现、测试、审查、集成、启用五个阶段；缺少证据显示未验证。Agent 注册的状态不等于独立验收，插件也不会自动替你关闭任务。安装和两端加载方式见[插件说明](plugins/task-overview/README.md)。事项面板与原生概览相互独立：状态只由本人手动修改，标为完成必须写验收说明，会话空闲、回合结束或绑定会话都不改状态；本版本将会话来源保存为未核实线索，保留事项但禁用面板内跳转。连接标签和会话库标识都不能单独证明来源；同标签后端替换或库副本可能复用它们。
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
 - **F07 并行：** 只开放 `read_file`、`search_files`、`web_search`、`web_extract`，一次最多 16 项、最多 4 个工作线程，结果按输入顺序返回；写入和终端命令不在该并行入口内。格式是 `parallel([{"tool": "read_file", "args": {"path": "..."}}, ...])`，只适用于本地 transport；取消返回时，已开始的读取可能仍在收尾。
 - **F08 工具白名单：** 名称必须是父 Agent 已有且当前启用的精确原生／MCP 工具名；不接收别名和通配符。受限子 Agent 的工具名修复保持 fail-closed，不会把未授权近似名自动改名到允许工具；无限制会话仍保留自动修复路径。限制覆盖工具发现、调用和恢复；显式限制不支持的外部 Agent 路由会被拒绝。它限制 Hermes 工具调用，不代表任意代码的文件系统、网络或凭据隔离，详见[委派说明](website/docs/user-guide/features/delegation.md)。
@@ -56,7 +56,7 @@
 | F01 | [PR #3](https://github.com/GXinOvO/hermes-agent/pull/3)、[#4](https://github.com/GXinOvO/hermes-agent/pull/4) | [文件图标](apps/desktop/src/app/right-sidebar/files/file-icon.tsx) · [测试](apps/desktop/src/app/right-sidebar/files/file-icon.test.tsx) |
 | F02 | [PR #2](https://github.com/GXinOvO/hermes-agent/pull/2)；后续默认值修复见提交索引 | [焦点偏好](apps/desktop/src/store/focus-follows-mouse.ts) · [测试](apps/desktop/src/store/focus-follows-mouse.test.ts) |
 | F03 | [PR #11](https://github.com/GXinOvO/hermes-agent/pull/11)、[#12](https://github.com/GXinOvO/hermes-agent/pull/12)、[#14](https://github.com/GXinOvO/hermes-agent/pull/14)、[#19](https://github.com/GXinOvO/hermes-agent/pull/19)、[#20](https://github.com/GXinOvO/hermes-agent/pull/20) | [搜索面板](apps/desktop/src/app/right-sidebar/files/search-panel.tsx) · [宿主搜索](hermes_cli/file_search.py) · [归属测试](apps/desktop/src/app/right-sidebar/files/search-panel.owner.test.tsx) |
-| F04 | [PR #23](https://github.com/GXinOvO/hermes-agent/pull/23) | [插件说明](plugins/task-overview/README.md) · [测试](plugins/task-overview/tests/core.test.mjs) |
+| F04 | [PR #23](https://github.com/GXinOvO/hermes-agent/pull/23) · [e9b3c66163](https://github.com/GXinOvO/hermes-agent/commit/e9b3c661631baa65dd310547393879e34a09812b) | [插件说明](plugins/task-overview/README.md) · [概览测试](plugins/task-overview/tests/core.test.mjs) · [事项测试](plugins/task-overview/tests/followup-tasks.test.mjs) · [导航测试](plugins/task-overview/tests/followup-navigation.test.mjs) |
 | F05 | [PR #6](https://github.com/GXinOvO/hermes-agent/pull/6)、[#15](https://github.com/GXinOvO/hermes-agent/pull/15)、[#28](https://github.com/GXinOvO/hermes-agent/pull/28)；移植来源 [官方 #136266](https://github.com/NousResearch/hermes-agent/pull/136266)、[#148550](https://github.com/NousResearch/hermes-agent/pull/148550) | [执行指导](skills/autonomous-ai-agents/hermes-agent/references/task-execution.md) · [结果找回](tools/delegate_tool_registry.py) · [材料检查测试](tests/skills/test_delegated_result_lifecycle.py) |
 | F06 | [PR #7](https://github.com/GXinOvO/hermes-agent/pull/7)、[#22](https://github.com/GXinOvO/hermes-agent/pull/22)、[#24](https://github.com/GXinOvO/hermes-agent/pull/24) | [通知策略测试](tests/tui_gateway/test_child_process_notification_policy.py) · [未完成提示测试](tests/tools/test_delegate_incomplete_notice.py) |
 | F07 | [PR #26](https://github.com/GXinOvO/hermes-agent/pull/26)、[#27](https://github.com/GXinOvO/hermes-agent/pull/27)、[#31](https://github.com/GXinOvO/hermes-agent/pull/31) | [批处理实现](tools/code_execution_parallel.py) · [身份测试](tests/tools/test_code_execution_parallel_identity.py) |

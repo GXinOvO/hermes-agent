@@ -1,7 +1,30 @@
 # Task overview
 
-A read-only task card for one session: what was asked, what it is now, what is
-left, and which acceptance stages have evidence.
+A task card for one session plus a device-local follow-up panel for manually
+tracked matters. The two features keep business acceptance separate from agent
+activity and todo state.
+
+## Follow-up panel
+
+The titlebar entry counts only open matters manually recorded in this device's
+IndexedDB. Create a matter from the focused conversation, edit its remaining
+steps, associate other focused conversations, explicitly accept it with a note,
+or reopen it. A session reference preserves the identity fields actually
+observed, marked as unverified. This version disables opening sessions from the
+panel, including when a store identifier is present: a copied store or replaced
+backend can retain the same identifier. Closing a chat tab or the panel does
+not mark a matter complete.
+
+The separate session-review view scans at most 12 sources and the first 100
+sessions by creation time per source, plus the host's extra pinned rows. It
+cannot infer whether those sessions contain unfinished work. It does not cover
+all history, and current execution, real wait-for-input requests, automatic
+business-task discovery and cross-device synchronization are not implemented.
+
+The desktop uses local browser storage; clearing app data or switching device or
+origin may lose access to the records. Isolated Electron testing does not imply
+production installation or activation. Safe session navigation requires a
+separate end-to-end source-identity contract.
 
 ## What it shows
 

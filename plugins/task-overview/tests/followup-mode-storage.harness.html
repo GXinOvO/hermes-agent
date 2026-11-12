@@ -1,0 +1,36 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Follow-up mode storage regression</title></head><body><pre id="result">Running</pre><script type="module">
+import { openFollowupStore } from '../src/followup-indexeddb.mjs'
+import { createFollowupTask } from '../src/followup-tasks.mjs'
+
+async function run() {
+  const db = new URL(location.href).searchParams.get('db')
+  if (!db?.startsWith('followup_isolated_test_')) throw Error('isolated database required')
+  const source = { connectionId:'host', profile:'desktop', targetProfile:'backend', storedId:'primary', mode:'remote' }
+  const legacy = { connectionId:'other', profile:'desktop', targetProfile:'backend', storedId:'related' }
+  const task = createFollowupTask({ id:'task', title:'original', primary:source, related:[legacy], nextSteps:[] }, 1000)
+  const store = await openFollowupStore(indexedDB, db)
+  await store.create(task)
+  store.close()
+  const reopened = await openFollowupStore(indexedDB, db)
+  const before = (await reopened.list())[0]
+  if (before.task.primary.mode !== 'remote' || Object.hasOwn(before.task.related[0], 'mode')) throw Error('wrong initial readback')
+  let rejected = false
+  try {
+    await reopened.replace({ ...before.task, updatedAt:1100, related:[{...legacy,mode:'remote'}] }, before.revision)
+  } catch (error) {
+    rejected = /mode/.test(String(error))
+  }
+  if (!rejected) throw Error('legacy mode rewrite was not rejected')
+  const unchanged = (await reopened.list())[0]
+  if (JSON.stringify(unchanged) !== JSON.stringify(before)) throw Error('rejected write changed the record')
+  const saved = await reopened.replace({ ...before.task, title:'edited', updatedAt:1100 }, before.revision)
+  if (saved.revision !== 2 || saved.task.title !== 'edited') throw Error('ordinary edit was rejected')
+  reopened.close()
+  const again = await openFollowupStore(indexedDB, db)
+  const final = (await again.list())[0]
+  again.close()
+  if (final.revision !== 2 || final.task.primary.mode !== 'remote' || Object.hasOwn(final.task.related[0], 'mode')) throw Error('final reopened record differs')
+  return { status:'PASS', cases:['known mode and unknown legacy readback','legacy mode rewrite rejected without mutation','ordinary edit accepted','reopen preserves both modes'] }
+}
+run().then(result => document.querySelector('#result').textContent = JSON.stringify(result)).catch(error => document.querySelector('#result').textContent = JSON.stringify({ status:'FAIL', error:String(error), stack:error?.stack }))
+</script></body></html>

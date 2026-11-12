@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Follow-up storage acceptance</title></head>
+<body><pre id="result">Running</pre><script type="module">
+try {
+  const name = new URL(location.href).searchParams.get('db')
+  if (!name?.startsWith('followup_isolated_test_')) throw Error('Expected an isolated test database')
+  const version = `?test=${encodeURIComponent(name)}`
+  const { openFollowupStore } = await import(`../src/followup-indexeddb.mjs${version}`)
+  const { createFollowupTask } = await import(`../src/followup-tasks.mjs${version}`)
+  const ok = (condition, message) => { if (!condition) throw Error(message) }
+  const rejects = async (fn, expected) => {
+    try { await fn() } catch (error) { if (expected.test(String(error))) return; throw error }
+    throw Error(`Expected rejection: ${expected}`)
+  }
+  const a = await openFollowupStore(indexedDB, name)
+  const b = await openFollowupStore(indexedDB, name)
+  const task = createFollowupTask({ id:'one', title:'待办', primary:null, related:[], nextSteps:['检查结果'], status:'todo', priority:'high' }, 1000)
+  const sibling = createFollowupTask({ id:'two', title:'保留', primary:null, related:[], nextSteps:[], status:'waiting', priority:'normal' }, 1000)
+  await a.create(task)
+  await b.create(sibling)
+  const ref = { connectionId:'test-source', profile:'default', targetProfile:'default', storedId:'synthetic-a', mode:'local' }
+  const bound = await a.changePrimary('one', 1, ref, 1100)
+  ok(bound.revision === 2 && bound.task.primary.storedId === 'synthetic-a', 'Binding did not commit')
+  ok(bound.task.status === 'todo', 'Binding changed the manual task status')
+  await rejects(() => b.changePrimary('one', 1, { ...ref, storedId:'synthetic-b' }, 1200), /revision conflict/i)
+  const rebound = await b.changePrimary('one', 2, { ...ref, storedId:'synthetic-b' }, 1200)
+  ok(rebound.revision === 3 && rebound.task.primary.storedId === 'synthetic-b', 'Rebinding did not commit')
+  await rejects(() => a.remove('one', 2), /revision conflict/i)
+  ok((await a.list()).length === 2, 'A stale delete removed a task')
+  await a.remove('one', 3)
+  const remaining = await b.list()
+  ok(remaining.length === 1 && remaining[0].task.id === 'two', 'Delete changed an unrelated task')
+  a.close(); b.close()
+  const reopened = await openFollowupStore(indexedDB, name)
+  ok((await reopened.list())[0].task.id === 'two', 'Reopened storage lost the unrelated task')
+  reopened.close()
+  document.querySelector('#result').textContent = JSON.stringify({status:'PASS', cases:['unbound create', 'bind preserves status', 'stale rebind refusal', 'explicit rebind', 'stale delete refusal', 'targeted deletion', 'reopen readback']})
+} catch (error) {
+  document.querySelector('#result').textContent = JSON.stringify({status:'FAIL', error:String(error), stack:error?.stack})
+}
+</script></body></html>

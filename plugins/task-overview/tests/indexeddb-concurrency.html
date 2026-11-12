@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Follow-up storage transaction tests</title></head>
+<body><pre id="result">Running</pre>
+<script type="module">
+const output = document.querySelector('#result')
+try {
+  const name = new URL(location.href).searchParams.get('db')
+  if (!name || !name.startsWith('followup_isolated_test_')) throw Error('Expected an isolated test database name')
+  const version = `?test=${encodeURIComponent(name)}`
+  const { openFollowupStore } = await import(`../src/followup-indexeddb.mjs${version}`)
+  const { createFollowupTask, applyFollowupAction } = await import(`../src/followup-tasks.mjs${version}`)
+  const ok = (condition, message) => { if (!condition) throw Error(message) }
+  const rejects = async (promise, match) => {
+    try { await promise } catch (error) { if (match.test(String(error))) return; throw error }
+    throw Error(`Expected rejection: ${match}`)
+  }
+  const reference = { connectionId: 'host-test', profile: 'default', targetProfile: 'worker', storedId: 'session-test' }
+  const task = createFollowupTask({ id: 'task-test', title: 'Synthetic task', primary: reference, related: [], nextSteps: ['Verify'] }, 1000)
+  const a = await openFollowupStore(indexedDB, name)
+  const b = await openFollowupStore(indexedDB, name)
+  ok((await a.create(task)).revision === 1, 'Create did not commit revision 1')
+  await rejects(b.create(task), /constraint|transaction/i)
+  ok((await b.list()).length === 1, 'Duplicate create changed the stored record')
+  const left = applyFollowupAction(task, { type: 'accept', at: 1100, note: 'left' })
+  const right = applyFollowupAction(task, { type: 'accept', at: 1200, note: 'right' })
+  const outcomes = await Promise.allSettled([a.replace(left, 1), b.replace(right, 1)])
+  const success = outcomes.filter(x => x.status === 'fulfilled')
+  const failure = outcomes.filter(x => x.status === 'rejected')
+  ok(success.length === 1 && failure.length === 1, 'Concurrent same-revision writes did not yield one winner')
+  ok(/revision conflict/i.test(String(failure[0].reason)), 'Losing writer did not receive a revision conflict')
+  const stored = (await b.list())[0]
+  ok(stored.revision === 2 && stored.task.resolution.note === success[0].value.task.resolution.note, 'Committed winner differs from readback')
+  const reopened = applyFollowupAction(stored.task, { type: 'reopen', at: 1300 })
+  await rejects(a.replace(reopened, 1), /revision conflict/i)
+  ok((await a.replace(reopened, 2)).revision === 3, 'Reopen did not commit')
+  const wrongOwner = { ...reopened, updatedAt: 1400, primary: { ...reference, connectionId: 'different-host' } }
+  await rejects(a.replace(wrongOwner, 3), /identity|owner/i)
+  const changedCreated = { ...reopened, createdAt: 999, updatedAt: 1400 }
+  await rejects(a.replace(changedCreated, 3), /identity|created/i)
+  const backward = { ...reopened, updatedAt: 1200 }
+  await rejects(a.replace(backward, 3), /time|updated/i)
+  const stillSame = (await a.list())[0]
+  ok(stillSame.revision === 3 && stillSame.task.primary.connectionId === reference.connectionId && stillSame.task.createdAt === 1000 && stillSame.task.updatedAt === 1300, 'Refused writes changed a stored identity')
+  await rejects(a.create({ ...task, primary: { ...reference, storedId: '' } }), /invalid/i)
+  ok((await a.list())[0].revision === 3, 'Invalid write modified the record')
+  const nativeTransaction = IDBDatabase.prototype.transaction
+  let injectAbort = true
+  try {
+    IDBDatabase.prototype.transaction = function(...args) {
+      const tx = nativeTransaction.apply(this, args)
+      if (injectAbort && args[1] === 'readwrite') {
+        injectAbort = false
+        const nativeObjectStore = tx.objectStore.bind(tx)
+        tx.objectStore = (...params) => {
+          const store = nativeObjectStore(...params)
+          const nativeAdd = store.add.bind(store)
+          store.add = value => {
+            const request = nativeAdd(value)
+            request.addEventListener('success', () => tx.abort(), { once: true })
+            return request
+          }
+          return store
+        }
+      }
+      return tx
+    }
+    const abortTask = createFollowupTask({ ...task, id: 'abort-test' }, 1500)
+    await rejects(a.create(abortTask), /abort|transaction/i)
+  } finally {
+    IDBDatabase.prototype.transaction = nativeTransaction
+  }
+  ok(!injectAbort, 'The abort injection did not reach a real write transaction')
+  ok((await a.list()).length === 1, 'Aborted transaction changed the stored records')
+  a.close(); b.close()
+  await rejects(a.list(), /invalidstate|closed/i)
+  const c = await openFollowupStore(indexedDB, name)
+  const restored = await c.list()
+  ok(restored.length === 1 && restored[0].revision === 3 && restored[0].task.resolution.state === 'open', 'Reopened store did not preserve the latest committed state')
+  c.close()
+  await rejects(openFollowupStore(null, name), /unavailable/i)
+  output.textContent = JSON.stringify({ status: 'PASS', cases: ['create/read', 'duplicate refusal', 'concurrent CAS', 'stale write refusal', 'explicit reopen', 'invalid input', 'abort after request success', 'closed store failure', 'reopen/readback', 'unavailable factory'] })
+} catch (error) {
+  output.textContent = JSON.stringify({ status: 'FAIL', error: String(error), stack: error?.stack })
+}
+</script></body></html>

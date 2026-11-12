@@ -1,5 +1,5 @@
 name: task-overview
 version: 0.1.1
-description: "Read-only session task overview: original and current request, native todo list, staged acceptance evidence, and a desktop pane that renders it. Registers one gateway command; no tools, hooks, execution or acceptance changes."
+description: "Session task overview and device-local follow-up: review current-session evidence, manually track matters and linked sessions, and explicitly record acceptance. The gateway command remains read-only."
 author: "GXinOvO"
 provides_tools: []
