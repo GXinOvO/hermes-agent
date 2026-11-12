@@ -60,6 +60,31 @@ def _make_session(
 
 class TestCompletionQueue:
 
+    def test_hosted_completion_keeps_sandbox_owner(self, registry):
+        from agent.runtime_scope import bind_state
+        from hermes_scope import Principal, Scope
+        from tools.environments.sandbox_scope import sandbox_identity
+
+        owner = Scope('tenant', 'owner-agent', Principal('user'), owner=Principal('user'), can_administer=True)
+        other = Scope('tenant', 'other-agent', Principal('user'), owner=Principal('user'), can_administer=True)
+        session = _make_session(notify_on_complete=True, output='done', exit_code=0)
+        session.sandbox_key = sandbox_identity(owner).key
+        session.session_key = 'conversation'
+        session.parent_session_id = 'parent'
+        session.exited = True
+        registry._running[session.id] = session
+        with patch.object(registry, '_write_checkpoint'), patch.object(registry, 'restore_completions'):
+            registry._move_to_finished(session)
+            with bind_state(other):
+                assert registry.drain_notifications(session_key='conversation') == []
+            assert registry.completion_queue.qsize() == 1
+            with bind_state(owner):
+                delivered = registry.drain_notifications(session_key='conversation')
+        assert len(delivered) == 1
+        event = delivered[0][0]
+        assert event['sandbox_key'] == sandbox_identity(owner).key
+        assert event['parent_session_id'] == 'parent'
+
 
     def test_move_to_finished_idempotent_no_duplicate(self, registry):
         """Calling _move_to_finished twice must NOT enqueue two notifications.
@@ -346,9 +371,9 @@ def test_background_without_notify_emits_silent_process_hint(monkeypatch, tmp_pa
     assert result["session_id"] == "proc_silent_test"
     hint = result.get("hint", "")
     from tools.process_registry import PROCESS_SCHEMA
-    assert f"{PROCESS_SCHEMA['name']}(action=" in hint
-    assert hint, "Silent background process must include a hint field"
-    assert "notify_on_complete" in hint, (
+    assert PROCESS_SCHEMA['name'] in hint
+    assert "Do NOT re-launch" in hint
+    assert "notify=true" in hint, (
         "Hint must name the corrective flag so the agent can self-correct"
     )
 

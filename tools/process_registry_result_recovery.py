@@ -36,10 +36,12 @@ class ProcessResultRecoveryMixin:
 
     @staticmethod
     def _completion_notification(session):
+        from tools.environments.sandbox_scope import producer_fields
         from tools.process_registry import ProcessRegistry, _completion_output
         return {
             "type": "completion", "session_id": session.id, "task_id": session.task_id,
             "session_key": session.session_key, "owner_task_id": session.owner_task_id,
+            **producer_fields(session.sandbox_key),
             "command": session.command,
             **({"handoff_note": session.handoff_note} if session.handoff_note else {}),
             **ProcessRegistry._exit_fields(session), **_completion_output(session),

@@ -77,7 +77,15 @@ print(json.dumps(data))
 
 def environment_generation(env):
     try:
-        generation = getattr(env, '_session_id', None)
+        from tools.environments.sandbox_scope import ScopedEnvironment
+        if isinstance(env, ScopedEnvironment):
+            getter = getattr(env, 'file_generation', None)
+            try:
+                generation = getter() if callable(getter) else None
+            except (TimeoutError, OSError) as exc:
+                raise FileBackendUnavailable('backend file-state identity is unavailable; refusing write') from exc
+        else:
+            generation = getattr(env, '_session_id', None)
         if not isinstance(generation, str) or not generation or getattr(env, 'closed', False):
             raise FileBackendUnavailable('backend file-state identity is unavailable; refusing write')
         from tools.file_protected_fuse import protected_fuse
