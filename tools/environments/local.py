@@ -1043,13 +1043,15 @@ def _kill_process_group_posix(proc) -> None:
                 with contextlib.suppress(subprocess.TimeoutExpired, OSError):
                     proc.wait(timeout=0.2)
         except ProcessLookupError:
-            pass
+            _kill_known_pids(proc, descendants)
+            _kill_known_pids(proc, _process_group_members(pgid))
         except PermissionError:
             # macOS answers killpg with EPERM (not ESRCH) once the group's only members are
             # unreaped zombies — rg exiting between the caller's poll() and the TERM after the
             # drain hit its limit (#116855). Nothing group-wide is signalable, and the error
-            # must not escape: the caller still owns the output it drained. Signal the known
-            # PIDs instead so a live child (a group we may not signal) cannot outlive us.
+            # must not escape: the caller still owns the output it drained. Signal members
+            # discovered only after the group operation failed, so the normal path never scans
+            # or touches unrelated process groups.
             _kill_known_pids(proc, (*_process_group_members(pgid), *descendants))
     _sweep_escaped_descendants(descendants, pgid)
 

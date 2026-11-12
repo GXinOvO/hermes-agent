@@ -87,6 +87,27 @@ def test_local_group_kill_falls_back_to_members_when_killpg_is_denied(monkeypatc
     assert killed == [67891]
 
 
+def test_local_group_kill_falls_back_to_members_when_group_is_gone(monkeypatch):
+    """A reaped leader can make killpg report ESRCH while its child remains in the group."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67892
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 67890)
+    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED)
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67892]
+
+
 def test_local_guard_still_refuses_recycled_pgid(monkeypatch, killpg_calls):
     """A start time far outside the drift tolerance means the PID/PGID was recycled:
     never signal the stale number (#43044)."""

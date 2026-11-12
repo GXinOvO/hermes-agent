@@ -64,6 +64,13 @@ class FileStateRegistryUnitTests(unittest.TestCase):
         file_state.record_read("A", p)
         self.assertIsNone(file_state.check_stale("A", p))
 
+    def test_complete_read_is_not_downgraded_by_a_late_partial_read(self):
+        p = self._mk()
+        file_state.record_read("A", p, partial=True)
+        file_state.record_read("A", p, partial=False)
+        file_state.record_read("A", p, partial=True)
+        self.assertIsNone(file_state.check_stale("A", p))
+
     def test_sibling_write_flags_other_agent_as_stale(self):
         p = self._mk()
         file_state.record_read("A", p)
