@@ -40,10 +40,17 @@ def pending_status(key: str, job: dict, content: str, home: Path, *, for_failure
         return None
     saved = record.get('job') if isinstance(record, dict) else None
     if (not isinstance(saved, dict) or record.get('id') != key or record.get('home') != str(home)
-            or record.get('content') != content or record.get('for_failure') is not for_failure
+            or record.get('for_failure') is not for_failure
             or saved.get('id') != job.get('id') or saved.get('execution_id') != job.get('execution_id')
             or saved.get('_sealed_bot_result_v1') != job.get('_sealed_bot_result_v1')):
         raise ValueError('deferred Bot delivery identity mismatch')
+    if record.get('content') != content:
+        # Two notices composed for one execution share a delivery identity, and the parked
+        # record still owns it (it is never handed off twice): its status decides, not this text.
+        if path not in _warned:
+            _warned.add(path)
+            logger.warning('Parked Bot Chat record %s holds different text for delivery %s; '
+                           'reporting its status %r', path, key, record.get('status'))
     status = record.get('status') or 'unknown'
     if status == 'claimed':
         pid, started = record.get('owner_pid'), record.get('owner_started_at')
