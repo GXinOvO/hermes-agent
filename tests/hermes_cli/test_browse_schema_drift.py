@@ -597,7 +597,7 @@ def test_slow_browse_reconcile_gives_up_inside_its_budget_and_boot_waits_it_out(
     result = next(line for line in out.splitlines() if line.startswith("RESULT"))
     _, status, elapsed, *detail = result.split(" ", 3)
     assert status == "503", out
-    assert float(elapsed) < budget_s + 2, out
+    assert float(elapsed) < wait_s + 1.0, out
     detail = " ".join(detail)
     assert "nothing was changed" in detail
     assert "`hermes -p scribe sessions repair`" in detail and "gateway" not in detail.lower()
