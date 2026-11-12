@@ -19,8 +19,9 @@ try {
   check(screen.getByRole('heading', { name: '恢复并验证' }), 'First task should be selected')
   check(screen.getByText('仅显示已手动跟踪的事项；其他会话尚未覆盖。'), 'Incomplete coverage must be visible')
   check(screen.getByText('核对恢复结果'), 'Selected task must show remaining work')
+  check(screen.getByRole('button', { name: '打开主会话' }).disabled, 'Navigation must be disabled by default')
   fireEvent.click(screen.getByRole('button', { name: '打开主会话' }))
-  check(opened?.storedId === 'session-a' && opened?.connectionId === 'source-a', 'Open did not pass the exact primary reference')
+  check(opened === null, 'Disabled navigation invoked the open callback')
   fireEvent.change(screen.getByRole('textbox', { name: '搜索事项 / 关联会话' }), { target: { value: '研究' } })
   check(!screen.queryByRole('button', { name: /恢复并验证/ }) && screen.getByRole('button', { name: /研究资料核对/ }), 'Search did not filter the list')
   check(screen.getByRole('heading', { name: '研究资料核对' }), 'Visible selection did not follow the filter')
@@ -36,7 +37,7 @@ try {
   show({ rows: [], loading: true })
   check(screen.getByRole('button', { name: /未完成/ }).textContent.includes('—'), 'Loading must not show a confirmed zero')
   cleanup()
-  document.querySelector('#result').textContent = JSON.stringify({ status: 'PASS', cases: ['tracked rows', 'coverage label', 'selected detail', 'exact open', 'search', 'filtered selection', 'empty search', 'storage error'] })
+  document.querySelector('#result').textContent = JSON.stringify({ status: 'PASS', cases: ['tracked rows', 'coverage label', 'selected detail', 'navigation disabled by default', 'search', 'filtered selection', 'empty search', 'storage error'] })
 } catch (error) {
   document.querySelector('#result').textContent = JSON.stringify({ status: 'FAIL', error: String(error), stack: error?.stack })
 }
