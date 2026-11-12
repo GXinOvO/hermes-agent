@@ -14,6 +14,8 @@ HOSTED = {
     "windows-11-arm",
     "macos-latest",
     "macos-15",
+    "macos-15-intel",
+    "macos-26",
 }
 
 
