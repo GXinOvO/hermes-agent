@@ -44,6 +44,7 @@ def _storage(canonical):
   return (hashlib.sha256(json.dumps(identity_source,separators=(',',':')).encode()).hexdigest(),
           os.path.normpath(unescape(m[3]).rstrip('/')+'/'+os.path.relpath(canonical,unescape(m[4]))))
  except (OSError,ValueError):
+  if sys.platform.startswith('linux'): raise
   # No /proc (macOS/BSD): identify the storage by the device number of the nearest existing
   # ancestor on this host, so two paths on one filesystem still agree and another mount,
   # host or filesystem does not.
