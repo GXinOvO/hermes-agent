@@ -387,6 +387,7 @@ _UPDATE_DEPENDENCIES = (
     "hermes_cli/model_catalog.py",
     "hermes_cli/sqlite_runtime.py",
     "hermes_cli/sqlite_safe_read.py",
+    "hermes_cli/state_integrity.py",
     "hermes_cli/sizefmt.py",
     "hermes_cli/tools_config_cua.py",
     "hermes_cli/_startup_fast.py",

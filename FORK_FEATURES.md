@@ -45,6 +45,7 @@
 - **F15 终端与项目卷：** [插件说明](plugins/owned-process/README.md)列出 `owned_process` 的命名空间、进程生命周期与依赖要求；失败不回退成本地执行，两种后端均不能据此标为生产采用。进程已退出但输出尚未排空时，`process_running=false, output_pending=true` 表示仍需读取最终输出。`protected_owned` 另需匹配的 authority 包、容器镜像及卷配置，仓库说明仍标为候选、待独立审查和生产采用；最近的受保护读取修复也不能单独证明可信身份完整绑定。合入源码不等于完成启用或整体安全验收。上游同步新增终端环境 `cleanup_stops_processes` 清理契约：仅对该标志为真的后端，在清理成功或确认沙箱已不存在后，把仍经该环境轮询的后台进程结算为 lost；清理失败且沙箱可能仍在运行时不结算，清理失败但沙箱已不存在仍结算。SSH 声明为 false（cleanup 只关 ControlMaster，后台任务继续由下次连接轮询）。owned 后端是否按自身语义覆盖该契约仍待核对。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
+- **F17 fork CI 适配：** PR 工作流及其调用链使用个人公开仓库可用的 GitHub 托管 runner，保留 Linux、Windows、macOS 和相关 ARM 测试，测试分片适配标准机并发；发布、合入和实际云端验证状态以 PR 回执为准。
 - **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，`evals/*/results/` 下的运行产物不计入审查路径，模型输入不包含隐藏检查点；批次内模型输出不完整或编辑片段无法唯一匹配时自动二分重试，单路径仍失败则整次失败。工作流单次超时上限为 60 分钟；全部批次成功后才原子写入本清单并推进隐藏检查点，失败或超时不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
 
 ## 追溯证据
