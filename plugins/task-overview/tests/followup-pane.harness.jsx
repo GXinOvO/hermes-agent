@@ -36,10 +36,9 @@ async function run() {
   const reopened = render(<FollowupPane host={host} t={t} storageName={name} />)
   await screen.findByRole('heading', {name:'实际验收'})
   check(screen.getByText('检查输出'), 'Reopened pane lost the saved task')
-  fireEvent.click(screen.getByRole('button', {name:'打开主会话'}))
-  await waitFor(() => check(opens.length === 1, 'Session open not invoked'))
-  check(JSON.stringify(opens[0]) === JSON.stringify(['fixture-session',{route}]), 'Wrong session route')
-  check(screen.getByRole('heading', {name:'实际验收'}), 'Opening the session must not accept the task')
+  check(screen.getByRole('button', {name:'打开主会话'}).disabled, 'Unverified session open was enabled')
+  check(opens.length === 0, 'Unverified session was opened')
+  check(screen.getByRole('heading', {name:'实际验收'}), 'Disabled navigation removed the task')
   fireEvent.click(screen.getByRole('button', {name:'标记已验收'}))
   await screen.findByText('请在核对结果后确认。')
   fireEvent.change(screen.getByLabelText('验收说明'), {target:{value:'已核对实际结果'}})
@@ -79,6 +78,6 @@ async function run() {
   await screen.findByRole('heading', {name:'已提交但刷新失败'})
   failure.unmount()
   cleanup()
-  return { status:'PASS', cases:['capture focused session','create through view','real browser database','unmount/remount readback','open exact session route','committed write with failed refresh','retry readback'] }
+  return { status:'PASS', cases:['capture focused session','create through view','real browser database','unmount/remount readback','unverified session open disabled','committed write with failed refresh','retry readback'] }
 }
 run().then(result=>document.querySelector('#result').textContent=JSON.stringify(result)).catch(error=>document.querySelector('#result').textContent=JSON.stringify({status:'FAIL',error:String(error),stack:error?.stack}))

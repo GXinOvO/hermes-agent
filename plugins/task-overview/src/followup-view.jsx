@@ -42,6 +42,7 @@ export function FollowupView({ t, rows = [], coverage = 'partial', error, loadin
     {filter === 'sessions' ? <div>
       <p className="notice">{t('discoveryScope')}</p>
       <p className="notice">{t('discoveryUnknown')}</p>
+      {!exactNavigationAvailable ? <p className="notice">{t('exactNavigationUnavailable')}</p> : null}
       <Button size="sm" variant="secondary" onClick={onDiscover} disabled={discovering}>{t(discovering ? 'loadingSessions' : 'loadSessions')}</Button>
       {discovery ? <>
         {discovering ? <p role="status">{t('discoveryRefreshing')}</p> : null}

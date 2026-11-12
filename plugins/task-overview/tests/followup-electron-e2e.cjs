@@ -1,26 +1,19 @@
 'use strict'
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { spawnSync } = require('node:child_process')
 const { createRequire } = require('node:module')
 
-const desktop = process.env.FOLLOWUP_DESKTOP || '/local_data/huguangyao/.hermes/hermes-agent/apps/desktop'
+const desktop = process.env.FOLLOWUP_DESKTOP || path.resolve(__dirname, '../../../apps/desktop')
 const repo = path.resolve(desktop, '../..')
 const plugin = path.resolve(__dirname, '../desktop/plugin.js')
-const scratch = process.env.FOLLOWUP_E2E_SCRATCH || '/local_data/huguangyao/.hermes/cache/scratch'
-const electron = process.env.FOLLOWUP_ELECTRON || '/local_data/huguangyao/.hermes/hermes-agent/node_modules/.pnpm/electron@44.9.3_supports-color@10.2.2/node_modules/electron/dist/electron'
-// Extracted Electron runtime libs (libgbm/libnss3/...). Overridable; when absent the
-// runner omits LD_LIBRARY_PATH instead of failing on an unreadable path, and the
-// launch itself reports a missing shared library.
-const libraries = process.env.FOLLOWUP_ELECTRON_LIBS
-  || '/local_data/huguangyao/.hermes/cache/scratch/followup-electron-runtime/root/usr/lib/x86_64-linux-gnu'
-// Backend interpreter for the isolated desktop. Default is a durable install
-// generation venv (NOT a previous throwaway sandbox), preflighted for the imports
-// the desktop backend needs. FOLLOWUP_DESKTOP_PYTHON overrides it explicitly.
-const python = process.env.FOLLOWUP_DESKTOP_PYTHON
-  || '/local_data/huguangyao/.hermes/installs/87c1b6fbe97c53fa/test-environment/gen-57cddb0491954d29923445c2612c59d7/venv/bin/python'
+const scratch = process.env.FOLLOWUP_E2E_SCRATCH || os.tmpdir()
+const electron = process.env.FOLLOWUP_ELECTRON || createRequire(path.join(desktop, 'package.json'))('electron')
+const libraries = process.env.FOLLOWUP_ELECTRON_LIBS || process.env.LD_LIBRARY_PATH
+const python = process.env.FOLLOWUP_DESKTOP_PYTHON || process.env.HERMES_PYTHON || 'python3'
 const display = process.env.FOLLOWUP_E2E_DISPLAY || ':0'
 const { _electron } = createRequire(path.join(desktop, 'package.json'))('@playwright/test')
 const root = fs.mkdtempSync(path.join(scratch, 'fu-e2e-'))
@@ -80,7 +73,7 @@ print(sys.version.split()[0])`
 }
 
 const env = {
-  PATH: process.env.PATH, LANG: 'C.UTF-8', DISPLAY: display, ...(fs.existsSync(libraries) ? { LD_LIBRARY_PATH: libraries } : {}),
+  PATH: process.env.PATH, LANG: 'C.UTF-8', DISPLAY: display, ...(libraries ? { LD_LIBRARY_PATH: libraries } : {}),
   HOME: path.join(root, 'home'), TMPDIR: shortTmp, XDG_RUNTIME_DIR: path.join(root, 'runtime'),
   XDG_CONFIG_HOME: path.join(root, 'config'), XDG_CACHE_HOME: path.join(root, 'cache'), XDG_DATA_HOME: path.join(root, 'data'),
   HERMES_HOME: hermesHome, HERMES_DESKTOP_USER_DATA_DIR: path.join(root, 'electron-user-data'),
@@ -175,7 +168,7 @@ async function cleanup() {
     mock = await startMockServer()
     writeMockProviderConfig(hermesHome, mock.url)
     writeEnvFile(hermesHome, 'e2e-mock-key', mock.url)
-    console.log('PRECONDITIONS', JSON.stringify({ backend, mock: mockBuild, libraries: fs.existsSync(libraries) ? libraries : null }))
+    console.log('PRECONDITIONS', JSON.stringify({ backend, mock: mockBuild, libraries: libraries || null }))
     console.log('SANDBOX', JSON.stringify({ root, pluginSha256: sha(plugin), desktopMainSha256: sha(path.join(desktop, 'dist/electron-main.mjs')), display }))
     first = await launch()
     assert((await rows(first)).length === 0, 'Fresh sandbox already has task records')

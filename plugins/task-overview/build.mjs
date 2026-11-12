@@ -28,7 +28,7 @@ if (process.argv.includes('--test')) {
   const result = await build({ banner: { js: `/*!${notices}\n*/` }, absWorkingDir: root, nodePaths, minifySyntax: true, minifyIdentifiers: true, minifyWhitespace: false, entryPoints: [path.join(root, 'src/plugin.jsx')], outfile, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', external: ['@hermes/plugin-sdk', 'react', 'react/jsx-runtime'], metafile: true, jsx: 'automatic', logLevel: 'warning', write: false })
   const imports = Object.values(result.metafile.outputs).flatMap(output => output.imports).map(item => item.path)
   if (imports.some(item => !['@hermes/plugin-sdk', 'react', 'react/jsx-runtime'].includes(item))) throw Error(`Invalid runtime imports: ${imports}`)
-  const bytes = result.outputFiles[0].contents
+  const bytes = Buffer.from(result.outputFiles[0].text.replace(/^\/\/ (?:[^\r\n]*?\/)?node_modules\//gm, '// node_modules/'))
   if (process.argv.includes('--check')) {
     if (!Buffer.from(bytes).equals(await fs.readFile(outfile))) throw Error('Desktop bundle differs from source; run node plugins/task-overview/build.mjs')
   } else {

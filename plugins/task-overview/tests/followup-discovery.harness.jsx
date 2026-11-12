@@ -33,12 +33,12 @@ async function run() {
   assert(calls[0].options.profile === 'backend-a' && calls[0].options.limit === 100, 'target profile or limit wrong')
   assert(screen.getByText(/host-b.*不可用/), 'offline source is not shown')
   assert(screen.getByText(/无法判断事项是否完成/), 'unknown task status is not explicit')
-  fireEvent.click(screen.getByRole('button', {name:'打开 部署验收会话'}))
-  await waitFor(() => assert(opens.length === 1, 'open not invoked'))
-  assert(JSON.stringify(opens[0]) === JSON.stringify(['root-a',{route:routeA}]), 'session was not opened by durable identity on its owner route')
+  assert(screen.getByRole('button', {name:'打开 部署验收会话'}).disabled, 'unverified discovered session could be opened')
+  assert(screen.getByText('此版本无法核实会话来源，已阻止打开以避免进入错误会话。'), 'disabled navigation was not explained')
+  assert(opens.length === 0, 'unverified discovered session was opened')
   fireEvent.click(screen.getByRole('button',{name:/未完成/}))
   assert(screen.getByText('尚未跟踪事项'), 'discovering or opening a conversation created a business task')
   app.unmount(); cleanup()
-  return {status:'PASS', cases:['explicit scan only','bounded coverage warning','exact source routing','unreachable source reported','no completion inference','open durable session','no implicit task creation']}
+  return {status:'PASS', cases:['explicit scan only','bounded coverage warning','source labels shown','unreachable source reported','no completion inference','session opening disabled','no implicit task creation']}
 }
 run().then(value => document.querySelector('#result').textContent=JSON.stringify(value)).catch(error=>document.querySelector('#result').textContent=JSON.stringify({status:'FAIL',error:String(error),stack:error?.stack}))

@@ -41,12 +41,12 @@ export function snapshotFocusedSession(host) {
 
 export async function captureSessionForTracking(host) {
   const current = snapshotFocusedSession(host)
-  if (current.connectionId && current.profile && current.targetProfile && ['local', 'remote'].includes(current.mode)) return await captureFocusedSession(host)
+  if (current.connectionId && current.profile && current.targetProfile && ['local', 'remote'].includes(current.mode)) return { ...await captureFocusedSession(host), unverified: true }
   return current
 }
 
 export async function trackCapturedSession(host, store, fields, at, captured) {
-  if (!captured?.unverified) return await trackFocusedSession(host, store, fields, at, captured)
+  if (!captured?.unverified || (captured.connectionId && captured.profile && captured.targetProfile && ['local', 'remote'].includes(captured.mode))) return await trackFocusedSession(host, store, fields, at, captured)
   if (JSON.stringify(captured) !== JSON.stringify(snapshotFocusedSession(host))) throw new Error('Focused session changed before tracking')
   return await store.create(createFollowupTask({ ...fields, primary: captured }, at))
 }
@@ -61,7 +61,7 @@ export async function trackFocusedSession(host, store, fields, at, captured) {
   const latestRoute = selectRoute(current, await host.profileRoutes())
   if (latestRoute.targetProfile !== route.targetProfile || latestRoute.mode !== route.mode) throw new Error('Focused session owner route changed before tracking')
   if (!sameFocus(current, focused(host))) throw new Error('Focused session changed before tracking')
-  const task = createFollowupTask({ ...fields, primary: { ...current, targetProfile: route.targetProfile } }, at)
+  const task = createFollowupTask({ ...fields, primary: { ...current, targetProfile: route.targetProfile, unverified: true } }, at)
   return await store.create(task)
 }
 
@@ -89,10 +89,11 @@ export async function reviseTrackedTask(host, store, row, fields, at) {
   const key = ref => JSON.stringify([ref.connectionId, ref.profile, ref.targetProfile, ref.storedId])
   const existing = new Set(row.task.related.map(key))
   const added = task.related.filter(ref => !existing.has(key(ref)))
-  if (added.some(item => !item.unverified)) {
+  const routed = added.filter(item => !item.unverified || (item.connectionId && item.profile && item.targetProfile && ['local', 'remote'].includes(item.mode)))
+  if (routed.length) {
     try {
       const routes = await host.profileRoutes()
-      for (const ref of added.filter(item => !item.unverified)) {
+      for (const ref of routed) {
         const route = selectRoute(ref, routes)
         if (!['local', 'remote'].includes(ref.mode) || route.targetProfile !== ref.targetProfile || route.mode !== ref.mode) throw new Error('Session owner route changed')
       }

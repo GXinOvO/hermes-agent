@@ -54,6 +54,18 @@ test('a host with partial focused ownership can record the session without inven
   assert.deepEqual(host.opened, [])
 })
 
+test('a recorded store identity alone remains an unverified session clue', async () => {
+  const host = makeHost(), store = makeStore()
+  host.setSelection({ storedId: 'session-1', owner: { ...route, storeInstanceId: 'copied-store' } })
+  const captured = await controller.captureSessionForTracking(host)
+  assert.equal(captured.unverified, true)
+  const row = await controller.trackCapturedSession(host, store, fields, 1000, captured)
+  assert.equal(row.task.primary.unverified, true)
+  assert.equal(row.task.primary.storeInstanceId, 'copied-store')
+  await assert.rejects(controller.openTrackedReference(host, row.task.primary))
+  assert.deepEqual(host.opened, [])
+})
+
 test('an unverified captured session cannot be saved after focus changes', async () => {
   const host = makeHost(), store = makeStore()
   host.setSelection({ storedId: 'session-1', owner: { connectionId: 'ssh-a', profile: 'default' } })
@@ -63,21 +75,21 @@ test('an unverified captured session cannot be saved after focus changes', async
   assert.equal(store.created.length, 0)
 })
 
-test('an unbound task can bind the exact currently focused session', async () => {
+test('an unbound task records the focused session as unverified without changing status', async () => {
   const host = makeHost(), store = makeStore()
   const task = { version: 1, id: 'unbound', title: '待绑定', description: '', primary: null, related: [], nextSteps: [], status: 'todo', priority: 'normal', createdAt: 1000, updatedAt: 1000, resolution: { state: 'open' } }
   const row = { task, revision: 1 }
   const result = await controller.bindPrimarySession(host, store, row, 1100)
-  assert.deepEqual(result.task.primary, { connectionId: 'ssh-a', profile: 'default', targetProfile: 'backend-worker', storedId: 'session-1', mode: 'remote' })
+  assert.deepEqual(result.task.primary, { connectionId: 'ssh-a', profile: 'default', targetProfile: 'backend-worker', storedId: 'session-1', mode: 'remote', unverified: true })
   assert.equal(result.task.status, 'todo')
   assert.equal(store.replaced[0][1], 1)
 })
 
-test('explicit tracking stores the exact focused source, backend profile and durable session', async () => {
+test('explicit tracking stores the observed source and session as unverified', async () => {
   const host = makeHost(), store = makeStore()
   const captured = await controller.captureFocusedSession(host)
   const result = await controller.trackFocusedSession(host, store, fields, 1000, captured)
-  assert.deepEqual(result.task.primary, { connectionId: 'ssh-a', profile: 'default', targetProfile: 'backend-worker', storedId: 'session-1', mode: 'remote' })
+  assert.deepEqual(result.task.primary, { connectionId: 'ssh-a', profile: 'default', targetProfile: 'backend-worker', storedId: 'session-1', mode: 'remote', unverified: true })
   assert.equal(result.task.resolution.state, 'open')
   assert.equal(result.revision, 1)
   assert.equal(store.created.length, 1)
@@ -245,15 +257,13 @@ test('editing cannot promote an unverified related session into a verified route
   assert.equal(store.replaced.length, 0)
 })
 
-test('opening a saved primary reference verifies the current route and passes it to the host', async () => {
+test('opening a saved primary reference is refused even when a store identity is recorded', async () => {
   const host = makeHost(), store = makeStore()
   host.setSelection({ storedId: 'session-1', owner: { ...route, storeInstanceId: 'store-a' } })
   const row = await controller.trackFocusedSession(host, store, fields, 1000, await controller.captureFocusedSession(host))
-  await controller.openTrackedReference(host, row.task.primary)
-  assert.deepEqual(host.opened, [['session-1', { route: { ...route, storeInstanceId: 'store-a' } }]])
-  host.profileRoutes = async () => [{ ...route, targetProfile: 'other' }]
-  await assert.rejects(controller.openTrackedReference(host, row.task.primary), /route|owner/i)
-  assert.equal(host.opened.length, 1)
+  assert.equal(row.task.primary.unverified, true)
+  await assert.rejects(controller.openTrackedReference(host, row.task.primary), error => error.code === 'FOLLOWUP_REFERENCE_IDENTITY_UNAVAILABLE')
+  assert.deepEqual(host.opened, [])
 })
 
 test('tracked references retain the focused mode and reject a changed route mode', async () => {

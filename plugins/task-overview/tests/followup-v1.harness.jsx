@@ -9,10 +9,10 @@ const t = key => followupStrings.zh[key] || key
 const name = new URL(location.href).searchParams.get('db')
 const check = (value, message) => { if (!value) throw Error(message) }
 const route = { connectionId:'test-source', profile:'default', targetProfile:'default', mode:'local' }
-let rejectOpen = true
+let opens = 0
 let focusedId = 'synthetic-session'
 let focusedOwner = route
-const host = { state:{ focusedStoredSessionId:{get:()=> focusedId}, focusedSessionOwner:{get:()=>focusedOwner} }, profileRoutes:async()=>[route, {...route, connectionId:'other-source'}], openExactSession:async()=>{ if (rejectOpen) throw Error('synthetic source offline') } }
+const host = { state:{ focusedStoredSessionId:{get:()=> focusedId}, focusedSessionOwner:{get:()=>focusedOwner} }, profileRoutes:async()=>[route, {...route, connectionId:'other-source'}], openExactSession:async()=>{ opens++ } }
 
 async function run() {
   check(name?.startsWith('followup_isolated_test_'), 'isolated database required')
@@ -45,12 +45,8 @@ async function run() {
   rows = await store.list()
   check(rows[0].task.primary?.storedId === 'synthetic-session' && rows[0].task.status === 'todo', 'binding did not persist or changed status')
   store.close()
-  fireEvent.click(screen.getByRole('button', {name:'打开主会话'}))
-  await screen.findByText('会话暂时无法打开')
-  check(screen.getByRole('heading', {name:'整理并行任务'}), 'failed open removed the task')
-  rejectOpen = false
-  fireEvent.click(screen.getByRole('button', {name:'打开主会话'}))
-  await waitFor(() => check(!screen.queryByText('会话暂时无法打开'), 'successful retry retained the old failure'))
+  check(screen.getByRole('button', {name:'打开主会话'}).disabled, 'unverified session open was enabled')
+  check(opens === 0 && screen.getByRole('heading', {name:'整理并行任务'}), 'disabled navigation opened a session or removed the task')
   await waitFor(() => check(!screen.getByRole('button', {name:'编辑事项'}).disabled, 'binding did not settle'))
   fireEvent.click(screen.getByRole('button', {name:'重新绑定当前会话'}))
   await screen.findByRole('alertdialog', {name:'重新绑定当前会话'})
@@ -121,8 +117,8 @@ async function run() {
   fireEvent.click(within(document.querySelector('.tabs')).getByRole('button', {name:/全部 · 4/}))
   check(document.querySelectorAll('.list > button').length === 4, 'all filter omitted tasks')
   app.unmount(); cleanup()
-  let routeCalls = 0, opens = 0
-  const partialHost = { state:{ focusedStoredSessionId:{get:()=> 'partial-session'}, focusedSessionOwner:{get:()=>({connectionId:'test-source', profile:'default'})} }, profileRoutes:async()=>{ routeCalls++; return [route] }, openSession:async()=>{ opens++ } }
+  let routeCalls = 0, ordinaryOpens = 0
+  const partialHost = { state:{ focusedStoredSessionId:{get:()=> 'partial-session'}, focusedSessionOwner:{get:()=>({connectionId:'test-source', profile:'default'})} }, profileRoutes:async()=>{ routeCalls++; return [route] }, openSession:async()=>{ ordinaryOpens++ } }
   app = render(<FollowupPane host={partialHost} t={t} storageName={`${name}_partial`}/> )
   await screen.findByText('尚未跟踪事项')
   fireEvent.click(screen.getByRole('button', {name:'跟踪当前会话'}))
@@ -133,22 +129,22 @@ async function run() {
   await screen.findByRole('heading', {name:'需要继续的会话'})
   check(screen.getByText('来源未核实，暂不能从面板打开'), 'unverified source was hidden')
   check(screen.getByRole('button', {name:'打开主会话'}).disabled, 'unverified session open was enabled')
-  check(routeCalls === 0 && opens === 0, 'unverified capture contacted or opened a backend')
+  check(routeCalls === 0 && ordinaryOpens === 0, 'unverified capture contacted or opened a backend')
   store = await openFollowupStore(indexedDB, `${name}_partial`)
   rows = await store.list()
   check(rows[0].task.primary?.storedId === 'partial-session' && rows[0].task.primary?.unverified === true && !('targetProfile' in rows[0].task.primary), 'partial source was not persisted honestly')
   store.close(); app.unmount(); cleanup()
-  const noExactHost = { state:{ focusedStoredSessionId:{get:()=> 'verified-session'}, focusedSessionOwner:{get:()=>route} }, profileRoutes:async()=>[route], openSession:async()=>{ opens++ } }
+  const noExactHost = { state:{ focusedStoredSessionId:{get:()=> 'legacy-session'}, focusedSessionOwner:{get:()=>route} }, profileRoutes:async()=>[route], openSession:async()=>{ ordinaryOpens++ } }
   const blockedDb = `${name}_no_exact`
   store = await openFollowupStore(indexedDB, blockedDb)
-  await store.create(createFollowupTask({id:'bound', title:'已绑定会话', primary:{...route,storedId:'verified-session'}, related:[], nextSteps:[], status:'todo', priority:'normal'}, 1000))
+  await store.create(createFollowupTask({id:'bound', title:'已绑定会话', primary:{...route,storedId:'legacy-session',storeInstanceId:'copied-store'}, related:[], nextSteps:[], status:'todo', priority:'normal'}, 1000))
   store.close()
   app = render(<FollowupPane host={noExactHost} t={t} storageName={blockedDb}/> )
   await screen.findByRole('heading', {name:'已绑定会话'})
   check(screen.getByRole('button', {name:'打开主会话'}).disabled, 'host without exact navigation allowed open')
-  check(screen.getByText('当前 Desktop 不支持核实来源的跳转，已阻止打开以避免进入错误会话。'), 'missing host capability was not explained')
-  check(opens === 0, 'ordinary openSession was used as a fallback')
+  check(screen.getByText('此版本无法核实会话来源，已阻止打开以避免进入错误会话。'), 'missing source verification was not explained')
+  check(ordinaryOpens === 0, 'ordinary openSession was used as a fallback')
   app.unmount(); cleanup()
-  return {status:'PASS', cases:['standalone creation', 'description and priority', 'storage reopen', 'bind current session without changing status', 'failed open keeps task', 'retry clears failure', 'manual waiting state', 'status filter', 'description search', 'delete cancel', 'delete readback', 'updated and priority sorting', 'priority filter', 'in-progress/completed/all filters', 'partial Desktop owner saved without guessing or opening']}
+  return {status:'PASS', cases:['standalone creation', 'description and priority', 'storage reopen', 'bind current session without changing status', 'unverified open disabled and task retained', 'manual waiting state', 'status filter', 'description search', 'delete cancel', 'delete readback', 'updated and priority sorting', 'priority filter', 'in-progress/completed/all filters', 'partial Desktop owner saved without guessing or opening']}
 }
 run().then(result => document.querySelector('#result').textContent = JSON.stringify(result)).catch(error => document.querySelector('#result').textContent = JSON.stringify({status:'FAIL', error:String(error), stack:error?.stack}))

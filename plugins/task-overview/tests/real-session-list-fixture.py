@@ -7,9 +7,9 @@ from unittest.mock import patch
 from hermes_state import SessionDB
 from hermes_cli.web_routers import profiles
 
-root = Path('/local_data/huguangyao/.hermes/artifacts/cross-session-followup-20261110')
+root = Path(os.environ['FOLLOWUP_FIXTURE_ROOT']).resolve()
 home = Path(os.environ['HERMES_HOME']).resolve()
-if not home.is_relative_to(root.resolve()):
+if not home.is_relative_to(root):
     raise RuntimeError('The fixture requires an isolated task-owned HERMES_HOME')
 home.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='session-list-', dir=home) as temp:

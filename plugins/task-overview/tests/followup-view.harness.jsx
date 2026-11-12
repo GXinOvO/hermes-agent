@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within, cleanup } from '@testing-library/rea
 import { FollowupView } from '../src/followup-view.jsx'
 
 const check = (condition, message) => { if (!condition) throw Error(message) }
-const ref = (storedId, connectionId = 'source-a') => ({ storedId, connectionId, profile: 'default', targetProfile: 'default' })
+const ref = (storedId, connectionId = 'source-a') => ({ storedId, connectionId, profile: 'default', targetProfile: 'default', storeInstanceId: 'fixture' })
 const task = (id, title, primary, nextSteps = []) => ({ version: 1, id, title, primary, related: [], nextSteps, createdAt: 1000, updatedAt: 1000, resolution: { state: 'open' } })
 const rows = [
   { task: task('first', '恢复并验证', ref('session-a'), ['核对恢复结果']), revision: 1 },

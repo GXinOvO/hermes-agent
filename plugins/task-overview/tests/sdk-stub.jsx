@@ -27,4 +27,3 @@ export const host = {
 let translations = {}
 export function setTestTranslations(value) { translations = value }
 export function usePluginI18n() { return key => key.split('.').reduce((part, field) => part?.[field], translations.zh) ?? key }
-

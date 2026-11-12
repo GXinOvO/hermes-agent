@@ -190,12 +190,9 @@ export async function openFollowupSession(host, item) {
   }
   const route = selectRoute(item?.route, await host.profileRoutes())
   if (route.targetProfile !== item.route.targetProfile || route.mode !== item.route.mode) throw new Error('Session owner route changed')
-  if (typeof host?.openExactSession !== 'function') {
-    const error = new Error('Exact owner navigation is unavailable in this Desktop build')
-    error.code = 'FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE'
-    throw error
-  }
-  await host.openExactSession(item.storedId, { route: { ...route, storeInstanceId: item.route.storeInstanceId } })
+  const error = new Error('Verified session navigation is unavailable in this plugin version')
+  error.code = 'FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE'
+  throw error
 }
 
 export { createFollowupTask, validateFollowupTasks, applyFollowupAction } from './followup-tasks.mjs'

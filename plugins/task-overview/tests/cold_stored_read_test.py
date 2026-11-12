@@ -15,7 +15,7 @@ spec.loader.exec_module(backend)
 
 class ColdStoredReadTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='followup-native-', dir=str(Path(__file__).resolve().parents[3]))
+        self.tmp = tempfile.TemporaryDirectory(prefix='followup-native-')
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'state.db'
         self.db = SessionDB(self.path)

@@ -5,16 +5,22 @@ import * as overview from '../src/core.mjs'
 const owner = { connectionId: 'host-a', profile: 'default', targetProfile: 'research', mode: 'remote', storeInstanceId: 'store-a' }
 const item = { storedId: 'session-1', route: owner }
 
+test('recorded store identity and an exact-open method alone never authorize navigation', async () => {
+  const api = host([owner])
+  await assert.rejects(overview.openFollowupSession(api, item), error => error.code === 'FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE')
+  assert.deepEqual(api.opens, [])
+})
+
 function host(routes) {
   const opens = []
   return { opens, profileRoutes: async () => routes, openExactSession: async (...args) => opens.push(args) }
 }
 
-test('an explicit user open routes the durable session through its exact connection and profile', async () => {
+test('an explicit user open cannot bypass the unavailable navigation guard', async () => {
   assert.equal(typeof overview.openFollowupSession, 'function')
   const api = host([owner, { ...owner, connectionId: 'host-b' }])
-  await overview.openFollowupSession(api, item)
-  assert.deepEqual(api.opens, [['session-1', { route: owner }]])
+  await assert.rejects(overview.openFollowupSession(api, item), error => error.code === 'FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE')
+  assert.deepEqual(api.opens, [])
 })
 
 test('a removed connection cannot fall back to a same-named profile on another host', async () => {
@@ -49,9 +55,11 @@ test('a missing durable session id is refused before navigating', async () => {
   assert.deepEqual(api.opens, [])
 })
 
-test('open errors propagate instead of reporting a successful navigation', async () => {
-  const api = { profileRoutes: async () => [owner], openExactSession: async () => { throw Error('source disconnected') } }
-  await assert.rejects(overview.openFollowupSession(api, item), /source disconnected/)
+test('the host open method is not called when navigation is unavailable', async () => {
+  let called = false
+  const api = { profileRoutes: async () => [owner], openExactSession: async () => { called = true; throw Error('source disconnected') } }
+  await assert.rejects(overview.openFollowupSession(api, item), error => error.code === 'FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE')
+  assert.equal(called, false)
 })
 
 test('an older host without exact-owner navigation refuses instead of using ambiguous openSession', async () => {

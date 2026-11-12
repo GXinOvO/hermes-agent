@@ -71,9 +71,8 @@ async function run() {
   await screen.findByRole('heading',{name:'更新事项'})
   assert(screen.getByText('步骤一') && screen.getByText('步骤二'),'updated steps not shown')
   const related=screen.getByRole('button',{name:/host-b \/ default \/ backend-b \/ related-session/})
-  fireEvent.click(related)
-  await waitFor(()=>assert(opens.length===1,'related open not invoked'))
-  assert(JSON.stringify(opens[0])===JSON.stringify(['related-session',{route:routeB}]),'related navigation used wrong route')
+  assert(related.disabled, 'unverified related session could be opened')
+  assert(opens.length===0,'unverified related session was opened')
   app.unmount()
   app=render(<FollowupPane host={host} t={t} storageName={name}/>)
   await screen.findByRole('heading',{name:'更新事项'})
@@ -107,10 +106,8 @@ async function run() {
   await waitFor(async()=>{const next=await store.list();assert(next[0].task.related.length===1 && next[0].task.related[0].targetProfile==='backend-new','remapped related session not persisted')})
   assert(screen.getByText('host-a / default / backend-a / primary-session'), 'primary backend target not visible')
   const remapped=screen.getByRole('button',{name:'host-a / default / backend-new / primary-session'})
-  fireEvent.click(remapped)
-  await waitFor(()=>assert(opens.length===2,'remapped related open not invoked'))
-  assert(opens[1][0]==='primary-session' && opens[1][1].route.targetProfile==='backend-new','wrong remapped related route opened')
+  assert(remapped.disabled && opens.length===0,'unverified remapped session was opened')
   store.close(); app.unmount(); cleanup()
-  return {status:'PASS',cases:['cancel tracking without saving','prevent edit or acceptance during write','edit title and remaining steps','reject duplicate primary','block save during link capture','reject route drift before save','disable draft during save','persist linked session','open exact related route','remount recovery','reject stale capture over edit draft','cancel acceptance','remove related session without changing primary']}
+  return {status:'PASS',cases:['cancel tracking without saving','prevent edit or acceptance during write','edit title and remaining steps','reject duplicate primary','block save during link capture','reject route drift before save','disable draft during save','persist linked session','unverified related session disabled','remount recovery','reject stale capture over edit draft','cancel acceptance','remove related session without changing primary']}
 }
 run().then(result=>document.querySelector('#result').textContent=JSON.stringify(result)).catch(error=>document.querySelector('#result').textContent=JSON.stringify({status:'FAIL',error:String(error),stack:error?.stack}))

@@ -399,8 +399,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 var Ra = Object.create;
 var Vn = Object.defineProperty;
 var Ma = Object.getOwnPropertyDescriptor;
-var Da = Object.getOwnPropertyNames;
-var Oa = Object.getPrototypeOf, Ba = Object.prototype.hasOwnProperty;
+var Oa = Object.getOwnPropertyNames;
+var Da = Object.getPrototypeOf, Ba = Object.prototype.hasOwnProperty;
 var qa = (e, t) => () => {
   try {
     return t || e((t = { exports: {} }).exports, t), t.exports;
@@ -412,11 +412,11 @@ var qa = (e, t) => () => {
     Vn(e, n, { get: t[n], enumerable: !0 });
 }, Ha = (e, t, n, r) => {
   if (t && typeof t == "object" || typeof t == "function")
-    for (let i of Da(t))
+    for (let i of Oa(t))
       !Ba.call(e, i) && i !== n && Vn(e, i, { get: () => t[i], enumerable: !(r = Ma(t, i)) || r.enumerable });
   return e;
 };
-var ja = (e, t, n) => (n = e != null ? Ra(Oa(e)) : {}, Ha(
+var ja = (e, t, n) => (n = e != null ? Ra(Da(e)) : {}, Ha(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
   // compatible transform (i.e. "__esModule" has not been set), then set
@@ -425,12 +425,12 @@ var ja = (e, t, n) => (n = e != null ? Ra(Oa(e)) : {}, Ha(
   e
 ));
 
-// ../../../../../hermes-agent/node_modules/.pnpm/extend@3.0.2/node_modules/extend/index.js
+// node_modules/.pnpm/extend@3.0.2/node_modules/extend/index.js
 var Fi = qa((Qc, Ci) => {
   "use strict";
-  var nn = Object.prototype.hasOwnProperty, Ai = Object.prototype.toString, bi = Object.defineProperty, Si = Object.getOwnPropertyDescriptor, Ii = function(t) {
+  var nn = Object.prototype.hasOwnProperty, Ai = Object.prototype.toString, bi = Object.defineProperty, Si = Object.getOwnPropertyDescriptor, vi = function(t) {
     return typeof Array.isArray == "function" ? Array.isArray(t) : Ai.call(t) === "[object Array]";
-  }, vi = function(t) {
+  }, Ii = function(t) {
     if (!t || Ai.call(t) !== "[object Object]")
       return !1;
     var n = nn.call(t, "constructor"), r = t.constructor && t.constructor.prototype && nn.call(t.constructor.prototype, "isPrototypeOf");
@@ -460,29 +460,29 @@ var Fi = qa((Qc, Ci) => {
     for (typeof s == "boolean" && (c = s, s = arguments[1] || {}, l = 2), (s == null || typeof s != "object" && typeof s != "function") && (s = {}); l < u; ++l)
       if (t = arguments[l], t != null)
         for (n in t)
-          r = Ti(s, n), i = Ti(t, n), s !== i && (c && i && (vi(i) || (o = Ii(i))) ? (o ? (o = !1, a = r && Ii(r) ? r : []) : a = r && vi(r) ? r : {}, Ei(s, { name: n, newValue: e(c, a, i) })) : typeof i < "u" && Ei(s, { name: n, newValue: i }));
+          r = Ti(s, n), i = Ti(t, n), s !== i && (c && i && (Ii(i) || (o = vi(i))) ? (o ? (o = !1, a = r && vi(r) ? r : []) : a = r && Ii(r) ? r : {}, Ei(s, { name: n, newValue: e(c, a, i) })) : typeof i < "u" && Ei(s, { name: n, newValue: i }));
     return s;
   };
 });
 
 // src/plugin.jsx
 import "react";
-import { Button as Dc, host as Hn, PALETTE_AREA as Oc, TITLEBAR_AREAS as Bc, TRANSCRIPT_DIRECTIVE_AREA as qc, usePluginI18n as xi } from "@hermes/plugin-sdk";
+import { Button as Oc, host as Hn, PALETTE_AREA as Dc, TITLEBAR_AREAS as Bc, TRANSCRIPT_DIRECTIVE_AREA as qc, usePluginI18n as xi } from "@hermes/plugin-sdk";
 
 // src/ui.jsx
 import { useEffect as pc } from "react";
 import { Badge as aa, Button as sa, Codicon as fc, Loader as dc, Streamdown as mc, host as Pe, useValue as Tt, useQuery as hc, useQueryClient as gc, usePluginI18n as kc } from "@hermes/plugin-sdk";
 
-// ../../../../../hermes-agent/node_modules/.pnpm/bail@2.0.2/node_modules/bail/index.js
+// node_modules/.pnpm/bail@2.0.2/node_modules/bail/index.js
 function Wn(e) {
   if (e)
     throw e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/index.js
+// node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/index.js
 var on = ja(Fi(), 1);
 
-// ../../../../../hermes-agent/node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
+// node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
 function _t(e) {
   if (typeof e != "object" || e === null)
     return !1;
@@ -490,7 +490,7 @@ function _t(e) {
   return (t === null || t === Object.prototype || Object.getPrototypeOf(t) === null) && !(Symbol.toStringTag in e) && !(Symbol.iterator in e);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/trough@2.2.0/node_modules/trough/lib/index.js
+// node_modules/.pnpm/trough@2.2.0/node_modules/trough/lib/index.js
 function $n() {
   let e = [], t = { run: n, use: r };
   return t;
@@ -545,7 +545,7 @@ function Pi(e, t) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unist-util-stringify-position@4.0.0/node_modules/unist-util-stringify-position/lib/index.js
+// node_modules/.pnpm/unist-util-stringify-position@4.0.0/node_modules/unist-util-stringify-position/lib/index.js
 function Ke(e) {
   return !e || typeof e != "object" ? "" : "position" in e || "type" in e ? zi(e.position) : "start" in e || "end" in e ? zi(e) : "line" in e || "column" in e ? Qn(e) : "";
 }
@@ -559,7 +559,7 @@ function Li(e) {
   return e && typeof e == "number" ? e : 1;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile-message@4.0.3/node_modules/vfile-message/lib/index.js
+// node_modules/.pnpm/vfile-message@4.0.3/node_modules/vfile-message/lib/index.js
 var ge = class extends Error {
   /**
    * Create a message for `reason`.
@@ -648,7 +648,7 @@ ge.prototype.place = void 0;
 ge.prototype.ruleId = void 0;
 ge.prototype.source = void 0;
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minpath.browser.js
+// node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minpath.browser.js
 var Re = { basename: Va, dirname: Wa, extname: $a, join: Qa, sep: "/" };
 function Va(e, t) {
   if (t !== void 0 && typeof t != "string")
@@ -759,19 +759,19 @@ function Nt(e) {
     );
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minproc.browser.js
+// node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minproc.browser.js
 var _i = { cwd: Ya };
 function Ya() {
   return "/";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.shared.js
+// node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.shared.js
 function gt(e) {
   return !!(e !== null && typeof e == "object" && "href" in e && e.href && "protocol" in e && e.protocol && // @ts-expect-error: indexing is fine.
   e.auth === void 0);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.browser.js
+// node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.browser.js
 function Ni(e) {
   if (typeof e == "string")
     e = new URL(e);
@@ -808,7 +808,7 @@ function Ka(e) {
   return decodeURIComponent(t);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/index.js
+// node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/index.js
 var Jn = (
   /** @type {const} */
   [
@@ -1207,7 +1207,7 @@ function Xa(e) {
   return !!(e && typeof e == "object" && "byteLength" in e && "byteOffset" in e);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/callable-instance.js
+// node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/callable-instance.js
 var Mi = (
   /**
    * @type {new <Parameters extends Array<unknown>, Result>(property: string | symbol) => (...parameters: Parameters) => Result}
@@ -1231,7 +1231,7 @@ var Mi = (
   })
 );
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/index.js
+// node_modules/.pnpm/unified@11.0.5/node_modules/unified/lib/index.js
 var Za = {}.hasOwnProperty, er = class e extends Mi {
   /**
    * Create a processor.
@@ -1480,7 +1480,7 @@ var Za = {}.hasOwnProperty, er = class e extends Mi {
    */
   processSync(t) {
     let n = !1, r;
-    return this.freeze(), Kn("processSync", this.parser || this.Parser), Xn("processSync", this.compiler || this.Compiler), this.process(t, i), Oi("processSync", "process", n), r;
+    return this.freeze(), Kn("processSync", this.parser || this.Parser), Xn("processSync", this.compiler || this.Compiler), this.process(t, i), Di("processSync", "process", n), r;
     function i(o, a) {
       n = !0, Wn(o), r = a;
     }
@@ -1524,7 +1524,7 @@ var Za = {}.hasOwnProperty, er = class e extends Mi {
    *   transformed tree.
    */
   run(t, n, r) {
-    Di(t), this.freeze();
+    Oi(t), this.freeze();
     let i = this.transformers;
     return !r && typeof n == "function" && (r = n, n = void 0), r ? o(void 0, r) : new Promise(o);
     function o(a, s) {
@@ -1558,7 +1558,7 @@ var Za = {}.hasOwnProperty, er = class e extends Mi {
    */
   runSync(t, n) {
     let r = !1, i;
-    return this.run(t, n, o), Oi("runSync", "run", r), i;
+    return this.run(t, n, o), Di("runSync", "run", r), i;
     function o(a, s) {
       Wn(a), i = s, r = !0;
     }
@@ -1595,7 +1595,7 @@ var Za = {}.hasOwnProperty, er = class e extends Mi {
   stringify(t, n) {
     this.freeze();
     let r = rn(n), i = this.compiler || this.Compiler;
-    return Xn("stringify", i), Di(t), i(t, r);
+    return Xn("stringify", i), Oi(t), i(t, r);
   }
   /**
    * Configure the processor to use a plugin, a list of usable values, or a
@@ -1707,8 +1707,8 @@ var Za = {}.hasOwnProperty, er = class e extends Mi {
       if (d === -1)
         r.push([u, ...c]);
       else if (c.length > 0) {
-        let [f, ...g] = c, v = r[d][1];
-        _t(v) && _t(f) && (f = (0, on.default)(!0, v, f)), r[d] = [u, f, ...g];
+        let [f, ...g] = c, I = r[d][1];
+        _t(I) && _t(f) && (f = (0, on.default)(!0, I, f)), r[d] = [u, f, ...g];
       }
     }
   }
@@ -1727,11 +1727,11 @@ function Zn(e, t) {
       "Cannot call `" + e + "` on a frozen processor.\nCreate a new processor first, by calling it: use `processor()` instead of `processor`."
     );
 }
-function Di(e) {
+function Oi(e) {
   if (!_t(e) || typeof e.type != "string")
     throw new TypeError("Expected node, got `" + e + "`");
 }
-function Oi(e, t, n) {
+function Di(e, t, n) {
   if (!n)
     throw new Error(
       "`" + e + "` finished async. Use `" + t + "` instead"
@@ -1750,7 +1750,7 @@ function ns(e) {
   return !!(e && typeof e == "object" && "byteLength" in e && "byteOffset" in e);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-string@4.0.0/node_modules/mdast-util-to-string/lib/index.js
+// node_modules/.pnpm/mdast-util-to-string@4.0.0/node_modules/mdast-util-to-string/lib/index.js
 var rs = {};
 function it(e, t) {
   let n = t || rs, r = typeof n.includeImageAlt == "boolean" ? n.includeImageAlt : !0, i = typeof n.includeHtml == "boolean" ? n.includeHtml : !0;
@@ -1777,7 +1777,7 @@ function is(e) {
   return !!(e && typeof e == "object");
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/decode-named-character-reference@1.3.0/node_modules/decode-named-character-reference/index.dom.js
+// node_modules/.pnpm/decode-named-character-reference@1.3.0/node_modules/decode-named-character-reference/index.dom.js
 var Ui = document.createElement("i");
 function kt(e) {
   let t = "&" + e + ";";
@@ -1786,7 +1786,7 @@ function kt(e) {
   return n.charCodeAt(n.length - 1) === 59 && e !== "semi" || n === t ? !1 : n;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-chunked@2.0.1/node_modules/micromark-util-chunked/index.js
+// node_modules/.pnpm/micromark-util-chunked@2.0.1/node_modules/micromark-util-chunked/index.js
 function ke(e, t, n, r) {
   let i = e.length, o = 0, a;
   if (t < 0 ? t = -t > i ? 0 : i + t : t = t > i ? i : t, n = n > 0 ? n : 0, r.length < 1e4)
@@ -1799,7 +1799,7 @@ function Te(e, t) {
   return e.length > 0 ? (ke(e, e.length, 0, t), e) : t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-combine-extensions@2.0.1/node_modules/micromark-util-combine-extensions/index.js
+// node_modules/.pnpm/micromark-util-combine-extensions@2.0.1/node_modules/micromark-util-combine-extensions/index.js
 var Hi = {}.hasOwnProperty;
 function an(e) {
   let t = {}, n = -1;
@@ -1830,7 +1830,7 @@ function as(e, t) {
   ke(e, 0, 0, r);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-decode-numeric-character-reference@2.0.2/node_modules/micromark-util-decode-numeric-character-reference/index.js
+// node_modules/.pnpm/micromark-util-decode-numeric-character-reference@2.0.2/node_modules/micromark-util-decode-numeric-character-reference/index.js
 function sn(e, t) {
   let n = Number.parseInt(e, t);
   return (
@@ -1845,12 +1845,12 @@ function sn(e, t) {
   );
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-normalize-identifier@2.0.1/node_modules/micromark-util-normalize-identifier/index.js
+// node_modules/.pnpm/micromark-util-normalize-identifier@2.0.1/node_modules/micromark-util-normalize-identifier/index.js
 function Se(e) {
   return e.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "").toLowerCase().toUpperCase();
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-character@2.1.1/node_modules/micromark-util-character/index.js
+// node_modules/.pnpm/micromark-util-character@2.1.1/node_modules/micromark-util-character/index.js
 var pe = Xe(/[A-Za-z]/), fe = Xe(/[\dA-Za-z]/), ji = Xe(/[#-'*+\--9=?A-Z^-~]/);
 function ot(e) {
   return (
@@ -1869,7 +1869,7 @@ function J(e) {
 function B(e) {
   return e === -2 || e === -1 || e === 32;
 }
-var at = Xe(/\p{P}|\p{S}/u), Oe = Xe(/\s/);
+var at = Xe(/\p{P}|\p{S}/u), De = Xe(/\s/);
 function Xe(e) {
   return t;
   function t(n) {
@@ -1877,8 +1877,8 @@ function Xe(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-factory-space@2.1.0/node_modules/micromark-factory-space/index.js
-function D(e, t, n, r) {
+// node_modules/.pnpm/micromark-factory-space@2.1.0/node_modules/micromark-factory-space/index.js
+function O(e, t, n, r) {
   let i = r ? r - 1 : 1 / 0, o = 0;
   return a;
   function a(l) {
@@ -1902,7 +1902,7 @@ function nr(e, t, n, r, i, o) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/content.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/content.js
 var $i = {
   tokenize: ss
 };
@@ -1914,7 +1914,7 @@ function ss(e) {
       e.consume(s);
       return;
     }
-    return e.enter("lineEnding"), e.consume(s), e.exit("lineEnding"), D(e, t, "linePrefix");
+    return e.enter("lineEnding"), e.consume(s), e.exit("lineEnding"), O(e, t, "linePrefix");
   }
   function i(s) {
     return e.enter("paragraph"), o(s);
@@ -1935,7 +1935,7 @@ function ss(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-edit-map@1.0.0/node_modules/micromark-util-edit-map/index.js
+// node_modules/.pnpm/micromark-util-edit-map@1.0.0/node_modules/micromark-util-edit-map/index.js
 var We = class {
   /**
    * Create a new edit map.
@@ -2015,7 +2015,7 @@ function Qi(e, t, n, r, i) {
   e.map.push(a), e.index.set(t, a);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/document.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/document.js
 var Gi = {
   tokenize: ls
 }, Ji = {
@@ -2033,7 +2033,7 @@ function ls(e) {
   }
   function l(k) {
     if (r++, t.containerState._closeFlow) {
-      t.containerState._closeFlow = void 0, i && I();
+      t.containerState._closeFlow = void 0, i && v();
       let A = t.events.length, _ = A, S;
       for (; _--; )
         if (t.events[_][0] === "exit" && t.events[_][1].type === "chunkFlow") {
@@ -2062,7 +2062,7 @@ function ls(e) {
     return t.containerState = {}, e.check(Ji, c, p)(k);
   }
   function c(k) {
-    return i && I(), x(r), d(k);
+    return i && v(), x(r), d(k);
   }
   function p(k) {
     return t.parser.lazy[t.now().line] = r !== n.length, a = t.now().offset, g(k);
@@ -2075,21 +2075,21 @@ function ls(e) {
   }
   function g(k) {
     if (k === null) {
-      i && I(), x(0), e.consume(k);
+      i && v(), x(0), e.consume(k);
       return;
     }
     return i = i || t.parser.flow(t.now()), e.enter("chunkFlow", {
       _tokenizer: i,
       contentType: "flow",
       previous: o
-    }), v(k);
+    }), I(k);
   }
-  function v(k) {
+  function I(k) {
     if (k === null) {
       E(e.exit("chunkFlow"), !0), x(0), e.consume(k);
       return;
     }
-    return P(k) ? (e.consume(k), E(e.exit("chunkFlow")), r = 0, t.interrupt = void 0, s) : (e.consume(k), v);
+    return P(k) ? (e.consume(k), E(e.exit("chunkFlow")), r = 0, t.interrupt = void 0, s) : (e.consume(k), I);
   }
   function E(k, A) {
     let _ = t.sliceStream(k);
@@ -2128,23 +2128,23 @@ function ls(e) {
     }
     n.length = k;
   }
-  function I() {
+  function v() {
     i.write([null]), o = void 0, i = void 0, t.containerState._closeFlow = void 0;
   }
 }
 function us(e, t, n) {
-  return D(e, e.attempt(this.parser.constructs.document, t, n), "linePrefix", this.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4);
+  return O(e, e.attempt(this.parser.constructs.document, t, n), "linePrefix", this.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-classify-character@2.0.1/node_modules/micromark-util-classify-character/index.js
+// node_modules/.pnpm/micromark-util-classify-character@2.0.1/node_modules/micromark-util-classify-character/index.js
 function wt(e) {
-  if (e === null || J(e) || Oe(e))
+  if (e === null || J(e) || De(e))
     return 1;
   if (at(e))
     return 2;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-resolve-all@2.0.1/node_modules/micromark-util-resolve-all/index.js
+// node_modules/.pnpm/micromark-util-resolve-all@2.0.1/node_modules/micromark-util-resolve-all/index.js
 function Ze(e, t, n) {
   let r = [], i = -1;
   for (; ++i < e.length; ) {
@@ -2154,8 +2154,8 @@ function Ze(e, t, n) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/attention.js
-var Dt = {
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/attention.js
+var Ot = {
   name: "attention",
   resolveAll: cs,
   tokenize: ps
@@ -2236,7 +2236,7 @@ function Yi(e, t) {
   e.column += t, e.offset += t, e._bufferIndex += t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/autolink.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/autolink.js
 var rr = {
   name: "autolink",
   tokenize: fs
@@ -2277,7 +2277,7 @@ function fs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/blank-line.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/blank-line.js
 var Be = {
   partial: !0,
   tokenize: ds
@@ -2285,14 +2285,14 @@ var Be = {
 function ds(e, t, n) {
   return r;
   function r(o) {
-    return B(o) ? D(e, i, "linePrefix")(o) : i(o);
+    return B(o) ? O(e, i, "linePrefix")(o) : i(o);
   }
   function i(o) {
     return o === null || P(o) ? t(o) : n(o);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/block-quote.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/block-quote.js
 var ln = {
   continuation: {
     tokenize: hs
@@ -2321,7 +2321,7 @@ function hs(e, t, n) {
   let r = this;
   return i;
   function i(a) {
-    return B(a) ? D(e, o, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(a) : o(a);
+    return B(a) ? O(e, o, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(a) : o(a);
   }
   function o(a) {
     return e.attempt(ln, t, n)(a);
@@ -2331,7 +2331,7 @@ function gs(e) {
   e.exit("blockQuote");
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/character-escape.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/character-escape.js
 var un = {
   name: "characterEscape",
   tokenize: ks
@@ -2346,7 +2346,7 @@ function ks(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/character-reference.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/character-reference.js
 var cn = {
   name: "characterReference",
   tokenize: ws
@@ -2372,8 +2372,8 @@ function ws(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/partial-non-lazy-continuation.js
-var Ot = {
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/partial-non-lazy-continuation.js
+var Dt = {
   partial: !0,
   tokenize: xs
 };
@@ -2388,7 +2388,7 @@ function xs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-fenced.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-fenced.js
 var pn = {
   concrete: !0,
   name: "codeFenced",
@@ -2408,15 +2408,15 @@ function ys(e, t, n) {
     return o = F && F[1].type === "linePrefix" ? F[2].sliceSerialize(F[1], !0).length : 0, s = S, e.enter("codeFenced"), e.enter("codeFencedFence"), e.enter("codeFencedFenceSequence"), c(S);
   }
   function c(S) {
-    return S === s ? (a++, e.consume(S), c) : a < 3 ? n(S) : (e.exit("codeFencedFenceSequence"), B(S) ? D(e, p, "whitespace")(S) : p(S));
+    return S === s ? (a++, e.consume(S), c) : a < 3 ? n(S) : (e.exit("codeFencedFenceSequence"), B(S) ? O(e, p, "whitespace")(S) : p(S));
   }
   function p(S) {
-    return S === null || P(S) ? (e.exit("codeFencedFence"), r.interrupt ? t(S) : e.check(Ot, v, A)(S)) : (e.enter("codeFencedFenceInfo"), e.enter("chunkString", {
+    return S === null || P(S) ? (e.exit("codeFencedFence"), r.interrupt ? t(S) : e.check(Dt, I, A)(S)) : (e.enter("codeFencedFenceInfo"), e.enter("chunkString", {
       contentType: "string"
     }), d(S));
   }
   function d(S) {
-    return S === null || P(S) ? (e.exit("chunkString"), e.exit("codeFencedFenceInfo"), p(S)) : B(S) ? (e.exit("chunkString"), e.exit("codeFencedFenceInfo"), D(e, f, "whitespace")(S)) : S === 96 && S === s ? n(S) : (e.consume(S), d);
+    return S === null || P(S) ? (e.exit("chunkString"), e.exit("codeFencedFenceInfo"), p(S)) : B(S) ? (e.exit("chunkString"), e.exit("codeFencedFenceInfo"), O(e, f, "whitespace")(S)) : S === 96 && S === s ? n(S) : (e.consume(S), d);
   }
   function f(S) {
     return S === null || P(S) ? p(S) : (e.enter("codeFencedFenceMeta"), e.enter("chunkString", {
@@ -2426,20 +2426,20 @@ function ys(e, t, n) {
   function g(S) {
     return S === null || P(S) ? (e.exit("chunkString"), e.exit("codeFencedFenceMeta"), p(S)) : S === 96 && S === s ? n(S) : (e.consume(S), g);
   }
-  function v(S) {
+  function I(S) {
     return e.attempt(i, A, E)(S);
   }
   function E(S) {
     return e.enter("lineEnding"), e.consume(S), e.exit("lineEnding"), x;
   }
   function x(S) {
-    return o > 0 && B(S) ? D(e, I, "linePrefix", o + 1)(S) : I(S);
+    return o > 0 && B(S) ? O(e, v, "linePrefix", o + 1)(S) : v(S);
   }
-  function I(S) {
-    return S === null || P(S) ? e.check(Ot, v, A)(S) : (e.enter("codeFlowValue"), k(S));
+  function v(S) {
+    return S === null || P(S) ? e.check(Dt, I, A)(S) : (e.enter("codeFlowValue"), k(S));
   }
   function k(S) {
-    return S === null || P(S) ? (e.exit("codeFlowValue"), I(S)) : (e.consume(S), k);
+    return S === null || P(S) ? (e.exit("codeFlowValue"), v(S)) : (e.consume(S), k);
   }
   function A(S) {
     return e.exit("codeFenced"), t(S);
@@ -2451,13 +2451,13 @@ function ys(e, t, n) {
       return S.enter("lineEnding"), S.consume(V), S.exit("lineEnding"), W;
     }
     function W(V) {
-      return S.enter("codeFencedFence"), B(V) ? D(S, O, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(V) : O(V);
+      return S.enter("codeFencedFence"), B(V) ? O(S, D, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(V) : D(V);
     }
-    function O(V) {
+    function D(V) {
       return V === s ? (S.enter("codeFencedFenceSequence"), L(V)) : U(V);
     }
     function L(V) {
-      return V === s ? (z++, S.consume(V), L) : z >= a ? (S.exit("codeFencedFenceSequence"), B(V) ? D(S, $, "whitespace")(V) : $(V)) : U(V);
+      return V === s ? (z++, S.consume(V), L) : z >= a ? (S.exit("codeFencedFenceSequence"), B(V) ? O(S, $, "whitespace")(V) : $(V)) : U(V);
     }
     function $(V) {
       return V === null || P(V) ? (S.exit("codeFencedFence"), F(V)) : U(V);
@@ -2465,13 +2465,13 @@ function ys(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-indented.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-indented.js
 var Bt = {
   name: "codeIndented",
   tokenize: Ss
 }, bs = {
   partial: !0,
-  tokenize: Is
+  tokenize: vs
 };
 function Ss(e, t, n) {
   return r;
@@ -2488,7 +2488,7 @@ function Ss(e, t, n) {
     return e.exit("codeIndented"), t(s);
   }
 }
-function Is(e, t, n) {
+function vs(e, t, n) {
   let r = this;
   return i;
   function i(a) {
@@ -2499,14 +2499,14 @@ function Is(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-text.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/code-text.js
 var ir = {
   name: "codeText",
   previous: Es,
-  resolve: vs,
+  resolve: Is,
   tokenize: Ts
 };
-function vs(e) {
+function Is(e) {
   let t = e.length - 4, n = 3, r, i;
   if ((e[n][1].type === "lineEnding" || e[n][1].type === "space") && (e[t][1].type === "lineEnding" || e[t][1].type === "space")) {
     for (r = n; ++r < t; )
@@ -2542,7 +2542,7 @@ function Ts(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-subtokenize@2.1.0/node_modules/micromark-util-subtokenize/lib/splice-buffer.js
+// node_modules/.pnpm/micromark-util-subtokenize@2.1.0/node_modules/micromark-util-subtokenize/lib/splice-buffer.js
 var fn = class {
   /**
    * @param {ReadonlyArray<T> | null | undefined} [initial]
@@ -2716,7 +2716,7 @@ function qt(e, t) {
       e.push(...t.slice(n, n + 1e4)), n += 1e4;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-subtokenize@2.1.0/node_modules/micromark-util-subtokenize/index.js
+// node_modules/.pnpm/micromark-util-subtokenize@2.1.0/node_modules/micromark-util-subtokenize/index.js
 function dn(e) {
   let t = {}, n = -1, r, i, o, a, s, l, u, c = new fn(e);
   for (; ++n < c.length; ) {
@@ -2743,7 +2743,7 @@ function dn(e) {
 function As(e, t) {
   let n = e.get(t)[1], r = e.get(t)[2], i = t - 1, o = [], a = n._tokenizer;
   a || (a = r.parser[n.contentType](n.start), n._contentTypeTextTrailing && (a._contentTypeTextTrailing = !0));
-  let s = a.events, l = [], u = {}, c, p, d = -1, f = n, g = 0, v = 0, E = [v];
+  let s = a.events, l = [], u = {}, c, p, d = -1, f = n, g = 0, I = 0, E = [I];
   for (; f; ) {
     for (; e.get(++i)[1] !== f; )
       ;
@@ -2751,17 +2751,17 @@ function As(e, t) {
   }
   for (f = n; ++d < s.length; )
     // Find a void token that includes a break.
-    s[d][0] === "exit" && s[d - 1][0] === "enter" && s[d][1].type === s[d - 1][1].type && s[d][1].start.line !== s[d][1].end.line && (v = d + 1, E.push(v), f._tokenizer = void 0, f.previous = void 0, f = f.next);
+    s[d][0] === "exit" && s[d - 1][0] === "enter" && s[d][1].type === s[d - 1][1].type && s[d][1].start.line !== s[d][1].end.line && (I = d + 1, E.push(I), f._tokenizer = void 0, f.previous = void 0, f = f.next);
   for (a.events = [], f ? (f._tokenizer = void 0, f.previous = void 0) : E.pop(), d = E.length; d--; ) {
-    let x = s.slice(E[d], E[d + 1]), I = o.pop();
-    l.push([I, I + x.length - 1]), e.splice(I, 2, x);
+    let x = s.slice(E[d], E[d + 1]), v = o.pop();
+    l.push([v, v + x.length - 1]), e.splice(v, 2, x);
   }
   for (l.reverse(), d = -1; ++d < l.length; )
     u[g + l[d][0]] = g + l[d][1], g += l[d][1] - l[d][0] - 1;
   return u;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/content.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/content.js
 var or = {
   resolve: Fs,
   tokenize: Ps
@@ -2797,7 +2797,7 @@ function zs(e, t, n) {
   let r = this;
   return i;
   function i(a) {
-    return e.exit("chunkContent"), e.enter("lineEnding"), e.consume(a), e.exit("lineEnding"), D(e, o, "linePrefix");
+    return e.exit("chunkContent"), e.enter("lineEnding"), e.consume(a), e.exit("lineEnding"), O(e, o, "linePrefix");
   }
   function o(a) {
     if (a === null || P(a))
@@ -2807,14 +2807,14 @@ function zs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-factory-destination@2.0.1/node_modules/micromark-factory-destination/index.js
+// node_modules/.pnpm/micromark-factory-destination@2.0.1/node_modules/micromark-factory-destination/index.js
 function mn(e, t, n, r, i, o, a, s, l) {
   let u = l || Number.POSITIVE_INFINITY, c = 0;
   return p;
   function p(x) {
     return x === 60 ? (e.enter(r), e.enter(i), e.enter(o), e.consume(x), e.exit(o), d) : x === null || x === 32 || x === 41 || ot(x) ? n(x) : (e.enter(r), e.enter(a), e.enter(s), e.enter("chunkString", {
       contentType: "string"
-    }), v(x));
+    }), I(x));
   }
   function d(x) {
     return x === 62 ? (e.enter(o), e.consume(x), e.exit(o), e.exit(i), e.exit(r), t) : (e.enter(s), e.enter("chunkString", {
@@ -2827,15 +2827,15 @@ function mn(e, t, n, r, i, o, a, s, l) {
   function g(x) {
     return x === 60 || x === 62 || x === 92 ? (e.consume(x), f) : f(x);
   }
-  function v(x) {
-    return !c && (x === null || x === 41 || J(x)) ? (e.exit("chunkString"), e.exit(s), e.exit(a), e.exit(r), t(x)) : c < u && x === 40 ? (e.consume(x), c++, v) : x === 41 ? (e.consume(x), c--, v) : x === null || x === 32 || x === 40 || ot(x) ? n(x) : (e.consume(x), x === 92 ? E : v);
+  function I(x) {
+    return !c && (x === null || x === 41 || J(x)) ? (e.exit("chunkString"), e.exit(s), e.exit(a), e.exit(r), t(x)) : c < u && x === 40 ? (e.consume(x), c++, I) : x === 41 ? (e.consume(x), c--, I) : x === null || x === 32 || x === 40 || ot(x) ? n(x) : (e.consume(x), x === 92 ? E : I);
   }
   function E(x) {
-    return x === 40 || x === 41 || x === 92 ? (e.consume(x), v) : v(x);
+    return x === 40 || x === 41 || x === 92 ? (e.consume(x), I) : I(x);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-factory-label@2.0.1/node_modules/micromark-factory-label/index.js
+// node_modules/.pnpm/micromark-factory-label@2.0.1/node_modules/micromark-factory-label/index.js
 function hn(e, t, n, r, i, o) {
   let a = this, s = 0, l;
   return u;
@@ -2860,7 +2860,7 @@ function hn(e, t, n, r, i, o) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-factory-title@2.0.1/node_modules/micromark-factory-title/index.js
+// node_modules/.pnpm/micromark-factory-title@2.0.1/node_modules/micromark-factory-title/index.js
 function gn(e, t, n, r, i, o) {
   let a;
   return s;
@@ -2871,7 +2871,7 @@ function gn(e, t, n, r, i, o) {
     return d === a ? (e.enter(i), e.consume(d), e.exit(i), e.exit(r), t) : (e.enter(o), u(d));
   }
   function u(d) {
-    return d === a ? (e.exit(o), l(a)) : d === null ? n(d) : P(d) ? (e.enter("lineEnding"), e.consume(d), e.exit("lineEnding"), D(e, u, "linePrefix")) : (e.enter("chunkString", {
+    return d === a ? (e.exit(o), l(a)) : d === null ? n(d) : P(d) ? (e.enter("lineEnding"), e.consume(d), e.exit("lineEnding"), O(e, u, "linePrefix")) : (e.enter("chunkString", {
       contentType: "string"
     }), c(d));
   }
@@ -2883,16 +2883,16 @@ function gn(e, t, n, r, i, o) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-factory-whitespace@2.0.1/node_modules/micromark-factory-whitespace/index.js
+// node_modules/.pnpm/micromark-factory-whitespace@2.0.1/node_modules/micromark-factory-whitespace/index.js
 function st(e, t) {
   let n;
   return r;
   function r(i) {
-    return P(i) ? (e.enter("lineEnding"), e.consume(i), e.exit("lineEnding"), n = !0, r) : B(i) ? D(e, r, n ? "linePrefix" : "lineSuffix")(i) : t(i);
+    return P(i) ? (e.enter("lineEnding"), e.consume(i), e.exit("lineEnding"), n = !0, r) : B(i) ? O(e, r, n ? "linePrefix" : "lineSuffix")(i) : t(i);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/definition.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/definition.js
 var ar = {
   name: "definition",
   tokenize: _s
@@ -2941,7 +2941,7 @@ function _s(e, t, n) {
     return e.attempt(Ls, p, p)(f);
   }
   function p(f) {
-    return B(f) ? D(e, d, "whitespace")(f) : d(f);
+    return B(f) ? O(e, d, "whitespace")(f) : d(f);
   }
   function d(f) {
     return f === null || P(f) ? (e.exit("definition"), r.parser.defined.push(i), t(f)) : n(f);
@@ -2956,14 +2956,14 @@ function Ns(e, t, n) {
     return gn(e, o, n, "definitionTitle", "definitionTitleMarker", "definitionTitleString")(s);
   }
   function o(s) {
-    return B(s) ? D(e, a, "whitespace")(s) : a(s);
+    return B(s) ? O(e, a, "whitespace")(s) : a(s);
   }
   function a(s) {
     return s === null || P(s) ? t(s) : n(s);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/hard-break-escape.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/hard-break-escape.js
 var sr = {
   name: "hardBreakEscape",
   tokenize: Rs
@@ -2978,11 +2978,11 @@ function Rs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/heading-atx.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/heading-atx.js
 var lr = {
   name: "headingAtx",
   resolve: Ms,
-  tokenize: Ds
+  tokenize: Os
 };
 function Ms(e, t) {
   let n = e.length - 2, r = 3;
@@ -3001,7 +3001,7 @@ function Ms(e, t) {
   }
   return e;
 }
-function Ds(e, t, n) {
+function Os(e, t, n) {
   let r = 0;
   return i;
   function i(c) {
@@ -3014,7 +3014,7 @@ function Ds(e, t, n) {
     return c === 35 && r++ < 6 ? (e.consume(c), a) : c === null || J(c) ? (e.exit("atxHeadingSequence"), s(c)) : n(c);
   }
   function s(c) {
-    return c === 35 ? (e.enter("atxHeadingSequence"), l(c)) : c === null || P(c) ? (e.exit("atxHeading"), t(c)) : B(c) ? D(e, s, "whitespace")(c) : (e.enter("atxHeadingText"), u(c));
+    return c === 35 ? (e.enter("atxHeadingSequence"), l(c)) : c === null || P(c) ? (e.exit("atxHeading"), t(c)) : B(c) ? O(e, s, "whitespace")(c) : (e.enter("atxHeadingText"), u(c));
   }
   function l(c) {
     return c === 35 ? (e.consume(c), l) : (e.exit("atxHeadingSequence"), s(c));
@@ -3024,7 +3024,7 @@ function Ds(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-html-tag-name@2.0.1/node_modules/micromark-util-html-tag-name/index.js
+// node_modules/.pnpm/micromark-util-html-tag-name@2.0.1/node_modules/micromark-util-html-tag-name/index.js
 var Ki = [
   "address",
   "article",
@@ -3090,13 +3090,13 @@ var Ki = [
   "ul"
 ], ur = ["pre", "script", "style", "textarea"];
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/html-flow.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/html-flow.js
 var cr = {
   concrete: !0,
   name: "htmlFlow",
   resolveTo: Bs,
   tokenize: qs
-}, Os = {
+}, Ds = {
   partial: !0,
   tokenize: Us
 };
@@ -3116,7 +3116,7 @@ function qs(e, t, n) {
     return e.enter("htmlFlow"), e.enter("htmlFlowData"), e.consume(h), p;
   }
   function p(h) {
-    return h === 33 ? (e.consume(h), d) : h === 47 ? (e.consume(h), o = !0, v) : h === 63 ? (e.consume(h), i = 3, r.interrupt ? t : m) : pe(h) ? (e.consume(h), a = String.fromCharCode(h), E) : n(h);
+    return h === 33 ? (e.consume(h), d) : h === 47 ? (e.consume(h), o = !0, I) : h === 63 ? (e.consume(h), i = 3, r.interrupt ? t : m) : pe(h) ? (e.consume(h), a = String.fromCharCode(h), E) : n(h);
   }
   function d(h) {
     return h === 45 ? (e.consume(h), i = 2, f) : h === 91 ? (e.consume(h), i = 5, s = 0, g) : pe(h) ? (e.consume(h), i = 4, r.interrupt ? t : m) : n(h);
@@ -3126,23 +3126,23 @@ function qs(e, t, n) {
   }
   function g(h) {
     let se = "CDATA[";
-    return h === se.charCodeAt(s++) ? (e.consume(h), s === se.length ? r.interrupt ? t : O : g) : n(h);
+    return h === se.charCodeAt(s++) ? (e.consume(h), s === se.length ? r.interrupt ? t : D : g) : n(h);
   }
-  function v(h) {
+  function I(h) {
     return pe(h) ? (e.consume(h), a = String.fromCharCode(h), E) : n(h);
   }
   function E(h) {
     if (h === null || h === 47 || h === 62 || J(h)) {
       let se = h === 47, X = a.toLowerCase();
-      return !se && !o && ur.includes(X) ? (i = 1, r.interrupt ? t(h) : O(h)) : Ki.includes(a.toLowerCase()) ? (i = 6, se ? (e.consume(h), x) : r.interrupt ? t(h) : O(h)) : (i = 7, r.interrupt && !r.parser.lazy[r.now().line] ? n(h) : o ? I(h) : k(h));
+      return !se && !o && ur.includes(X) ? (i = 1, r.interrupt ? t(h) : D(h)) : Ki.includes(a.toLowerCase()) ? (i = 6, se ? (e.consume(h), x) : r.interrupt ? t(h) : D(h)) : (i = 7, r.interrupt && !r.parser.lazy[r.now().line] ? n(h) : o ? v(h) : k(h));
     }
     return h === 45 || fe(h) ? (e.consume(h), a += String.fromCharCode(h), E) : n(h);
   }
   function x(h) {
-    return h === 62 ? (e.consume(h), r.interrupt ? t : O) : n(h);
+    return h === 62 ? (e.consume(h), r.interrupt ? t : D) : n(h);
   }
-  function I(h) {
-    return B(h) ? (e.consume(h), I) : w(h);
+  function v(h) {
+    return B(h) ? (e.consume(h), v) : w(h);
   }
   function k(h) {
     return h === 47 ? (e.consume(h), w) : h === 58 || h === 95 || pe(h) ? (e.consume(h), A) : B(h) ? (e.consume(h), k) : w(h);
@@ -3169,38 +3169,38 @@ function qs(e, t, n) {
     return h === 62 ? (e.consume(h), W) : n(h);
   }
   function W(h) {
-    return h === null || P(h) ? O(h) : B(h) ? (e.consume(h), W) : n(h);
+    return h === null || P(h) ? D(h) : B(h) ? (e.consume(h), W) : n(h);
   }
-  function O(h) {
-    return h === 45 && i === 2 ? (e.consume(h), Z) : h === 60 && i === 1 ? (e.consume(h), ee) : h === 62 && i === 4 ? (e.consume(h), we) : h === 63 && i === 3 ? (e.consume(h), m) : h === 93 && i === 5 ? (e.consume(h), ie) : P(h) && (i === 6 || i === 7) ? (e.exit("htmlFlowData"), e.check(Os, xe, L)(h)) : h === null || P(h) ? (e.exit("htmlFlowData"), L(h)) : (e.consume(h), O);
+  function D(h) {
+    return h === 45 && i === 2 ? (e.consume(h), Z) : h === 60 && i === 1 ? (e.consume(h), ee) : h === 62 && i === 4 ? (e.consume(h), we) : h === 63 && i === 3 ? (e.consume(h), m) : h === 93 && i === 5 ? (e.consume(h), ie) : P(h) && (i === 6 || i === 7) ? (e.exit("htmlFlowData"), e.check(Ds, xe, L)(h)) : h === null || P(h) ? (e.exit("htmlFlowData"), L(h)) : (e.consume(h), D);
   }
   function L(h) {
-    return e.check(Ot, $, xe)(h);
+    return e.check(Dt, $, xe)(h);
   }
   function $(h) {
     return e.enter("lineEnding"), e.consume(h), e.exit("lineEnding"), V;
   }
   function V(h) {
-    return h === null || P(h) ? L(h) : (e.enter("htmlFlowData"), O(h));
+    return h === null || P(h) ? L(h) : (e.enter("htmlFlowData"), D(h));
   }
   function Z(h) {
-    return h === 45 ? (e.consume(h), m) : O(h);
+    return h === 45 ? (e.consume(h), m) : D(h);
   }
   function ee(h) {
-    return h === 47 ? (e.consume(h), a = "", ue) : O(h);
+    return h === 47 ? (e.consume(h), a = "", ue) : D(h);
   }
   function ue(h) {
     if (h === 62) {
       let se = a.toLowerCase();
-      return ur.includes(se) ? (e.consume(h), we) : O(h);
+      return ur.includes(se) ? (e.consume(h), we) : D(h);
     }
-    return pe(h) && a.length < 8 ? (e.consume(h), a += String.fromCharCode(h), ue) : O(h);
+    return pe(h) && a.length < 8 ? (e.consume(h), a += String.fromCharCode(h), ue) : D(h);
   }
   function ie(h) {
-    return h === 93 ? (e.consume(h), m) : O(h);
+    return h === 93 ? (e.consume(h), m) : D(h);
   }
   function m(h) {
-    return h === 62 ? (e.consume(h), we) : h === 45 && i === 2 ? (e.consume(h), m) : O(h);
+    return h === 62 ? (e.consume(h), we) : h === 45 && i === 2 ? (e.consume(h), m) : D(h);
   }
   function we(h) {
     return h === null || P(h) ? (e.exit("htmlFlowData"), xe(h)) : (e.consume(h), we);
@@ -3216,7 +3216,7 @@ function Us(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/html-text.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/html-text.js
 var pr = {
   name: "htmlText",
   tokenize: Hs
@@ -3231,7 +3231,7 @@ function Hs(e, t, n) {
     return m === 33 ? (e.consume(m), u) : m === 47 ? (e.consume(m), _) : m === 63 ? (e.consume(m), k) : pe(m) ? (e.consume(m), U) : n(m);
   }
   function u(m) {
-    return m === 45 ? (e.consume(m), c) : m === 91 ? (e.consume(m), o = 0, g) : pe(m) ? (e.consume(m), I) : n(m);
+    return m === 45 ? (e.consume(m), c) : m === 91 ? (e.consume(m), o = 0, g) : pe(m) ? (e.consume(m), v) : n(m);
   }
   function c(m) {
     return m === 45 ? (e.consume(m), f) : n(m);
@@ -3247,19 +3247,19 @@ function Hs(e, t, n) {
   }
   function g(m) {
     let we = "CDATA[";
-    return m === we.charCodeAt(o++) ? (e.consume(m), o === we.length ? v : g) : n(m);
-  }
-  function v(m) {
-    return m === null ? n(m) : m === 93 ? (e.consume(m), E) : P(m) ? (a = v, ee(m)) : (e.consume(m), v);
-  }
-  function E(m) {
-    return m === 93 ? (e.consume(m), x) : v(m);
-  }
-  function x(m) {
-    return m === 62 ? Z(m) : m === 93 ? (e.consume(m), x) : v(m);
+    return m === we.charCodeAt(o++) ? (e.consume(m), o === we.length ? I : g) : n(m);
   }
   function I(m) {
-    return m === null || m === 62 ? Z(m) : P(m) ? (a = I, ee(m)) : (e.consume(m), I);
+    return m === null ? n(m) : m === 93 ? (e.consume(m), E) : P(m) ? (a = I, ee(m)) : (e.consume(m), I);
+  }
+  function E(m) {
+    return m === 93 ? (e.consume(m), x) : I(m);
+  }
+  function x(m) {
+    return m === 62 ? Z(m) : m === 93 ? (e.consume(m), x) : I(m);
+  }
+  function v(m) {
+    return m === null || m === 62 ? Z(m) : P(m) ? (a = v, ee(m)) : (e.consume(m), v);
   }
   function k(m) {
     return m === null ? n(m) : m === 63 ? (e.consume(m), A) : P(m) ? (a = k, ee(m)) : (e.consume(m), k);
@@ -3286,10 +3286,10 @@ function Hs(e, t, n) {
     return m === 45 || m === 46 || m === 58 || m === 95 || fe(m) ? (e.consume(m), w) : W(m);
   }
   function W(m) {
-    return m === 61 ? (e.consume(m), O) : P(m) ? (a = W, ee(m)) : B(m) ? (e.consume(m), W) : z(m);
+    return m === 61 ? (e.consume(m), D) : P(m) ? (a = W, ee(m)) : B(m) ? (e.consume(m), W) : z(m);
   }
-  function O(m) {
-    return m === null || m === 60 || m === 61 || m === 62 || m === 96 ? n(m) : m === 34 || m === 39 ? (e.consume(m), i = m, L) : P(m) ? (a = O, ee(m)) : B(m) ? (e.consume(m), O) : (e.consume(m), $);
+  function D(m) {
+    return m === null || m === 60 || m === 61 || m === 62 || m === 96 ? n(m) : m === 34 || m === 39 ? (e.consume(m), i = m, L) : P(m) ? (a = D, ee(m)) : B(m) ? (e.consume(m), D) : (e.consume(m), $);
   }
   function L(m) {
     return m === i ? (e.consume(m), i = void 0, V) : m === null ? n(m) : P(m) ? (a = L, ee(m)) : (e.consume(m), L);
@@ -3307,14 +3307,14 @@ function Hs(e, t, n) {
     return e.exit("htmlTextData"), e.enter("lineEnding"), e.consume(m), e.exit("lineEnding"), ue;
   }
   function ue(m) {
-    return B(m) ? D(e, ie, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(m) : ie(m);
+    return B(m) ? O(e, ie, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(m) : ie(m);
   }
   function ie(m) {
     return e.enter("htmlTextData"), a(m);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-end.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-end.js
 var lt = {
   name: "labelEnd",
   resolveAll: $s,
@@ -3457,7 +3457,7 @@ function Ks(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-start-image.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-start-image.js
 var fr = {
   name: "labelStartImage",
   resolveAll: lt.resolveAll,
@@ -3477,7 +3477,7 @@ function Xs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-start-link.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/label-start-link.js
 var dr = {
   name: "labelStartLink",
   resolveAll: lt.resolveAll,
@@ -3494,7 +3494,7 @@ function Zs(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/line-ending.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/line-ending.js
 var Ut = {
   name: "lineEnding",
   tokenize: el
@@ -3502,11 +3502,11 @@ var Ut = {
 function el(e, t) {
   return n;
   function n(r) {
-    return e.enter("lineEnding"), e.consume(r), e.exit("lineEnding"), D(e, t, "linePrefix");
+    return e.enter("lineEnding"), e.consume(r), e.exit("lineEnding"), O(e, t, "linePrefix");
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/thematic-break.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/thematic-break.js
 var ut = {
   name: "thematicBreak",
   tokenize: tl
@@ -3524,12 +3524,12 @@ function tl(e, t, n) {
     return u === i ? (e.enter("thematicBreakSequence"), l(u)) : r >= 3 && (u === null || P(u)) ? (e.exit("thematicBreak"), t(u)) : n(u);
   }
   function l(u) {
-    return u === i ? (e.consume(u), r++, l) : (e.exit("thematicBreakSequence"), B(u) ? D(e, s, "whitespace")(u) : s(u));
+    return u === i ? (e.consume(u), r++, l) : (e.exit("thematicBreakSequence"), B(u) ? O(e, s, "whitespace")(u) : s(u));
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/list.js
-var Ie = {
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/list.js
+var ve = {
   continuation: {
     tokenize: ol
   },
@@ -3583,18 +3583,18 @@ function ol(e, t, n) {
   let r = this;
   return r.containerState._closeFlow = void 0, e.check(Be, i, o);
   function i(s) {
-    return r.containerState.furtherBlankLines = r.containerState.furtherBlankLines || r.containerState.initialBlankLine, D(e, t, "listItemIndent", r.containerState.size + 1)(s);
+    return r.containerState.furtherBlankLines = r.containerState.furtherBlankLines || r.containerState.initialBlankLine, O(e, t, "listItemIndent", r.containerState.size + 1)(s);
   }
   function o(s) {
     return r.containerState.furtherBlankLines || !B(s) ? (r.containerState.furtherBlankLines = void 0, r.containerState.initialBlankLine = void 0, a(s)) : (r.containerState.furtherBlankLines = void 0, r.containerState.initialBlankLine = void 0, e.attempt(rl, t, a)(s));
   }
   function a(s) {
-    return r.containerState._closeFlow = !0, r.interrupt = void 0, D(e, e.attempt(Ie, t, n), "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(s);
+    return r.containerState._closeFlow = !0, r.interrupt = void 0, O(e, e.attempt(ve, t, n), "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(s);
   }
 }
 function al(e, t, n) {
   let r = this;
-  return D(e, i, "listItemIndent", r.containerState.size + 1);
+  return O(e, i, "listItemIndent", r.containerState.size + 1);
   function i(o) {
     let a = r.events[r.events.length - 1];
     return a && a[1].type === "listItemIndent" && a[2].sliceSerialize(a[1], !0).length === r.containerState.size ? t(o) : n(o);
@@ -3605,14 +3605,14 @@ function sl(e) {
 }
 function ll(e, t, n) {
   let r = this;
-  return D(e, i, "listItemPrefixWhitespace", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 5);
+  return O(e, i, "listItemPrefixWhitespace", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 5);
   function i(o) {
     let a = r.events[r.events.length - 1];
     return !B(o) && a && a[1].type === "listItemPrefixWhitespace" ? t(o) : n(o);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/setext-underline.js
+// node_modules/.pnpm/micromark-core-commonmark@2.0.4/node_modules/micromark-core-commonmark/lib/setext-underline.js
 var kn = {
   name: "setextUnderline",
   resolveTo: ul,
@@ -3658,14 +3658,14 @@ function cl(e, t, n) {
     return e.enter("setextHeadingLineSequence"), s(u);
   }
   function s(u) {
-    return u === i ? (e.consume(u), s) : (e.exit("setextHeadingLineSequence"), B(u) ? D(e, l, "lineSuffix")(u) : l(u));
+    return u === i ? (e.consume(u), s) : (e.exit("setextHeadingLineSequence"), B(u) ? O(e, l, "lineSuffix")(u) : l(u));
   }
   function l(u) {
     return u === null || P(u) ? (e.exit("setextHeadingLine"), t(u)) : n(u);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/flow.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/flow.js
 var Xi = {
   tokenize: pl
 };
@@ -3675,7 +3675,7 @@ function pl(e) {
     Be,
     r,
     // Try to parse initial flow (essentially, only code).
-    e.attempt(this.parser.constructs.flowInitial, i, D(e, e.attempt(this.parser.constructs.flow, i, e.attempt(or, i)), "linePrefix"))
+    e.attempt(this.parser.constructs.flowInitial, i, O(e, e.attempt(this.parser.constructs.flow, i, e.attempt(or, i)), "linePrefix"))
   );
   return n;
   function r(o) {
@@ -3694,7 +3694,7 @@ function pl(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/text.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/initialize/text.js
 var Zi = {
   resolveAll: ro()
 }, eo = no("string"), to = no("text");
@@ -3785,7 +3785,7 @@ function fl(e, t) {
   return n.consume(e), e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/constructs.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/constructs.js
 var mr = {};
 Ua(mr, {
   attentionMarkers: () => yl,
@@ -3799,19 +3799,19 @@ Ua(mr, {
   text: () => wl
 });
 var dl = {
-  42: Ie,
-  43: Ie,
-  45: Ie,
-  48: Ie,
-  49: Ie,
-  50: Ie,
-  51: Ie,
-  52: Ie,
-  53: Ie,
-  54: Ie,
-  55: Ie,
-  56: Ie,
-  57: Ie,
+  42: ve,
+  43: ve,
+  45: ve,
+  48: ve,
+  49: ve,
+  50: ve,
+  51: ve,
+  52: ve,
+  53: ve,
+  54: ve,
+  55: ve,
+  56: ve,
+  57: ve,
   62: ln
 }, ml = {
   91: ar
@@ -3837,22 +3837,22 @@ var dl = {
   [-3]: Ut,
   33: fr,
   38: cn,
-  42: Dt,
+  42: Ot,
   60: [rr, pr],
   91: dr,
   92: [sr, un],
   93: lt,
-  95: Dt,
+  95: Ot,
   96: ir
 }, xl = {
-  null: [Dt, Zi]
+  null: [Ot, Zi]
 }, yl = {
   null: [42, 95]
 }, bl = {
   null: []
 };
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/create-tokenizer.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/create-tokenizer.js
 function io(e, t, n) {
   let r = {
     _bufferIndex: -1,
@@ -3878,17 +3878,17 @@ function io(e, t, n) {
     parser: e,
     previous: null,
     sliceSerialize: g,
-    sliceStream: v,
+    sliceStream: I,
     write: f
   }, p = t.tokenize.call(c, u), d;
   return t.resolveAll && o.push(t), c;
   function f(L) {
-    return a = Te(a, L), I(), a[a.length - 1] !== null ? [] : (w(t, 0), c.events = Ze(o, c.events, c), c.events);
+    return a = Te(a, L), v(), a[a.length - 1] !== null ? [] : (w(t, 0), c.events = Ze(o, c.events, c), c.events);
   }
   function g(L, $) {
-    return Il(v(L), $);
+    return vl(I(L), $);
   }
-  function v(L) {
+  function I(L) {
     return Sl(a, L);
   }
   function E() {
@@ -3908,9 +3908,9 @@ function io(e, t, n) {
     };
   }
   function x(L) {
-    i[L.line] = L.column, O();
+    i[L.line] = L.column, D();
   }
-  function I() {
+  function v() {
     for (; r._index < a.length; ) {
       let L = a[r._index];
       if (typeof L == "string") {
@@ -3925,7 +3925,7 @@ function io(e, t, n) {
     l = void 0, d = L, p = p(L);
   }
   function A(L) {
-    P(L) ? (r.line++, r.column = 1, r.offset += L === -3 ? 2 : 1, O()) : L !== -1 && (r.column++, r.offset++), r._bufferIndex < 0 ? r._index++ : (r._bufferIndex++, r._bufferIndex === // Points w/ non-negative `_bufferIndex` reference
+    P(L) ? (r.line++, r.column = 1, r.offset += L === -3 ? 2 : 1, D()) : L !== -1 && (r.column++, r.offset++), r._bufferIndex < 0 ? r._index++ : (r._bufferIndex++, r._bufferIndex === // Points w/ non-negative `_bufferIndex` reference
     // strings.
     /** @type {string} */
     a[r._index].length && (r._bufferIndex = -1, r._index++)), c.previous = L, l = !0;
@@ -3961,10 +3961,10 @@ function io(e, t, n) {
       function h(b) {
         return le;
         function le(me) {
-          let De = me !== null && b[me], Fe = me !== null && b.null, he = [
+          let Oe = me !== null && b[me], Fe = me !== null && b.null, he = [
             // To do: add more extension tests.
             /* c8 ignore next 2 */
-            ...Array.isArray(De) ? De : De ? [De] : [],
+            ...Array.isArray(Oe) ? Oe : Oe ? [Oe] : [],
             ...Array.isArray(Fe) ? Fe : Fe ? [Fe] : []
           ];
           return se(he)(me);
@@ -4005,10 +4005,10 @@ function io(e, t, n) {
       restore: ue
     };
     function ue() {
-      r = L, c.previous = $, c.currentConstruct = V, c.events.length = Z, s = ee, O();
+      r = L, c.previous = $, c.currentConstruct = V, c.events.length = Z, s = ee, D();
     }
   }
-  function O() {
+  function D() {
     r.line in i && r.column < 2 && (r.column = i[r.line], r.offset += i[r.line] - 1);
   }
 }
@@ -4025,7 +4025,7 @@ function Sl(e, t) {
   }
   return a;
 }
-function Il(e, t) {
+function vl(e, t) {
   let n = -1, r = [], i;
   for (; ++n < e.length; ) {
     let o = e[n], a;
@@ -4065,7 +4065,7 @@ function Il(e, t) {
   return r.join("");
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/parse.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/parse.js
 function hr(e) {
   let r = {
     constructs: (
@@ -4089,14 +4089,14 @@ function hr(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/postprocess.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/postprocess.js
 function gr(e) {
   for (; !dn(e); )
     ;
   return e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/preprocess.js
+// node_modules/.pnpm/micromark@4.0.3_supports-color@10.2.2/node_modules/micromark/lib/preprocess.js
 var oo = /[\0\t\n\r]/g;
 function kr() {
   let e = 1, t = "", n = !0, r;
@@ -4138,10 +4138,10 @@ function kr() {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-util-decode-string@2.0.1/node_modules/micromark-util-decode-string/index.js
-var vl = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
+// node_modules/.pnpm/micromark-util-decode-string@2.0.1/node_modules/micromark-util-decode-string/index.js
+var Il = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
 function ao(e) {
-  return e.replace(vl, El);
+  return e.replace(Il, El);
 }
 function El(e, t, n) {
   if (t)
@@ -4153,7 +4153,7 @@ function El(e, t, n) {
   return kt(n) || e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-from-markdown@2.1.0_supports-color@10.2.2/node_modules/mdast-util-from-markdown/lib/index.js
+// node_modules/.pnpm/mdast-util-from-markdown@2.1.0_supports-color@10.2.2/node_modules/mdast-util-from-markdown/lib/index.js
 var lo = {}.hasOwnProperty;
 function wr(e, t, n) {
   return t && typeof t == "object" && (n = t, t = void 0), Tl(n)(gr(hr(n).document().write(kr()(e, t, !0))));
@@ -4169,7 +4169,7 @@ function Tl(e) {
       autolinkProtocol: w,
       autolinkEmail: w,
       atxHeading: a(Pt),
-      blockQuote: a(De),
+      blockQuote: a(Oe),
       characterEscape: w,
       characterReference: w,
       codeFenced: a(Fe),
@@ -4222,9 +4222,9 @@ function Tl(e) {
       codeFenced: u(x),
       codeFencedFence: E,
       codeFencedFenceInfo: g,
-      codeFencedFenceMeta: v,
+      codeFencedFenceMeta: I,
       codeFlowValue: W,
-      codeIndented: u(I),
+      codeIndented: u(v),
       codeText: u(Z),
       codeTextData: W,
       data: W,
@@ -4242,7 +4242,7 @@ function Tl(e) {
       image: u(ue),
       label: m,
       labelText: ie,
-      lineEnding: O,
+      lineEnding: D,
       link: u(ee),
       listItem: u(),
       listOrdered: u(),
@@ -4435,7 +4435,7 @@ function Tl(e) {
     let y = this.resume(), T = this.stack[this.stack.length - 1];
     T.lang = y;
   }
-  function v() {
+  function I() {
     let y = this.resume(), T = this.stack[this.stack.length - 1];
     T.meta = y;
   }
@@ -4446,7 +4446,7 @@ function Tl(e) {
     let y = this.resume(), T = this.stack[this.stack.length - 1];
     T.value = y.replace(/^(\r?\n|\r)|(\r?\n|\r)$/g, ""), this.data.flowCodeInside = void 0;
   }
-  function I() {
+  function v() {
     let y = this.resume(), T = this.stack[this.stack.length - 1];
     T.value = y.replace(/(\r?\n|\r)$/g, "");
   }
@@ -4481,7 +4481,7 @@ function Tl(e) {
   }
   function w(y) {
     let j = this.stack[this.stack.length - 1].children, q = j[j.length - 1];
-    (!q || q.type !== "text") && (q = ve(), q.position = {
+    (!q || q.type !== "text") && (q = Ie(), q.position = {
       start: et(y.start),
       // @ts-expect-error: we’ll add `end` later.
       end: void 0
@@ -4491,7 +4491,7 @@ function Tl(e) {
     let T = this.stack.pop();
     T.value += this.sliceSerialize(y), T.position.end = et(y.end);
   }
-  function O(y) {
+  function D(y) {
     let T = this.stack[this.stack.length - 1];
     if (this.data.atHardBreak) {
       let j = T.children[T.children.length - 1];
@@ -4586,7 +4586,7 @@ function Tl(e) {
     let T = this.stack[this.stack.length - 1];
     T.url = "mailto:" + this.sliceSerialize(y);
   }
-  function De() {
+  function Oe() {
     return {
       type: "blockquote",
       children: [],
@@ -4699,7 +4699,7 @@ function Tl(e) {
       position: void 0
     };
   }
-  function ve() {
+  function Ie() {
     return {
       type: "text",
       value: "",
@@ -4769,7 +4769,7 @@ function so(e, t) {
   }) + ") is still open");
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/remark-parse@11.0.0_supports-color@10.2.2/node_modules/remark-parse/lib/index.js
+// node_modules/.pnpm/remark-parse@11.0.0_supports-color@10.2.2/node_modules/remark-parse/lib/index.js
 function wn(e) {
   let t = this;
   t.parser = n;
@@ -4786,7 +4786,7 @@ function wn(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/ccount@2.0.1/node_modules/ccount/index.js
+// node_modules/.pnpm/ccount@2.0.1/node_modules/ccount/index.js
 function xr(e, t) {
   let n = String(e);
   if (typeof t != "string")
@@ -4797,14 +4797,14 @@ function xr(e, t) {
   return r;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/escape-string-regexp@5.0.0/node_modules/escape-string-regexp/index.js
+// node_modules/.pnpm/escape-string-regexp@5.0.0/node_modules/escape-string-regexp/index.js
 function yr(e) {
   if (typeof e != "string")
     throw new TypeError("Expected a string");
   return e.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&").replace(/-/g, "\\x2d");
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unist-util-is@6.0.1/node_modules/unist-util-is/lib/index.js
+// node_modules/.pnpm/unist-util-is@6.0.1/node_modules/unist-util-is/lib/index.js
 var tt = (
   // Note: overloads in JSDoc can’t yet use different `@template`s.
   /**
@@ -4892,7 +4892,7 @@ function Ll(e) {
   return e !== null && typeof e == "object" && "type" in e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unist-util-visit-parents@6.0.2/node_modules/unist-util-visit-parents/lib/index.js
+// node_modules/.pnpm/unist-util-visit-parents@6.0.2/node_modules/unist-util-visit-parents/lib/index.js
 var co = [], yn = !0, ct = !1, bn = "skip";
 function Ht(e, t, n, r) {
   let i;
@@ -4918,7 +4918,7 @@ function Ht(e, t, n, r) {
     }
     return d;
     function d() {
-      let f = co, g, v, E;
+      let f = co, g, I, E;
       if ((!t || o(l, u, c[c.length - 1] || void 0)) && (f = _l(n(l, c)), f[0] === ct))
         return f;
       if ("children" in l && l.children) {
@@ -4927,11 +4927,11 @@ function Ht(e, t, n, r) {
           l
         );
         if (x.children && f[0] !== bn)
-          for (v = (r ? x.children.length : -1) + a, E = c.concat(x); v > -1 && v < x.children.length; ) {
-            let I = x.children[v];
-            if (g = s(I, v, E)(), g[0] === ct)
+          for (I = (r ? x.children.length : -1) + a, E = c.concat(x); I > -1 && I < x.children.length; ) {
+            let v = x.children[I];
+            if (g = s(v, I, E)(), g[0] === ct)
               return g;
-            v = typeof g[1] == "number" ? g[1] : v + a;
+            I = typeof g[1] == "number" ? g[1] : I + a;
           }
       }
       return f;
@@ -4942,7 +4942,7 @@ function _l(e) {
   return Array.isArray(e) ? e : typeof e == "number" ? [yn, e] : e == null ? co : [e];
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-find-and-replace@3.0.3/node_modules/mdast-util-find-and-replace/lib/index.js
+// node_modules/.pnpm/mdast-util-find-and-replace@3.0.3/node_modules/mdast-util-find-and-replace/lib/index.js
 function br(e, t, n) {
   let i = tt((n || {}).ignore || []), o = Nl(t), a = -1;
   for (; ++a < o.length; )
@@ -4963,7 +4963,7 @@ function br(e, t, n) {
       return l(u, c);
   }
   function l(u, c) {
-    let p = c[c.length - 1], d = o[a][0], f = o[a][1], g = 0, E = p.children.indexOf(u), x = !1, I = [];
+    let p = c[c.length - 1], d = o[a][0], f = o[a][1], g = 0, E = p.children.indexOf(u), x = !1, v = [];
     d.lastIndex = 0;
     let k = d.exec(u.value);
     for (; k; ) {
@@ -4984,10 +4984,10 @@ function br(e, t, n) {
         break;
       k = d.exec(u.value);
     }
-    return x ? (g < u.value.length && A({ type: "text", value: u.value.slice(g) }), p.children.splice(E, 1, ...I)) : I = [u], E + I.length;
+    return x ? (g < u.value.length && A({ type: "text", value: u.value.slice(g) }), p.children.splice(E, 1, ...v)) : v = [u], E + v.length;
     function A(_) {
-      let S = I[I.length - 1];
-      S && S.type === "text" && _.type === "text" ? S.value += _.value : I.push(_);
+      let S = v[v.length - 1];
+      S && S.type === "text" && _.type === "text" ? S.value += _.value : v.push(_);
     }
   }
 }
@@ -5010,21 +5010,21 @@ function Ml(e) {
   };
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm-autolink-literal@2.0.1/node_modules/mdast-util-gfm-autolink-literal/lib/index.js
-var Sr = "phrasing", Ir = ["autolink", "link", "image", "label"];
+// node_modules/.pnpm/mdast-util-gfm-autolink-literal@2.0.1/node_modules/mdast-util-gfm-autolink-literal/lib/index.js
+var Sr = "phrasing", vr = ["autolink", "link", "image", "label"];
 function Er() {
   return {
     transforms: [Hl],
     enter: {
-      literalAutolink: Dl,
-      literalAutolinkEmail: vr,
-      literalAutolinkHttp: vr,
-      literalAutolinkWww: vr
+      literalAutolink: Ol,
+      literalAutolinkEmail: Ir,
+      literalAutolinkHttp: Ir,
+      literalAutolinkWww: Ir
     },
     exit: {
       literalAutolink: Ul,
       literalAutolinkEmail: ql,
-      literalAutolinkHttp: Ol,
+      literalAutolinkHttp: Dl,
       literalAutolinkWww: Bl
     }
   };
@@ -5037,32 +5037,32 @@ function Tr() {
         before: "[+\\-.\\w]",
         after: "[\\-.\\w]",
         inConstruct: Sr,
-        notInConstruct: Ir
+        notInConstruct: vr
       },
       {
         character: ".",
         before: "[Ww]",
         after: "[\\-.\\w]",
         inConstruct: Sr,
-        notInConstruct: Ir
+        notInConstruct: vr
       },
       {
         character: ":",
         before: "[ps]",
         after: "\\/",
         inConstruct: Sr,
-        notInConstruct: Ir
+        notInConstruct: vr
       }
     ]
   };
 }
-function Dl(e) {
+function Ol(e) {
   this.enter({ type: "link", title: null, url: "", children: [] }, e);
 }
-function vr(e) {
+function Ir(e) {
   this.config.enter.autolinkProtocol.call(this, e);
 }
-function Ol(e) {
+function Dl(e) {
   this.config.exit.autolinkProtocol.call(this, e);
 }
 function Bl(e) {
@@ -5128,11 +5128,11 @@ function $l(e) {
 }
 function po(e, t) {
   let n = e.input.charCodeAt(e.index - 1);
-  return (e.index === 0 || Oe(n) || at(n)) && // If it’s an email, the previous character should not be a slash.
+  return (e.index === 0 || De(n) || at(n)) && // If it’s an email, the previous character should not be a slash.
   (!t || n !== 47);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm-footnote@2.1.0_supports-color@10.2.2/node_modules/mdast-util-gfm-footnote/lib/index.js
+// node_modules/.pnpm/mdast-util-gfm-footnote@2.1.0_supports-color@10.2.2/node_modules/mdast-util-gfm-footnote/lib/index.js
 fo.peek = tu;
 function Ql() {
   this.buffer();
@@ -5219,7 +5219,7 @@ function mo(e, t, n) {
   return (n ? "" : "    ") + e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm-strikethrough@2.0.1_supports-color@10.2.2/node_modules/mdast-util-gfm-strikethrough/lib/index.js
+// node_modules/.pnpm/mdast-util-gfm-strikethrough@2.0.1_supports-color@10.2.2/node_modules/mdast-util-gfm-strikethrough/lib/index.js
 var ru = [
   "autolink",
   "destinationLiteral",
@@ -5270,59 +5270,59 @@ function su() {
   return "~";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/markdown-table@3.0.4/node_modules/markdown-table/index.js
+// node_modules/.pnpm/markdown-table@3.0.4/node_modules/markdown-table/index.js
 function lu(e) {
   return e.length;
 }
 function go(e, t) {
   let n = t || {}, r = (n.align || []).concat(), i = n.stringLength || lu, o = [], a = [], s = [], l = [], u = 0, c = -1;
   for (; ++c < e.length; ) {
-    let v = [], E = [], x = -1;
+    let I = [], E = [], x = -1;
     for (e[c].length > u && (u = e[c].length); ++x < e[c].length; ) {
-      let I = uu(e[c][x]);
+      let v = uu(e[c][x]);
       if (n.alignDelimiters !== !1) {
-        let k = i(I);
+        let k = i(v);
         E[x] = k, (l[x] === void 0 || k > l[x]) && (l[x] = k);
       }
-      v.push(I);
+      I.push(v);
     }
-    a[c] = v, s[c] = E;
+    a[c] = I, s[c] = E;
   }
   let p = -1;
   if (typeof r == "object" && "length" in r)
     for (; ++p < u; )
       o[p] = ho(r[p]);
   else {
-    let v = ho(r);
+    let I = ho(r);
     for (; ++p < u; )
-      o[p] = v;
+      o[p] = I;
   }
   p = -1;
   let d = [], f = [];
   for (; ++p < u; ) {
-    let v = o[p], E = "", x = "";
-    v === 99 ? (E = ":", x = ":") : v === 108 ? E = ":" : v === 114 && (x = ":");
-    let I = n.alignDelimiters === !1 ? 1 : Math.max(
+    let I = o[p], E = "", x = "";
+    I === 99 ? (E = ":", x = ":") : I === 108 ? E = ":" : I === 114 && (x = ":");
+    let v = n.alignDelimiters === !1 ? 1 : Math.max(
       1,
       l[p] - E.length - x.length
-    ), k = E + "-".repeat(I) + x;
-    n.alignDelimiters !== !1 && (I = E.length + I + x.length, I > l[p] && (l[p] = I), f[p] = I), d[p] = k;
+    ), k = E + "-".repeat(v) + x;
+    n.alignDelimiters !== !1 && (v = E.length + v + x.length, v > l[p] && (l[p] = v), f[p] = v), d[p] = k;
   }
   a.splice(1, 0, d), s.splice(1, 0, f), c = -1;
   let g = [];
   for (; ++c < a.length; ) {
-    let v = a[c], E = s[c];
+    let I = a[c], E = s[c];
     p = -1;
     let x = [];
     for (; ++p < u; ) {
-      let I = v[p] || "", k = "", A = "";
+      let v = I[p] || "", k = "", A = "";
       if (n.alignDelimiters !== !1) {
         let _ = l[p] - (E[p] || 0), S = o[p];
         S === 114 ? k = " ".repeat(_) : S === 99 ? _ % 2 ? (k = " ".repeat(_ / 2 + 0.5), A = " ".repeat(_ / 2 - 0.5)) : (k = " ".repeat(_ / 2), A = k) : A = " ".repeat(_);
       }
       n.delimiterStart !== !1 && !p && x.push("|"), n.padding !== !1 && // Don’t add the opening space if we’re not aligning and the cell is
       // empty: there will be a closing space.
-      !(n.alignDelimiters === !1 && I === "") && (n.delimiterStart !== !1 || p) && x.push(" "), n.alignDelimiters !== !1 && x.push(k), x.push(I), n.alignDelimiters !== !1 && x.push(A), n.padding !== !1 && x.push(" "), (n.delimiterEnd !== !1 || p !== u - 1) && x.push("|");
+      !(n.alignDelimiters === !1 && v === "") && (n.delimiterStart !== !1 || p) && x.push(" "), n.alignDelimiters !== !1 && x.push(k), x.push(v), n.alignDelimiters !== !1 && x.push(A), n.padding !== !1 && x.push(" "), (n.delimiterEnd !== !1 || p !== u - 1) && x.push("|");
     }
     g.push(
       n.delimiterEnd === !1 ? x.join("").replace(/ +$/, "") : x.join("")
@@ -5339,7 +5339,7 @@ function ho(e) {
   return t === 67 || t === 99 ? 99 : t === 76 || t === 108 ? 108 : t === 82 || t === 114 ? 114 : 0;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-phrasing@4.1.0/node_modules/mdast-util-phrasing/lib/index.js
+// node_modules/.pnpm/mdast-util-phrasing@4.1.0/node_modules/mdast-util-phrasing/lib/index.js
 var Lr = (
   /** @type {(node?: unknown) => node is Exclude<PhrasingContent, Html>} */
   tt([
@@ -5367,7 +5367,7 @@ var Lr = (
   ])
 );
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/blockquote.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/blockquote.js
 function ko(e, t, n, r) {
   let i = n.enter("blockquote"), o = n.createTracker(r);
   o.move("> "), o.shift(2);
@@ -5381,7 +5381,7 @@ function cu(e, t, n) {
   return ">" + (n ? "" : " ") + e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/pattern-in-scope.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/pattern-in-scope.js
 function xo(e, t) {
   return wo(e, t.inConstruct, !0) && !wo(e, t.notInConstruct, !1);
 }
@@ -5395,7 +5395,7 @@ function wo(e, t, n) {
   return !1;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/break.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/break.js
 function _r(e, t, n, r) {
   let i = -1;
   for (; ++i < n.unsafe.length; ) {
@@ -5408,7 +5408,7 @@ function _r(e, t, n, r) {
 `;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/longest-streak@3.1.0/node_modules/longest-streak/index.js
+// node_modules/.pnpm/longest-streak@3.1.0/node_modules/longest-streak/index.js
 function Sn(e, t) {
   let n = String(e), r = n.indexOf(t), i = r, o = 0, a = 0;
   if (typeof t != "string")
@@ -5418,7 +5418,7 @@ function Sn(e, t) {
   return a;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-code-as-indented.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-code-as-indented.js
 function yo(e, t) {
   return !!(t.options.fences === !1 && e.value && // If there’s no info…
   !e.lang && // And there’s a non-whitespace character…
@@ -5426,7 +5426,7 @@ function yo(e, t) {
   !/^[\t ]*(?:[\n\r]|$)|(?:^|[\n\r])[\t ]*$/.test(e.value));
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-fence.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-fence.js
 function bo(e) {
   let t = e.options.fence || "`";
   if (t !== "`" && t !== "~")
@@ -5436,7 +5436,7 @@ function bo(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/code.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/code.js
 function So(e, t, n, r) {
   let i = bo(n), o = e.value || "";
   if (yo(e, n)) {
@@ -5475,7 +5475,7 @@ function pu(e, t, n) {
   return (n ? "" : "    ") + e;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-quote.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-quote.js
 function xt(e) {
   let t = e.options.quote || '"';
   if (t !== '"' && t !== "'")
@@ -5485,8 +5485,8 @@ function xt(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/definition.js
-function Io(e, t, n, r) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/definition.js
+function vo(e, t, n, r) {
   let i = xt(n), o = i === '"' ? "Quote" : "Apostrophe", a = n.enter("definition"), s = n.enter("label"), l = n.createTracker(r), u = l.move("[");
   return u += l.move(
     n.safe(n.associationId(e), {
@@ -5514,8 +5514,8 @@ function Io(e, t, n, r) {
   ), u += l.move(i), s()), a(), u;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-emphasis.js
-function vo(e) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-emphasis.js
+function Io(e) {
   let t = e.options.emphasis || "*";
   if (t !== "*" && t !== "_")
     throw new Error(
@@ -5524,17 +5524,17 @@ function vo(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/emphasis.js
-In.attention = fu;
-In.peek = du;
-function In(e, t, n, r) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/emphasis.js
+vn.attention = fu;
+vn.peek = du;
+function vn(e, t, n, r) {
   let i = n.enter("phrasing"), o = n.containerPhrasing({ type: "root", children: [e] }, r);
   return i(), o;
 }
 function fu(e, t) {
   return {
     construct: "emphasis",
-    markers: vo(t) === "*" ? ["*", "_"] : ["_", "*"],
+    markers: Io(t) === "*" ? ["*", "_"] : ["_", "*"],
     sizes: [1]
   };
 }
@@ -5542,12 +5542,12 @@ function du(e, t, n) {
   return n.options.emphasis || "*";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/encode-character-reference.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/encode-character-reference.js
 function Eo(e) {
   return "&#x" + e.toString(16).toUpperCase() + ";";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/unist-util-visit@5.1.0/node_modules/unist-util-visit/lib/index.js
+// node_modules/.pnpm/unist-util-visit@5.1.0/node_modules/unist-util-visit/lib/index.js
 function Nr(e, t, n, r) {
   let i, o, a;
   typeof t == "function" && typeof n != "function" ? (o = void 0, a = t, i = n) : (o = t, a = n, i = r), Ht(e, o, s, i);
@@ -5557,7 +5557,7 @@ function Nr(e, t, n, r) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-heading-as-setext.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-heading-as-setext.js
 function To(e, t) {
   let n = !1;
   return Nr(e, function(r) {
@@ -5566,7 +5566,7 @@ function To(e, t) {
   }), !!((!e.depth || e.depth < 3) && it(e) && (t.options.setext || n));
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/heading.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/heading.js
 function Ao(e, t, n, r) {
   let i = Math.max(Math.min(6, e.depth || 1), 1), o = n.createTracker(r);
   if (To(e, n)) {
@@ -5597,7 +5597,7 @@ function Ao(e, t, n, r) {
   return (c === 9 || c === 32) && (u = Eo(c) + u.slice(1)), u = u ? a + " " + u : a, n.options.closeAtx && (u += " " + a), l(), s(), u;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/html.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/html.js
 Rr.peek = mu;
 function Rr(e) {
   return e.value || "";
@@ -5606,7 +5606,7 @@ function mu() {
   return "<";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/image.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/image.js
 Mr.peek = hu;
 function Mr(e, t, n, r) {
   let i = xt(n), o = i === '"' ? "Quote" : "Apostrophe", a = n.enter("image"), s = n.enter("label"), l = n.createTracker(r), u = l.move("![");
@@ -5634,9 +5634,9 @@ function hu() {
   return "!";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/image-reference.js
-Dr.peek = gu;
-function Dr(e, t, n, r) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/image-reference.js
+Or.peek = gu;
+function Or(e, t, n, r) {
   let i = e.referenceType, o = n.enter("imageReference"), a = n.enter("label"), s = n.createTracker(r), l = s.move("!["), u = n.safe(e.alt, {
     before: l,
     after: "]",
@@ -5658,9 +5658,9 @@ function gu() {
   return "!";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/inline-code.js
-Or.peek = ku;
-function Or(e, t, n) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/inline-code.js
+Dr.peek = ku;
+function Dr(e, t, n) {
   let r = e.value || "", i = "`", o = -1;
   for (; new RegExp("(^|[^`])" + i + "([^`]|$)").test(r); )
     i += "`";
@@ -5679,7 +5679,7 @@ function ku() {
   return "`";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-link-as-autolink.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/format-link-as-autolink.js
 function Br(e, t) {
   let n = it(e);
   return !!(!t.options.resourceLink && // If there’s a url…
@@ -5692,7 +5692,7 @@ function Br(e, t) {
   !/[\0- <>\u007F]/.test(e.url));
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/link.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/link.js
 qr.peek = wu;
 function qr(e, t, n, r) {
   let i = xt(n), o = i === '"' ? "Quote" : "Apostrophe", a = n.createTracker(r);
@@ -5739,7 +5739,7 @@ function wu(e, t, n) {
   return Br(e, n) ? "<" : "[";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/link-reference.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/link-reference.js
 Ur.peek = xu;
 function Ur(e, t, n, r) {
   let i = e.referenceType, o = n.enter("linkReference"), a = n.enter("label"), s = n.createTracker(r), l = s.move("["), u = n.containerPhrasing(e, {
@@ -5763,7 +5763,7 @@ function xu() {
   return "[";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet.js
 function yt(e) {
   let t = e.options.bullet || "*";
   if (t !== "*" && t !== "+" && t !== "-")
@@ -5773,7 +5773,7 @@ function yt(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet-other.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet-other.js
 function Co(e) {
   let t = yt(e), n = e.options.bulletOther;
   if (!n)
@@ -5789,7 +5789,7 @@ function Co(e) {
   return n;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet-ordered.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-bullet-ordered.js
 function Fo(e) {
   let t = e.options.bulletOrdered || ".";
   if (t !== "." && t !== ")")
@@ -5799,8 +5799,8 @@ function Fo(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-rule.js
-function vn(e) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-rule.js
+function In(e) {
   let t = e.options.rule || "*";
   if (t !== "*" && t !== "-" && t !== "_")
     throw new Error(
@@ -5809,7 +5809,7 @@ function vn(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/list.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/list.js
 function Po(e, t, n, r) {
   let i = n.enter("list"), o = n.bulletCurrent, a = e.ordered ? Fo(n) : yt(n), s = e.ordered ? a === "." ? ")" : "." : Co(n), l = t && n.bulletLastUsed ? a === n.bulletLastUsed : !1;
   if (!e.ordered) {
@@ -5819,7 +5819,7 @@ function Po(e, t, n, r) {
       (a === "*" || a === "-") && // Empty first list item:
       c && (!c.children || !c.children[0]) && // Directly in two other list items:
       n.stack[n.stack.length - 1] === "list" && n.stack[n.stack.length - 2] === "listItem" && n.stack[n.stack.length - 3] === "list" && n.stack[n.stack.length - 4] === "listItem" && // That are each the first child.
-      n.indexStack[n.indexStack.length - 1] === 0 && n.indexStack[n.indexStack.length - 2] === 0 && n.indexStack[n.indexStack.length - 3] === 0 && (l = !0), vn(n) === a && c
+      n.indexStack[n.indexStack.length - 1] === 0 && n.indexStack[n.indexStack.length - 2] === 0 && n.indexStack[n.indexStack.length - 3] === 0 && (l = !0), In(n) === a && c
     ) {
       let p = -1;
       for (; ++p < e.children.length; ) {
@@ -5836,7 +5836,7 @@ function Po(e, t, n, r) {
   return n.bulletLastUsed = a, n.bulletCurrent = o, i(), u;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-list-item-indent.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-list-item-indent.js
 function zo(e) {
   let t = e.options.listItemIndent || "one";
   if (t !== "tab" && t !== "one" && t !== "mixed")
@@ -5846,7 +5846,7 @@ function zo(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/list-item.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/list-item.js
 function Lo(e, t, n, r) {
   let i = zo(n), o = n.bulletCurrent || yt(n);
   t && t.type === "list" && t.ordered && (o = (typeof t.start == "number" && t.start > -1 ? t.start : 1) + (n.options.incrementListMarker === !1 ? 0 : t.children.indexOf(e)) + o);
@@ -5864,13 +5864,13 @@ function Lo(e, t, n, r) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/paragraph.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/paragraph.js
 function _o(e, t, n, r) {
   let i = n.enter("paragraph"), o = n.enter("phrasing"), a = n.containerPhrasing(e, r);
   return o(), i(), a;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/root.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/root.js
 function No(e, t, n, r) {
   if (!e.children.some(function(s) {
     return Lr(s);
@@ -5879,7 +5879,7 @@ function No(e, t, n, r) {
   return o(), a;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-strong.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-strong.js
 function Ro(e) {
   let t = e.options.strong || "*";
   if (t !== "*" && t !== "_")
@@ -5889,7 +5889,7 @@ function Ro(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/strong.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/strong.js
 En.attention = yu;
 En.peek = bu;
 function En(e, t, n, r) {
@@ -5907,7 +5907,7 @@ function bu(e, t, n) {
   return n.options.strong || "*";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/text.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/text.js
 function Mo(e, t, n, r) {
   let i = t ? t.children : [], o = i.indexOf(e);
   return n.safe(e.value, {
@@ -5917,8 +5917,8 @@ function Mo(e, t, n, r) {
   });
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-rule-repetition.js
-function Do(e) {
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/util/check-rule-repetition.js
+function Oo(e) {
   let t = e.options.ruleRepetition || 3;
   if (t < 3)
     throw new Error(
@@ -5927,25 +5927,25 @@ function Do(e) {
   return t;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/thematic-break.js
-function Oo(e, t, n) {
-  let r = (vn(n) + (n.options.ruleSpaces ? " " : "")).repeat(Do(n));
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/thematic-break.js
+function Do(e, t, n) {
+  let r = (In(n) + (n.options.ruleSpaces ? " " : "")).repeat(Oo(n));
   return n.options.ruleSpaces ? r.slice(0, -1) : r;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/index.js
+// node_modules/.pnpm/mdast-util-to-markdown@2.2.0/node_modules/mdast-util-to-markdown/lib/handle/index.js
 var jt = {
   blockquote: ko,
   break: _r,
   code: So,
-  definition: Io,
-  emphasis: In,
+  definition: vo,
+  emphasis: vn,
   hardBreak: _r,
   heading: Ao,
   html: Rr,
   image: Mr,
-  imageReference: Dr,
-  inlineCode: Or,
+  imageReference: Or,
+  inlineCode: Dr,
   link: qr,
   linkReference: Ur,
   list: Po,
@@ -5954,21 +5954,21 @@ var jt = {
   root: No,
   strong: En,
   text: Mo,
-  thematicBreak: Oo
+  thematicBreak: Do
 };
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm-table@2.0.0_supports-color@10.2.2/node_modules/mdast-util-gfm-table/lib/index.js
+// node_modules/.pnpm/mdast-util-gfm-table@2.0.0_supports-color@10.2.2/node_modules/mdast-util-gfm-table/lib/index.js
 function jr() {
   return {
     enter: {
       table: Su,
       tableData: Bo,
       tableHeader: Bo,
-      tableRow: vu
+      tableRow: Iu
     },
     exit: {
       codeText: Eu,
-      table: Iu,
+      table: vu,
       tableData: Hr,
       tableHeader: Hr,
       tableRow: Hr
@@ -5988,10 +5988,10 @@ function Su(e) {
     e
   ), this.data.inTable = !0;
 }
-function Iu(e) {
+function vu(e) {
   this.exit(e), this.data.inTable = void 0;
 }
-function vu(e) {
+function Iu(e) {
   this.enter({ type: "tableRow", children: [] }, e);
 }
 function Hr(e) {
@@ -6038,21 +6038,21 @@ function Vr(e) {
       tableRow: s
     }
   };
-  function a(f, g, v, E) {
-    return u(c(f, v, E), f.align);
+  function a(f, g, I, E) {
+    return u(c(f, I, E), f.align);
   }
-  function s(f, g, v, E) {
-    let x = p(f, v, E), I = u([x]);
-    return I.slice(0, I.indexOf(`
+  function s(f, g, I, E) {
+    let x = p(f, I, E), v = u([x]);
+    return v.slice(0, v.indexOf(`
 `));
   }
-  function l(f, g, v, E) {
-    let x = v.enter("tableCell"), I = v.enter("phrasing"), k = v.containerPhrasing(f, {
+  function l(f, g, I, E) {
+    let x = I.enter("tableCell"), v = I.enter("phrasing"), k = I.containerPhrasing(f, {
       ...E,
       before: o,
       after: o
     });
-    return I(), x(), k;
+    return v(), x(), k;
   }
   function u(f, g) {
     return go(f, {
@@ -6065,25 +6065,25 @@ function Vr(e) {
       stringLength: i
     });
   }
-  function c(f, g, v) {
-    let E = f.children, x = -1, I = [], k = g.enter("table");
+  function c(f, g, I) {
+    let E = f.children, x = -1, v = [], k = g.enter("table");
     for (; ++x < E.length; )
-      I[x] = p(E[x], g, v);
-    return k(), I;
+      v[x] = p(E[x], g, I);
+    return k(), v;
   }
-  function p(f, g, v) {
-    let E = f.children, x = -1, I = [], k = g.enter("tableRow");
+  function p(f, g, I) {
+    let E = f.children, x = -1, v = [], k = g.enter("tableRow");
     for (; ++x < E.length; )
-      I[x] = l(E[x], f, g, v);
-    return k(), I;
+      v[x] = l(E[x], f, g, I);
+    return k(), v;
   }
-  function d(f, g, v) {
-    let E = jt.inlineCode(f, g, v);
-    return v.stack.includes("tableCell") && (E = E.replace(/\|/g, "\\$&")), E;
+  function d(f, g, I) {
+    let E = jt.inlineCode(f, g, I);
+    return I.stack.includes("tableCell") && (E = E.replace(/\|/g, "\\$&")), E;
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm-task-list-item@2.0.0_supports-color@10.2.2/node_modules/mdast-util-gfm-task-list-item/lib/index.js
+// node_modules/.pnpm/mdast-util-gfm-task-list-item@2.0.0_supports-color@10.2.2/node_modules/mdast-util-gfm-task-list-item/lib/index.js
 function Wr() {
   return {
     exit: {
@@ -6136,7 +6136,7 @@ function Cu(e, t, n, r) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-gfm@3.1.0_supports-color@10.2.2/node_modules/mdast-util-gfm/lib/index.js
+// node_modules/.pnpm/mdast-util-gfm@3.1.0_supports-color@10.2.2/node_modules/mdast-util-gfm/lib/index.js
 function Qr() {
   return [
     Er(),
@@ -6158,7 +6158,7 @@ function Jr(e) {
   };
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js
 var Fu = {
   tokenize: Nu,
   partial: !0
@@ -6169,10 +6169,10 @@ var Fu = {
   tokenize: Mu,
   partial: !0
 }, jo = {
-  tokenize: Du,
+  tokenize: Ou,
   partial: !0
 }, Pu = {
-  tokenize: Ou,
+  tokenize: Du,
   partial: !0
 }, Vo = {
   name: "wwwAutolink",
@@ -6252,7 +6252,7 @@ function _u(e, t, n) {
     return p === 47 ? (e.consume(p), o ? u : (o = !0, l)) : n(p);
   }
   function u(p) {
-    return p === null || ot(p) || J(p) || Oe(p) || at(p) ? n(p) : e.attempt(Uo, e.attempt(Ho, c), n)(p);
+    return p === null || ot(p) || J(p) || De(p) || at(p) ? n(p) : e.attempt(Uo, e.attempt(Ho, c), n)(p);
   }
   function c(p) {
     return e.exit("literalAutolinkHttp"), e.exit("literalAutolink"), t(p);
@@ -6272,7 +6272,7 @@ function Ru(e, t, n) {
   let r, i, o;
   return a;
   function a(u) {
-    return u === 46 || u === 95 ? e.check(jo, l, s)(u) : u === null || J(u) || Oe(u) || u !== 45 && at(u) ? l(u) : (o = !0, e.consume(u), a);
+    return u === 46 || u === 95 ? e.check(jo, l, s)(u) : u === null || J(u) || De(u) || u !== 45 && at(u) ? l(u) : (o = !0, e.consume(u), a);
   }
   function s(u) {
     return u === 95 ? r = !0 : (i = r, r = void 0), e.consume(u), a;
@@ -6285,23 +6285,23 @@ function Mu(e, t) {
   let n = 0, r = 0;
   return i;
   function i(a) {
-    return a === 40 ? (n++, e.consume(a), i) : a === 41 && r < n ? o(a) : a === 33 || a === 34 || a === 38 || a === 39 || a === 41 || a === 42 || a === 44 || a === 46 || a === 58 || a === 59 || a === 60 || a === 63 || a === 93 || a === 95 || a === 126 ? e.check(jo, t, o)(a) : a === null || J(a) || Oe(a) ? t(a) : (e.consume(a), i);
+    return a === 40 ? (n++, e.consume(a), i) : a === 41 && r < n ? o(a) : a === 33 || a === 34 || a === 38 || a === 39 || a === 41 || a === 42 || a === 44 || a === 46 || a === 58 || a === 59 || a === 60 || a === 63 || a === 93 || a === 95 || a === 126 ? e.check(jo, t, o)(a) : a === null || J(a) || De(a) ? t(a) : (e.consume(a), i);
   }
   function o(a) {
     return a === 41 && r++, e.consume(a), i;
   }
 }
-function Du(e, t, n) {
+function Ou(e, t, n) {
   return r;
   function r(s) {
     return s === 33 || s === 34 || s === 39 || s === 41 || s === 42 || s === 44 || s === 46 || s === 58 || s === 59 || s === 63 || s === 95 || s === 126 ? (e.consume(s), r) : s === 38 ? (e.consume(s), o) : s === 93 ? (e.consume(s), i) : (
       // `<` is an end.
       s === 60 || // So is whitespace.
-      s === null || J(s) || Oe(s) ? t(s) : n(s)
+      s === null || J(s) || De(s) ? t(s) : n(s)
     );
   }
   function i(s) {
-    return s === null || s === 40 || s === 91 || J(s) || Oe(s) ? t(s) : r(s);
+    return s === null || s === 40 || s === 91 || J(s) || De(s) ? t(s) : r(s);
   }
   function o(s) {
     return pe(s) ? a(s) : n(s);
@@ -6310,7 +6310,7 @@ function Du(e, t, n) {
     return s === 59 ? (e.consume(s), r) : pe(s) ? (e.consume(s), a) : n(s);
   }
 }
-function Ou(e, t, n) {
+function Du(e, t, n) {
   return r;
   function r(o) {
     return e.consume(o), i;
@@ -6347,7 +6347,7 @@ function Kr(e) {
   return e.length > 0 && !n && (e[e.length - 1][1]._gfmAutolinkLiteralWalkedInto = !0), n;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/lib/syntax.js
 var Bu = {
   tokenize: $u,
   partial: !0
@@ -6499,8 +6499,8 @@ function ju(e, t, n) {
       return n(g);
     if (g === 93) {
       e.exit("chunkString");
-      let v = e.exit("gfmFootnoteDefinitionLabelString");
-      return o = Se(r.sliceSerialize(v)), e.enter("gfmFootnoteDefinitionLabelMarker"), e.consume(g), e.exit("gfmFootnoteDefinitionLabelMarker"), e.exit("gfmFootnoteDefinitionLabel"), d;
+      let I = e.exit("gfmFootnoteDefinitionLabelString");
+      return o = Se(r.sliceSerialize(I)), e.enter("gfmFootnoteDefinitionLabelMarker"), e.consume(g), e.exit("gfmFootnoteDefinitionLabelMarker"), e.exit("gfmFootnoteDefinitionLabel"), d;
     }
     return J(g) || (s = !0), a++, e.consume(g), g === 92 ? p : c;
   }
@@ -6508,7 +6508,7 @@ function ju(e, t, n) {
     return g === 91 || g === 92 || g === 93 ? (e.consume(g), a++, c) : c(g);
   }
   function d(g) {
-    return g === 58 ? (e.enter("definitionMarker"), e.consume(g), e.exit("definitionMarker"), i.includes(o) || i.push(o), D(e, f, "gfmFootnoteDefinitionWhitespace")) : n(g);
+    return g === 58 ? (e.enter("definitionMarker"), e.consume(g), e.exit("definitionMarker"), i.includes(o) || i.push(o), O(e, f, "gfmFootnoteDefinitionWhitespace")) : n(g);
   }
   function f(g) {
     return t(g);
@@ -6522,14 +6522,14 @@ function Wu(e) {
 }
 function $u(e, t, n) {
   let r = this;
-  return D(e, i, "gfmFootnoteDefinitionIndent", 5);
+  return O(e, i, "gfmFootnoteDefinitionIndent", 5);
   function i(o) {
     let a = r.events[r.events.length - 1];
     return a && a[1].type === "gfmFootnoteDefinitionIndent" && a[2].sliceSerialize(a[1], !0).length === 4 ? t(o) : n(o);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-strikethrough@2.1.0/node_modules/micromark-extension-gfm-strikethrough/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-strikethrough@2.1.0/node_modules/micromark-extension-gfm-strikethrough/lib/syntax.js
 function Zr(e) {
   let n = (e || {}).singleTilde, r = {
     name: "strikethrough",
@@ -6580,17 +6580,17 @@ function Zr(e) {
       return u === 126 && c[c.length - 1][1].type !== "characterEscape" ? l(g) : (a.enter("strikethroughSequenceTemporary"), f(g));
     }
     function f(g) {
-      let v = wt(u);
+      let I = wt(u);
       if (g === 126)
         return p > 1 ? l(g) : (a.consume(g), p++, f);
       if (p < 2 && !n) return l(g);
       let E = a.exit("strikethroughSequenceTemporary"), x = wt(g);
-      return E._open = !x || x === 2 && !!v, E._close = !v || v === 2 && !!x, s(g);
+      return E._open = !x || x === 2 && !!I, E._close = !I || I === 2 && !!x, s(g);
     }
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/edit-map.js
+// node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/edit-map.js
 var Tn = class {
   /**
    * Create a new edit map.
@@ -6663,7 +6663,7 @@ function Qu(e, t, n, r) {
   e.map.push(o), e.index.set(t, o);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/infer.js
+// node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/infer.js
 function Go(e, t) {
   let n = !1, r = [];
   for (; t < e.length; ) {
@@ -6684,7 +6684,7 @@ function Go(e, t) {
   return r;
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-table@2.1.2/node_modules/micromark-extension-gfm-table/lib/syntax.js
 function ei() {
   return {
     flow: {
@@ -6711,7 +6711,7 @@ function Ju(e, t, n) {
       else
         break;
     }
-    let O = W > -1 ? r.events[W][1].type : null, L = O === "tableHead" || O === "tableRow" ? S : l;
+    let D = W > -1 ? r.events[W][1].type : null, L = D === "tableHead" || D === "tableRow" ? S : l;
     return L === S && r.parser.lazy[r.now().line] ? n(w) : L(w);
   }
   function l(w) {
@@ -6721,7 +6721,7 @@ function Ju(e, t, n) {
     return w === 124 || (a = !0, o += 1), c(w);
   }
   function c(w) {
-    return w === null ? n(w) : P(w) ? o > 1 ? (o = 0, r.interrupt = !0, e.exit("tableRow"), e.enter("lineEnding"), e.consume(w), e.exit("lineEnding"), f) : n(w) : B(w) ? D(e, c, "whitespace")(w) : (o += 1, a && (a = !1, i += 1), w === 124 ? (e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), a = !0, c) : (e.enter("data"), p(w)));
+    return w === null ? n(w) : P(w) ? o > 1 ? (o = 0, r.interrupt = !0, e.exit("tableRow"), e.enter("lineEnding"), e.consume(w), e.exit("lineEnding"), f) : n(w) : B(w) ? O(e, c, "whitespace")(w) : (o += 1, a && (a = !1, i += 1), w === 124 ? (e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), a = !0, c) : (e.enter("data"), p(w)));
   }
   function p(w) {
     return w === null || w === 124 || J(w) ? (e.exit("data"), c(w)) : (e.consume(w), w === 92 ? d : p);
@@ -6730,25 +6730,25 @@ function Ju(e, t, n) {
     return w === 92 || w === 124 ? (e.consume(w), p) : p(w);
   }
   function f(w) {
-    return r.interrupt = !1, r.parser.lazy[r.now().line] ? n(w) : (e.enter("tableDelimiterRow"), a = !1, B(w) ? D(e, g, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(w) : g(w));
+    return r.interrupt = !1, r.parser.lazy[r.now().line] ? n(w) : (e.enter("tableDelimiterRow"), a = !1, B(w) ? O(e, g, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(w) : g(w));
   }
   function g(w) {
-    return w === 45 || w === 58 ? E(w) : w === 124 ? (a = !0, e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), v) : _(w);
+    return w === 45 || w === 58 ? E(w) : w === 124 ? (a = !0, e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), I) : _(w);
   }
-  function v(w) {
-    return B(w) ? D(e, E, "whitespace")(w) : E(w);
+  function I(w) {
+    return B(w) ? O(e, E, "whitespace")(w) : E(w);
   }
   function E(w) {
     return w === 58 ? (o += 1, a = !0, e.enter("tableDelimiterMarker"), e.consume(w), e.exit("tableDelimiterMarker"), x) : w === 45 ? (o += 1, x(w)) : w === null || P(w) ? A(w) : _(w);
   }
   function x(w) {
-    return w === 45 ? (e.enter("tableDelimiterFiller"), I(w)) : _(w);
+    return w === 45 ? (e.enter("tableDelimiterFiller"), v(w)) : _(w);
   }
-  function I(w) {
-    return w === 45 ? (e.consume(w), I) : w === 58 ? (a = !0, e.exit("tableDelimiterFiller"), e.enter("tableDelimiterMarker"), e.consume(w), e.exit("tableDelimiterMarker"), k) : (e.exit("tableDelimiterFiller"), k(w));
+  function v(w) {
+    return w === 45 ? (e.consume(w), v) : w === 58 ? (a = !0, e.exit("tableDelimiterFiller"), e.enter("tableDelimiterMarker"), e.consume(w), e.exit("tableDelimiterMarker"), k) : (e.exit("tableDelimiterFiller"), k(w));
   }
   function k(w) {
-    return B(w) ? D(e, A, "whitespace")(w) : A(w);
+    return B(w) ? O(e, A, "whitespace")(w) : A(w);
   }
   function A(w) {
     return w === 124 ? g(w) : w === null || P(w) ? !a || i !== o ? _(w) : (e.exit("tableDelimiterRow"), e.exit("tableHead"), t(w)) : _(w);
@@ -6760,7 +6760,7 @@ function Ju(e, t, n) {
     return e.enter("tableRow"), F(w);
   }
   function F(w) {
-    return w === 124 ? (e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), F) : w === null || P(w) ? (e.exit("tableRow"), t(w)) : B(w) ? D(e, F, "whitespace")(w) : (e.enter("data"), U(w));
+    return w === 124 ? (e.enter("tableCellDivider"), e.consume(w), e.exit("tableCellDivider"), F) : w === null || P(w) ? (e.exit("tableRow"), t(w)) : B(w) ? O(e, F, "whitespace")(w) : (e.enter("data"), U(w));
   }
   function U(w) {
     return w === null || w === 124 || J(w) ? (e.exit("data"), F(w)) : (e.consume(w), w === 92 ? z : U);
@@ -6809,8 +6809,8 @@ function An(e, t, n, r, i, o) {
     if (e.add(n[2], 0, [["enter", p, t]]), r !== 2) {
       let d = t.events[n[2]], f = t.events[n[3]];
       if (d[1].end = Object.assign({}, f[1].end), d[1].type = "chunkText", d[1].contentType = "text", n[3] > n[2] + 1) {
-        let g = n[2] + 1, v = n[3] - n[2] - 1;
-        e.add(g, v, []);
+        let g = n[2] + 1, I = n[3] - n[2] - 1;
+        e.add(g, I, []);
       }
     }
     e.add(n[3] + 1, 0, [["exit", p, t]]);
@@ -6826,7 +6826,7 @@ function bt(e, t) {
   return n[1][r];
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm-task-list-item@2.1.0/node_modules/micromark-extension-gfm-task-list-item/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-task-list-item@2.1.0/node_modules/micromark-extension-gfm-task-list-item/lib/syntax.js
 var Yu = {
   name: "tasklistCheck",
   tokenize: Ku
@@ -6862,13 +6862,13 @@ function Ku(e, t, n) {
   }
 }
 function Xu(e, t, n) {
-  return D(e, r, "whitespace");
+  return O(e, r, "whitespace");
   function r(i) {
     return i === null ? n(i) : t(i);
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-gfm@3.0.0/node_modules/micromark-extension-gfm/index.js
+// node_modules/.pnpm/micromark-extension-gfm@3.0.0/node_modules/micromark-extension-gfm/index.js
 function Ko(e) {
   return an([
     Yr(),
@@ -6879,7 +6879,7 @@ function Ko(e) {
   ]);
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/remark-gfm@4.0.1_supports-color@10.2.2/node_modules/remark-gfm/lib/index.js
+// node_modules/.pnpm/remark-gfm@4.0.1_supports-color@10.2.2/node_modules/remark-gfm/lib/index.js
 var Zu = {};
 function Cn(e) {
   let t = (
@@ -6889,7 +6889,7 @@ function Cn(e) {
   i.push(Ko(n)), o.push(Qr()), a.push(Jr(n));
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/mdast-util-math@3.0.0_supports-color@10.2.2/node_modules/mdast-util-math/lib/index.js
+// node_modules/.pnpm/mdast-util-math@3.0.0_supports-color@10.2.2/node_modules/mdast-util-math/lib/index.js
 function ni() {
   return {
     enter: {
@@ -7016,8 +7016,8 @@ function ri(e) {
       if (!d.atBreak) continue;
       let f = s.compilePattern(d), g;
       for (; g = f.exec(l); ) {
-        let v = g.index;
-        l.codePointAt(v) === 10 && l.codePointAt(v - 1) === 13 && v--, l = l.slice(0, v) + " " + l.slice(g.index + 1);
+        let I = g.index;
+        l.codePointAt(I) === 10 && l.codePointAt(I - 1) === 13 && I--, l = l.slice(0, I) + " " + l.slice(g.index + 1);
       }
     }
     return c + l + c;
@@ -7027,7 +7027,7 @@ function ri(e) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/math-flow.js
+// node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/math-flow.js
 var Zo = {
   tokenize: ec,
   concrete: !0,
@@ -7039,52 +7039,52 @@ var Zo = {
 function ec(e, t, n) {
   let r = this, i = r.events[r.events.length - 1], o = i && i[1].type === "linePrefix" ? i[2].sliceSerialize(i[1], !0).length : 0, a = 0;
   return s;
-  function s(I) {
-    return e.enter("mathFlow"), e.enter("mathFlowFence"), e.enter("mathFlowFenceSequence"), l(I);
+  function s(v) {
+    return e.enter("mathFlow"), e.enter("mathFlowFence"), e.enter("mathFlowFenceSequence"), l(v);
   }
-  function l(I) {
-    return I === 36 ? (e.consume(I), a++, l) : a < 2 ? n(I) : (e.exit("mathFlowFenceSequence"), D(e, u, "whitespace")(I));
+  function l(v) {
+    return v === 36 ? (e.consume(v), a++, l) : a < 2 ? n(v) : (e.exit("mathFlowFenceSequence"), O(e, u, "whitespace")(v));
   }
-  function u(I) {
-    return I === null || P(I) ? p(I) : (e.enter("mathFlowFenceMeta"), e.enter("chunkString", {
+  function u(v) {
+    return v === null || P(v) ? p(v) : (e.enter("mathFlowFenceMeta"), e.enter("chunkString", {
       contentType: "string"
-    }), c(I));
+    }), c(v));
   }
-  function c(I) {
-    return I === null || P(I) ? (e.exit("chunkString"), e.exit("mathFlowFenceMeta"), p(I)) : I === 36 ? n(I) : (e.consume(I), c);
+  function c(v) {
+    return v === null || P(v) ? (e.exit("chunkString"), e.exit("mathFlowFenceMeta"), p(v)) : v === 36 ? n(v) : (e.consume(v), c);
   }
-  function p(I) {
-    return e.exit("mathFlowFence"), r.interrupt ? t(I) : e.attempt(Xo, d, E)(I);
+  function p(v) {
+    return e.exit("mathFlowFence"), r.interrupt ? t(v) : e.attempt(Xo, d, E)(v);
   }
-  function d(I) {
+  function d(v) {
     return e.attempt({
       tokenize: x,
       partial: !0
-    }, E, f)(I);
+    }, E, f)(v);
   }
-  function f(I) {
-    return (o ? D(e, g, "linePrefix", o + 1) : g)(I);
+  function f(v) {
+    return (o ? O(e, g, "linePrefix", o + 1) : g)(v);
   }
-  function g(I) {
-    return I === null ? E(I) : P(I) ? e.attempt(Xo, d, E)(I) : (e.enter("mathFlowValue"), v(I));
+  function g(v) {
+    return v === null ? E(v) : P(v) ? e.attempt(Xo, d, E)(v) : (e.enter("mathFlowValue"), I(v));
   }
-  function v(I) {
-    return I === null || P(I) ? (e.exit("mathFlowValue"), g(I)) : (e.consume(I), v);
+  function I(v) {
+    return v === null || P(v) ? (e.exit("mathFlowValue"), g(v)) : (e.consume(v), I);
   }
-  function E(I) {
-    return e.exit("mathFlow"), t(I);
+  function E(v) {
+    return e.exit("mathFlow"), t(v);
   }
-  function x(I, k, A) {
+  function x(v, k, A) {
     let _ = 0;
-    return D(I, S, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4);
+    return O(v, S, "linePrefix", r.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4);
     function S(z) {
-      return I.enter("mathFlowFence"), I.enter("mathFlowFenceSequence"), F(z);
+      return v.enter("mathFlowFence"), v.enter("mathFlowFenceSequence"), F(z);
     }
     function F(z) {
-      return z === 36 ? (_++, I.consume(z), F) : _ < a ? A(z) : (I.exit("mathFlowFenceSequence"), D(I, U, "whitespace")(z));
+      return z === 36 ? (_++, v.consume(z), F) : _ < a ? A(z) : (v.exit("mathFlowFenceSequence"), O(v, U, "whitespace")(z));
     }
     function U(z) {
-      return z === null || P(z) ? (I.exit("mathFlowFence"), k(z)) : A(z);
+      return z === null || P(z) ? (v.exit("mathFlowFence"), k(z)) : A(z);
     }
   }
 }
@@ -7099,7 +7099,7 @@ function tc(e, t, n) {
   }
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/math-text.js
+// node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/math-text.js
 function ea(e) {
   let n = (e || {}).singleDollarTextMath;
   return n == null && (n = !0), {
@@ -7118,13 +7118,13 @@ function ea(e) {
       return E === 36 ? (i.consume(E), l++, d) : l < 2 && !n ? a(E) : (i.exit("mathTextSequence"), f(E));
     }
     function f(E) {
-      return E === null ? a(E) : E === 36 ? (c = i.enter("mathTextSequence"), u = 0, v(E)) : E === 32 ? (i.enter("space"), i.consume(E), i.exit("space"), f) : P(E) ? (i.enter("lineEnding"), i.consume(E), i.exit("lineEnding"), f) : (i.enter("mathTextData"), g(E));
+      return E === null ? a(E) : E === 36 ? (c = i.enter("mathTextSequence"), u = 0, I(E)) : E === 32 ? (i.enter("space"), i.consume(E), i.exit("space"), f) : P(E) ? (i.enter("lineEnding"), i.consume(E), i.exit("lineEnding"), f) : (i.enter("mathTextData"), g(E));
     }
     function g(E) {
       return E === null || E === 32 || E === 36 || P(E) ? (i.exit("mathTextData"), f(E)) : (i.consume(E), g);
     }
-    function v(E) {
-      return E === 36 ? (i.consume(E), u++, v) : u === l ? (i.exit("mathTextSequence"), i.exit("mathText"), o(E)) : (c.type = "mathTextData", g(E));
+    function I(E) {
+      return E === 36 ? (i.consume(E), u++, I) : u === l ? (i.exit("mathTextSequence"), i.exit("mathText"), o(E)) : (c.type = "mathTextData", g(E));
     }
   }
 }
@@ -7145,7 +7145,7 @@ function rc(e) {
   return e !== 36 || this.events[this.events.length - 1][1].type === "characterEscape";
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-math@3.1.0/node_modules/micromark-extension-math/lib/syntax.js
 function ii(e) {
   return {
     flow: {
@@ -7157,7 +7157,7 @@ function ii(e) {
   };
 }
 
-// ../../../../../hermes-agent/node_modules/.pnpm/remark-math@6.0.0_supports-color@10.2.2/node_modules/remark-math/lib/index.js
+// node_modules/.pnpm/remark-math@6.0.0_supports-color@10.2.2/node_modules/remark-math/lib/index.js
 var ic = {};
 function Fn(e) {
   let t = (
@@ -7168,10 +7168,10 @@ function Fn(e) {
 }
 
 // src/followup-tasks.mjs
-var It = (e) => e !== null && typeof e == "object" && !Array.isArray(e), St = (e) => typeof e == "string" && e.length > 0 && e === e.trim(), Pn = (e) => Number.isSafeInteger(e) && e > 0, oi = /* @__PURE__ */ new Set(["unspecified", "todo", "in_progress", "waiting", "done"]), ta = /* @__PURE__ */ new Set(["low", "normal", "high", "urgent"]);
+var vt = (e) => e !== null && typeof e == "object" && !Array.isArray(e), St = (e) => typeof e == "string" && e.length > 0 && e === e.trim(), Pn = (e) => Number.isSafeInteger(e) && e > 0, oi = /* @__PURE__ */ new Set(["unspecified", "todo", "in_progress", "waiting", "done"]), ta = /* @__PURE__ */ new Set(["low", "normal", "high", "urgent"]);
 function ai(e, t = !1) {
   if (t && e === null) return null;
-  if (It(e) && e.unverified === !0) {
+  if (vt(e) && e.unverified === !0) {
     if (!St(e.storedId) || ["connectionId", "profile", "targetProfile"].some((n) => e[n] !== void 0 && !St(e[n])) || e.mode !== void 0 && e.mode !== "local" && e.mode !== "remote" || e.storeInstanceId !== void 0 && !St(e.storeInstanceId)) throw new Error("Invalid session reference identity");
     return {
       storedId: e.storedId,
@@ -7183,7 +7183,7 @@ function ai(e, t = !1) {
       unverified: !0
     };
   }
-  if (!It(e) || !["connectionId", "profile", "targetProfile", "storedId"].every((n) => St(e[n])) || e.mode !== void 0 && e.mode !== "local" && e.mode !== "remote" || e.storeInstanceId !== void 0 && !St(e.storeInstanceId))
+  if (!vt(e) || !["connectionId", "profile", "targetProfile", "storedId"].every((n) => St(e[n])) || e.mode !== void 0 && e.mode !== "local" && e.mode !== "remote" || e.storeInstanceId !== void 0 && !St(e.storeInstanceId))
     throw new Error("Invalid session reference identity");
   return {
     connectionId: e.connectionId,
@@ -7206,7 +7206,7 @@ function si(e, t) {
   }
 }
 function ft(e) {
-  if (!It(e) || e.version !== 1 || !St(e.id) || typeof e.title != "string" || !e.title.trim() || !Pn(e.createdAt) || !Pn(e.updatedAt) || e.updatedAt < e.createdAt || !Array.isArray(e.related) || !Array.isArray(e.nextSteps) || !e.nextSteps.every((c) => typeof c == "string" && c.trim()) || !It(e.resolution) || e.description !== void 0 && typeof e.description != "string" || e.notes !== void 0 && typeof e.notes != "string" || e.status !== void 0 && !oi.has(e.status) || e.priority !== void 0 && !ta.has(e.priority))
+  if (!vt(e) || e.version !== 1 || !St(e.id) || typeof e.title != "string" || !e.title.trim() || !Pn(e.createdAt) || !Pn(e.updatedAt) || e.updatedAt < e.createdAt || !Array.isArray(e.related) || !Array.isArray(e.nextSteps) || !e.nextSteps.every((c) => typeof c == "string" && c.trim()) || !vt(e.resolution) || e.description !== void 0 && typeof e.description != "string" || e.notes !== void 0 && typeof e.notes != "string" || e.status !== void 0 && !oi.has(e.status) || e.priority !== void 0 && !ta.has(e.priority))
     throw new Error("Invalid follow-up task");
   let t = ai(e.primary, !0), n = e.related.map((c) => ai(c)), i = [t, ...n].map(Vt).filter((c) => c !== null);
   if (new Set(i).size !== i.length) throw new Error("Duplicate session reference");
@@ -7243,7 +7243,7 @@ function li(e) {
   return t;
 }
 function Wt(e, t) {
-  if (!It(e)) throw new Error("Invalid follow-up task");
+  if (!vt(e)) throw new Error("Invalid follow-up task");
   return ft({
     version: 1,
     id: e.id,
@@ -7260,9 +7260,9 @@ function Wt(e, t) {
     resolution: { state: "open" }
   });
 }
-function vt(e, t) {
+function It(e, t) {
   let n = ft(e);
-  if (!It(t) || !Pn(t.at) || t.at < n.updatedAt || !["accept", "reopen", "revise", "set_status", "bind_primary", "set_primary"].includes(t.type)) throw new Error("Invalid follow-up action");
+  if (!vt(t) || !Pn(t.at) || t.at < n.updatedAt || !["accept", "reopen", "revise", "set_status", "bind_primary", "set_primary"].includes(t.type)) throw new Error("Invalid follow-up action");
   if (t.type === "accept" && (n.resolution.state !== "open" || typeof t.note != "string" || !t.note.trim())) throw new Error("Invalid follow-up action");
   if (t.type === "reopen" && n.resolution.state !== "accepted") throw new Error("Invalid follow-up action");
   if (t.type === "set_status" && (n.resolution.state !== "open" || !oi.has(t.status) || t.status === "done")) throw new Error("Invalid follow-up action");
@@ -7363,7 +7363,7 @@ function cc({ messages: e, todoState: t = null, snapshotScope: n = "persisted_di
   let f = p && e.slice(d + 1).some((z) => z.role === "user" && Ln(z) && Et(z).trim() || uc(z)), g = ui.map((z) => {
     let w = p?.[z], W = p?.[`${z}_evidence`]?.trim() || null, L = !["passed", "failed", "pending", "not_applicable"].includes(w) || (w === "passed" || w === "not_applicable") && !W ? "unknown" : f ? "stale" : w === "passed" ? "registered" : w;
     return { id: z, status: L, evidence: W, source: W ? p?.evidence : null };
-  }), v = c?.todos ?? null, E = $t(p?.decision), x = /^(?:无|暂无|没有|none|n\/a|暂无需决策|无待决定事项|无需确认)[。.!！\s]*$/i, I = /^(?:无|暂无|没有|none|n\/a|暂无剩余工作|无剩余必做)[。.!！\s]*$/i, k = !f && E.some((z) => !x.test(z)), A = !f && g.some((z) => z.status === "failed"), _ = !f && $t(p?.remaining).some((z) => !I.test(z)) || v?.some((z) => ["pending", "in_progress"].includes(z.status)), S = k ? "needs_input" : A ? "failed" : _ ? "pending" : "needs_review", F = ["working", "idle"].includes(r.execution) ? r.execution : "unknown", U = {
+  }), I = c?.todos ?? null, E = $t(p?.decision), x = /^(?:无|暂无|没有|none|n\/a|暂无需决策|无待决定事项|无需确认)[。.!！\s]*$/i, v = /^(?:无|暂无|没有|none|n\/a|暂无剩余工作|无剩余必做)[。.!！\s]*$/i, k = !f && E.some((z) => !x.test(z)), A = !f && g.some((z) => z.status === "failed"), _ = !f && $t(p?.remaining).some((z) => !v.test(z)) || I?.some((z) => ["pending", "in_progress"].includes(z.status)), S = k ? "needs_input" : A ? "failed" : _ ? "pending" : "needs_review", F = ["working", "idle"].includes(r.execution) ? r.execution : "unknown", U = {
     work: S,
     execution: F,
     actionRequired: k || A,
@@ -7388,11 +7388,11 @@ function cc({ messages: e, todoState: t = null, snapshotScope: n = "persisted_di
     acceptance: p ? f ? "stale" : "registered" : "unregistered",
     hasIndependentAcceptance: !1,
     stages: g,
-    todos: v,
+    todos: I,
     todoRevision: c?.revision ?? null,
-    remaining: v?.filter((z) => ["pending", "in_progress"].includes(z.status)) ?? [],
-    completed: v?.filter((z) => z.status === "completed") ?? [],
-    cancelled: v?.filter((z) => z.status === "cancelled") ?? [],
+    remaining: I?.filter((z) => ["pending", "in_progress"].includes(z.status)) ?? [],
+    completed: I?.filter((z) => z.status === "completed") ?? [],
+    cancelled: I?.filter((z) => z.status === "cancelled") ?? [],
     registeredRemaining: $t(p?.remaining),
     deferred: $t(p?.deferred),
     decisions: $t(p?.decision),
@@ -7413,20 +7413,17 @@ async function ra(e, t) {
 async function ia(e, t) {
   if (typeof t?.storedId != "string" || !t.storedId.trim()) throw new Error("Stored session identity unavailable");
   if (t?.route?.unverified === !0 || !["local", "remote"].includes(t?.route?.mode)) {
-    let r = new Error("Session owner mode cannot be verified");
-    throw r.code = "FOLLOWUP_REFERENCE_IDENTITY_UNAVAILABLE", r;
+    let i = new Error("Session owner mode cannot be verified");
+    throw i.code = "FOLLOWUP_REFERENCE_IDENTITY_UNAVAILABLE", i;
   }
   if (typeof t.route.storeInstanceId != "string" || !t.route.storeInstanceId.trim() || t.route.storeInstanceId !== t.route.storeInstanceId.trim()) {
-    let r = new Error("Session store identity was not recorded, so the same connection labels cannot prove this backend");
-    throw r.code = "FOLLOWUP_REFERENCE_IDENTITY_UNAVAILABLE", r;
+    let i = new Error("Session store identity was not recorded, so the same connection labels cannot prove this backend");
+    throw i.code = "FOLLOWUP_REFERENCE_IDENTITY_UNAVAILABLE", i;
   }
   let n = dt(t?.route, await e.profileRoutes());
   if (n.targetProfile !== t.route.targetProfile || n.mode !== t.route.mode) throw new Error("Session owner route changed");
-  if (typeof e?.openExactSession != "function") {
-    let r = new Error("Exact owner navigation is unavailable in this Desktop build");
-    throw r.code = "FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE", r;
-  }
-  await e.openExactSession(t.storedId, { route: { ...n, storeInstanceId: t.route.storeInstanceId } });
+  let r = new Error("Verified session navigation is unavailable in this plugin version");
+  throw r.code = "FOLLOWUP_EXACT_NAVIGATION_UNAVAILABLE", r;
 }
 function oa(e, t) {
   return t && t.key === e ? t : null;
@@ -7734,10 +7731,10 @@ function xc({ value: e, t, error: n, refreshing: r, onRefresh: i, onRegister: o,
 function pa() {
   let e = kc(Me), t = Tt(Pe.state.focusedStoredSessionId), n = Tt(Pe.state.focusedSessionId), r = Tt(Pe.state.focusedSessionOwner), i = Tt(Pe.state.busy), o = Tt(Pe.state.gateway), a = Pe.paneVisibility(`${Me}:pane`), s = Tt(a), l = { storedId: t, runtimeId: n, owner: r }, u = Nn(l), c = gc(), p = hc({ queryKey: [Me, u], queryFn: () => ra(Pe, l), enabled: !!(t && n && r && s && o === "open"), refetchInterval: s ? 15e3 : !1, staleTime: 5e3, retry: !1, refetchOnWindowFocus: !0 });
   pc(() => {
-    let v = ["todo.updated", "turn.complete", "turn.failed", "session.title"].map((E) => Pe.onEvent(E, (x) => {
+    let I = ["todo.updated", "turn.complete", "turn.failed", "session.title"].map((E) => Pe.onEvent(E, (x) => {
       x.session_id === n && c.invalidateQueries({ queryKey: [Me, u] });
     }));
-    return () => v.forEach((E) => E());
+    return () => I.forEach((E) => E());
   }, [c, u, n]);
   let d = oa(u, p.data);
   if (!t) return /* @__PURE__ */ Y("section", { className: "task-overview", children: [
@@ -7803,12 +7800,12 @@ function Ct(e) {
     n?.[i] !== void 0 && n[i] !== null && (r[i] = n[i]);
   return { ...r, unverified: !0 };
 }
-async function Dn(e) {
+async function On(e) {
   let t = Ct(e);
-  return t.connectionId && t.profile && t.targetProfile && ["local", "remote"].includes(t.mode) ? await yc(e) : t;
+  return t.connectionId && t.profile && t.targetProfile && ["local", "remote"].includes(t.mode) ? { ...await yc(e), unverified: !0 } : t;
 }
 async function fa(e, t, n, r, i) {
-  if (!i?.unverified) return await bc(e, t, n, r, i);
+  if (!i?.unverified || i.connectionId && i.profile && i.targetProfile && ["local", "remote"].includes(i.mode)) return await bc(e, t, n, r, i);
   if (JSON.stringify(i) !== JSON.stringify(Ct(e))) throw new Error("Focused session changed before tracking");
   return await t.create(Wt({ ...n, primary: i }, r));
 }
@@ -7822,7 +7819,7 @@ async function bc(e, t, n, r, i) {
   let s = dt(o, await e.profileRoutes());
   if (s.targetProfile !== a.targetProfile || s.mode !== a.mode) throw new Error("Focused session owner route changed before tracking");
   if (!Jt(o, At(e))) throw new Error("Focused session changed before tracking");
-  let l = Wt({ ...n, primary: { ...o, targetProfile: a.targetProfile } }, r);
+  let l = Wt({ ...n, primary: { ...o, targetProfile: a.targetProfile, unverified: !0 } }, r);
   return await t.create(l);
 }
 async function da(e, t, n) {
@@ -7830,28 +7827,28 @@ async function da(e, t, n) {
 }
 async function ma(e, t, n, r, i) {
   if (i !== void 0 && JSON.stringify(Ct(e)) !== JSON.stringify(i)) throw new Error("Focused session changed before tracking");
-  let o = await Dn(e);
+  let o = await On(e);
   if (o.unverified ? JSON.stringify(o) !== JSON.stringify(Ct(e)) : !Jt(o, At(e))) throw new Error("Focused session changed before tracking");
   return await t.changePrimary(n.task.id, n.revision, o, r);
 }
 async function ha(e, t, n) {
-  return await e.replace(vt(t.task, n), t.revision);
+  return await e.replace(It(t.task, n), t.revision);
 }
 async function ga(e, t) {
   return await e.remove(t.task.id, t.revision);
 }
 async function ka(e, t, n, r, i) {
-  let o = vt(n.task, { ...r, type: "revise", at: i }), a = (u) => JSON.stringify([u.connectionId, u.profile, u.targetProfile, u.storedId]), s = new Set(n.task.related.map(a)), l = o.related.filter((u) => !s.has(a(u)));
-  if (l.some((u) => !u.unverified))
+  let o = It(n.task, { ...r, type: "revise", at: i }), a = (c) => JSON.stringify([c.connectionId, c.profile, c.targetProfile, c.storedId]), s = new Set(n.task.related.map(a)), u = o.related.filter((c) => !s.has(a(c))).filter((c) => !c.unverified || c.connectionId && c.profile && c.targetProfile && ["local", "remote"].includes(c.mode));
+  if (u.length)
     try {
-      let u = await e.profileRoutes();
-      for (let c of l.filter((p) => !p.unverified)) {
-        let p = dt(c, u);
-        if (!["local", "remote"].includes(c.mode) || p.targetProfile !== c.targetProfile || p.mode !== c.mode) throw new Error("Session owner route changed");
+      let c = await e.profileRoutes();
+      for (let p of u) {
+        let d = dt(p, c);
+        if (!["local", "remote"].includes(p.mode) || d.targetProfile !== p.targetProfile || d.mode !== p.mode) throw new Error("Session owner route changed");
       }
-    } catch (u) {
-      let c = new Error("Session owner route changed or unavailable", { cause: u });
-      throw c.code = "FOLLOWUP_ROUTE_CHANGED", c;
+    } catch (c) {
+      let p = new Error("Session owner route changed or unavailable", { cause: c });
+      throw p.code = "FOLLOWUP_ROUTE_CHANGED", p;
     }
   return await t.replace(o, n.revision);
 }
@@ -7864,7 +7861,7 @@ var Bn = "tasks", Sc = "hermes.plugin.task-overview.followup.v1";
 function di(e) {
   return li([e])[0];
 }
-function On(e) {
+function Dn(e) {
   if (!e || !Number.isSafeInteger(e.revision) || e.revision < 1) throw new Error("Invalid stored follow-up record");
   let t = di(e.task);
   if (e.id !== t.id) throw new Error("Invalid stored follow-up identity");
@@ -7926,7 +7923,7 @@ function qn(e, t = Sc) {
           let p = l.getAll();
           p.onsuccess = () => {
             try {
-              u(p.result.map(On));
+              u(p.result.map(Dn));
             } catch (d) {
               c(d);
             }
@@ -7957,27 +7954,27 @@ function qn(e, t = Sc) {
             g.onsuccess = () => {
               try {
                 if (!g.result) throw new Error("Follow-up task not found");
-                let v = On(g.result);
-                if (v.revision !== u) throw new Error("Follow-up task revision conflict");
-                if (v.task.createdAt !== c.createdAt || JSON.stringify(v.task.primary) !== JSON.stringify(c.primary)) throw new Error("Follow-up task identity changed");
-                if (si(v.task.related, c.related), c.updatedAt < v.task.updatedAt) throw new Error("Follow-up task update time moved backwards");
-                let E = v.revision + 1, x = p.put({ id: c.id, task: c, revision: E });
+                let I = Dn(g.result);
+                if (I.revision !== u) throw new Error("Follow-up task revision conflict");
+                if (I.task.createdAt !== c.createdAt || JSON.stringify(I.task.primary) !== JSON.stringify(c.primary)) throw new Error("Follow-up task identity changed");
+                if (si(I.task.related, c.related), c.updatedAt < I.task.updatedAt) throw new Error("Follow-up task update time moved backwards");
+                let E = I.revision + 1, x = p.put({ id: c.id, task: c, revision: E });
                 x.onsuccess = () => d({ task: c, revision: E });
-              } catch (v) {
-                f(v);
+              } catch (I) {
+                f(I);
               }
             };
           });
         },
         changePrimary: (l, u, c, p) => typeof l != "string" || !l.trim() || !Number.isSafeInteger(u) || u < 1 || u >= Number.MAX_SAFE_INTEGER ? Promise.reject(new Error("Invalid follow-up revision")) : Gt(s, "readwrite", (d, f, g) => {
-          let v = d.get(l);
-          v.onsuccess = () => {
+          let I = d.get(l);
+          I.onsuccess = () => {
             try {
-              if (!v.result) throw new Error("Follow-up task not found");
-              let E = On(v.result);
+              if (!I.result) throw new Error("Follow-up task not found");
+              let E = Dn(I.result);
               if (E.revision !== u) throw new Error("Follow-up task revision conflict");
-              let x = vt(E.task, { type: "set_primary", primary: c, at: p }), I = E.revision + 1, k = d.put({ id: l, task: x, revision: I });
-              k.onsuccess = () => f({ task: x, revision: I });
+              let x = It(E.task, { type: "set_primary", primary: c, at: p }), v = E.revision + 1, k = d.put({ id: l, task: x, revision: v });
+              k.onsuccess = () => f({ task: x, revision: v });
             } catch (E) {
               g(E);
             }
@@ -7988,9 +7985,9 @@ function qn(e, t = Sc) {
           f.onsuccess = () => {
             try {
               if (!f.result) throw new Error("Follow-up task not found");
-              if (On(f.result).revision !== u) throw new Error("Follow-up task revision conflict");
-              let v = c.delete(l);
-              v.onsuccess = () => p({ id: l });
+              if (Dn(f.result).revision !== u) throw new Error("Follow-up task revision conflict");
+              let I = c.delete(l);
+              I.onsuccess = () => p({ id: l });
             } catch (g) {
               d(g);
             }
@@ -8002,12 +7999,12 @@ function qn(e, t = Sc) {
 }
 
 // src/followup-discovery.mjs
-var xa = /* @__PURE__ */ new WeakMap(), Yt = /* @__PURE__ */ new WeakMap(), mi = /* @__PURE__ */ new WeakMap(), Ae = (e) => JSON.stringify([e.connectionId, e.profile]), ya = (e) => JSON.stringify(["sessions", e.connectionId, e.profile, e.targetProfile]), gi = (e) => e && ["connectionId", "profile"].every((t) => typeof e[t] == "string" && e[t] !== "" && e[t] === e[t].trim()), Ft = (e) => gi(e) && ["local", "remote"].includes(e.mode) && typeof e.targetProfile == "string" && e.targetProfile !== "" && e.targetProfile === e.targetProfile.trim(), Ic = (e) => Number.isSafeInteger(e) && e >= 0;
+var xa = /* @__PURE__ */ new WeakMap(), Yt = /* @__PURE__ */ new WeakMap(), mi = /* @__PURE__ */ new WeakMap(), Ae = (e) => JSON.stringify([e.connectionId, e.profile]), ya = (e) => JSON.stringify(["sessions", e.connectionId, e.profile, e.targetProfile]), gi = (e) => e && ["connectionId", "profile"].every((t) => typeof e[t] == "string" && e[t] !== "" && e[t] === e[t].trim()), Ft = (e) => gi(e) && ["local", "remote"].includes(e.mode) && typeof e.targetProfile == "string" && e.targetProfile !== "" && e.targetProfile === e.targetProfile.trim(), vc = (e) => Number.isSafeInteger(e) && e >= 0;
 function Sa(e) {
   let t = xa.get(e);
   return t || xa.set(e, t = /* @__PURE__ */ new Map()), t;
 }
-function vc(e, t, n, r) {
+function Ic(e, t, n, r) {
   let i = Sa(e);
   if (i.has(t) || i.size >= 4) {
     let a = new Error("Source request not started");
@@ -8038,7 +8035,7 @@ async function hi(e, t) {
     clearTimeout(n);
   }
 }
-async function Ia(e, t = {}) {
+async function va(e, t = {}) {
   let n = Number.isFinite(t.timeoutMs) && t.timeoutMs > 0 ? t.timeoutMs : 1e4, r = { complete: !1, inventoryKnown: !1, limitPerSource: 100 }, i;
   try {
     i = await hi(ba(e), n);
@@ -8053,7 +8050,7 @@ async function Ia(e, t = {}) {
   for (let k of s.keys())
     u.has(k) || l.push(k);
   mi.set(e, l);
-  let c = Sa(e), p = l.filter((k) => !c.has(ya(s.get(k).route))).slice(0, 12), d = new Set(p.map((k) => s.get(k).index)), f = [...p.map((k) => s.get(k).index), ...i.map((k, A) => A).filter((k) => !d.has(k))], g = new Array(i.length), v = 0, E = async (k) => {
+  let c = Sa(e), p = l.filter((k) => !c.has(ya(s.get(k).route))).slice(0, 12), d = new Set(p.map((k) => s.get(k).index)), f = [...p.map((k) => s.get(k).index), ...i.map((k, A) => A).filter((k) => !d.has(k))], g = new Array(i.length), I = 0, E = async (k) => {
     let A = i[k];
     if (!Ft(A) || o.get(Ae(A)) !== 1) {
       g[k] = { route: A, status: "unavailable", rows: [], reportedTotal: null };
@@ -8065,45 +8062,45 @@ async function Ia(e, t = {}) {
     }
     try {
       if (typeof e.listPersistedSessions != "function") throw new Error("Session listing unavailable");
-      let _ = ya(A), S = await hi(vc(e, _, () => e.listPersistedSessions({ ...A }, { profile: A.targetProfile, limit: 100 }), () => {
-        let O = mi.get(e), L = O?.indexOf(Ae(A)) ?? -1;
-        L >= 0 && O.push(O.splice(L, 1)[0]);
+      let _ = ya(A), S = await hi(Ic(e, _, () => e.listPersistedSessions({ ...A }, { profile: A.targetProfile, limit: 100 }), () => {
+        let D = mi.get(e), L = D?.indexOf(Ae(A)) ?? -1;
+        L >= 0 && D.push(D.splice(L, 1)[0]);
       }), n);
       if (!S || !Array.isArray(S.sessions)) throw new Error("Invalid session listing");
-      let F = /* @__PURE__ */ new Set(), U = S.sessions.map((O) => {
-        if (!O || typeof O.id != "string" || !O.id || O.id !== O.id.trim() || O.profile !== A.targetProfile) throw new Error("Invalid session owner");
-        let L = O._lineage_root_id || O.id;
+      let F = /* @__PURE__ */ new Set(), U = S.sessions.map((D) => {
+        if (!D || typeof D.id != "string" || !D.id || D.id !== D.id.trim() || D.profile !== A.targetProfile) throw new Error("Invalid session owner");
+        let L = D._lineage_root_id || D.id;
         if (typeof L != "string" || !L || L !== L.trim() || F.has(L)) throw new Error("Invalid session identity");
         return F.add(L), {
           route: { ...A },
           storedId: L,
-          title: typeof O.title == "string" && O.title.trim() ? O.title : null,
-          unread: typeof O.unread == "boolean" ? O.unread : null,
+          title: typeof D.title == "string" && D.title.trim() ? D.title : null,
+          unread: typeof D.unread == "boolean" ? D.unread : null,
           review: "unknown"
         };
-      }), z = S.profile_totals?.[A.targetProfile], w = Ic(z) ? z : null, W = w === null || S.errors?.length > 0 || S.storage && Object.keys(S.storage).length > 0 || w > U.length;
+      }), z = S.profile_totals?.[A.targetProfile], w = vc(z) ? z : null, W = w === null || S.errors?.length > 0 || S.storage && Object.keys(S.storage).length > 0 || w > U.length;
       g[k] = { route: A, status: W ? "partial" : "sampled", rows: U, reportedTotal: w };
     } catch (_) {
       g[k] = { route: A, status: _?.code === "FOLLOWUP_NOT_SCANNED" ? "not_scanned" : "unavailable", rows: [], reportedTotal: null };
     }
   }, x = async () => {
-    for (; v < f.length; ) await E(f[v++]);
+    for (; I < f.length; ) await E(f[I++]);
   };
   await Promise.all(Array.from({ length: Math.min(4, i.length) }, x));
-  let I;
+  let v;
   try {
-    I = await hi(ba(e), n);
+    v = await hi(ba(e), n);
   } catch {
-    I = [];
+    v = [];
   }
   for (let k of g) {
     if (!["sampled", "partial"].includes(k.status)) continue;
-    let A = Array.isArray(I) ? I.filter((_) => gi(_) && Ae(_) === Ae(k.route)) : [];
+    let A = Array.isArray(v) ? v.filter((_) => gi(_) && Ae(_) === Ae(k.route)) : [];
     (A.length !== 1 || !Ft(A[0]) || A[0].targetProfile !== k.route.targetProfile || A[0].mode !== k.route.mode) && (k.status = "unavailable", k.rows = [], k.reportedTotal = null);
   }
-  if (Array.isArray(I)) {
+  if (Array.isArray(v)) {
     let k = new Set(i.filter(Ft).map(Ae));
-    for (let A of I)
+    for (let A of v)
       Ft(A) && !k.has(Ae(A)) && (g.push({ route: { ...A }, status: "not_scanned", rows: [], reportedTotal: null }), k.add(Ae(A)));
   }
   return r.inventoryKnown = g.some((k) => Ft(k.route)), { sessions: g.flatMap((k) => k.rows), sources: g.map(({ rows: k, ...A }) => A), coverage: r };
@@ -8111,11 +8108,11 @@ async function Ia(e, t = {}) {
 
 // src/followup-view.jsx
 import { useState as Kt } from "react";
-import { Badge as Ec, Button as de, RowButton as Tc, SearchField as Ac, SegmentedControl as va } from "@hermes/plugin-sdk";
+import { Badge as Ec, Button as de, RowButton as Tc, SearchField as Ac, SegmentedControl as Ia } from "@hermes/plugin-sdk";
 import { Fragment as Ue, jsx as R, jsxs as G } from "react/jsx-runtime";
 var Cc = ".followup-view{box-sizing:border-box;min-width:0;height:100%;overflow:auto;padding:16px;color:var(--ui-text-primary);font-size:13px;line-height:1.5}.followup-view *{box-sizing:border-box}.followup-view .top{display:flex;justify-content:space-between;align-items:center;gap:8px}.followup-view .title{font-size:14px;font-weight:600}.followup-view .tabs{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0 8px}.followup-view .search{width:100%}.followup-view .notice,.followup-view .meta{color:var(--ui-text-secondary);font-size:12px}.followup-view .notice{margin:10px 0}.followup-view .list{margin-top:10px}.followup-view .row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;width:100%;min-width:0;text-align:left;padding:9px 6px;border:0;border-bottom:1px solid var(--ui-stroke-secondary);background:transparent;color:inherit;cursor:pointer}.followup-view .row[aria-pressed=true]{background:var(--ui-bg-quaternary)}.followup-view .row:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}.followup-view .row-main{min-width:0;display:flex;flex-direction:column;gap:2px}.followup-view .row-title,.followup-view .meta{white-space:normal;overflow-wrap:anywhere}.followup-view .detail{margin-top:20px;padding-top:14px;border-top:1px solid var(--ui-stroke-secondary)}.followup-view h2{font-size:16px;font-weight:600;line-height:1.4;margin:8px 0}.followup-view h3{font-size:12px;font-weight:600;margin:18px 0 6px;color:var(--ui-text-secondary)}.followup-view ul{padding-left:18px;margin:4px 0}.followup-view li{margin:4px 0;overflow-wrap:anywhere}.followup-view .open{margin-top:9px}.followup-view .error{margin:12px 0}.followup-view .empty{margin:18px 0;color:var(--ui-text-secondary)}.followup-view .related{display:flex;flex-wrap:wrap;gap:4px}";
-function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i = !1, uncertain: o = !1, exactNavigationAvailable: a = !0, unavailableReferences: s = {}, busy: l = !1, discovery: u = null, discovering: c = !1, onDiscover: p, onOpen: d, onTrack: f, onCreate: g, onEdit: v, onDelete: E, onBind: x, onUnbind: I, onAccept: k, onReopen: A, onRetry: _, form: S = null }) {
-  let [F, U] = Kt("all"), [z, w] = Kt(""), [W, O] = Kt(null), [L, $] = Kt("any"), [V, Z] = Kt("updated"), ee = t.filter((b) => b?.task?.resolution?.state === "open"), ue = t.filter((b) => b?.task?.resolution?.state === "accepted"), ie = z.trim().toLocaleLowerCase(), m = (b) => b.status ?? (b.resolution.state === "accepted" ? "done" : "unspecified"), xe = (F === "accepted" ? ue : F === "everything" ? t : ["todo", "in_progress", "waiting"].includes(F) ? ee.filter((b) => m(b.task) === F) : ee).filter(({ task: b }) => {
+function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i = !1, uncertain: o = !1, exactNavigationAvailable: a = !0, unavailableReferences: s = {}, busy: l = !1, discovery: u = null, discovering: c = !1, onDiscover: p, onOpen: d, onTrack: f, onCreate: g, onEdit: I, onDelete: E, onBind: x, onUnbind: v, onAccept: k, onReopen: A, onRetry: _, form: S = null }) {
+  let [F, U] = Kt("all"), [z, w] = Kt(""), [W, D] = Kt(null), [L, $] = Kt("any"), [V, Z] = Kt("updated"), ee = t.filter((b) => b?.task?.resolution?.state === "open"), ue = t.filter((b) => b?.task?.resolution?.state === "accepted"), ie = z.trim().toLocaleLowerCase(), m = (b) => b.status ?? (b.resolution.state === "accepted" ? "done" : "unspecified"), xe = (F === "accepted" ? ue : F === "everything" ? t : ["todo", "in_progress", "waiting"].includes(F) ? ee.filter((b) => m(b.task) === F) : ee).filter(({ task: b }) => {
     let le = [
       b.title,
       b.description,
@@ -8174,19 +8171,20 @@ function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i 
           e("priorityFilter"),
           " "
         ] }),
-        /* @__PURE__ */ R(va, { options: ["any", "urgent", "high", "normal", "low"].map((b) => ({ id: b, label: e(b) })), value: L, onChange: $ })
+        /* @__PURE__ */ R(Ia, { options: ["any", "urgent", "high", "normal", "low"].map((b) => ({ id: b, label: e(b) })), value: L, onChange: $ })
       ] }),
       /* @__PURE__ */ G("div", { "aria-label": e("sortBy"), children: [
         /* @__PURE__ */ G("span", { className: "meta", children: [
           e("sortBy"),
           " "
         ] }),
-        /* @__PURE__ */ R(va, { options: ["updated", "priority"].map((b) => ({ id: b, label: e(b) })), value: V, onChange: Z })
+        /* @__PURE__ */ R(Ia, { options: ["updated", "priority"].map((b) => ({ id: b, label: e(b) })), value: V, onChange: Z })
       ] })
     ] }) : null,
     F === "sessions" ? /* @__PURE__ */ G("div", { children: [
       /* @__PURE__ */ R("p", { className: "notice", children: e("discoveryScope") }),
       /* @__PURE__ */ R("p", { className: "notice", children: e("discoveryUnknown") }),
+      a ? null : /* @__PURE__ */ R("p", { className: "notice", children: e("exactNavigationUnavailable") }),
       /* @__PURE__ */ R(de, { size: "sm", variant: "secondary", onClick: p, disabled: c, children: e(c ? "loadingSessions" : "loadSessions") }),
       u ? /* @__PURE__ */ G(Ue, { children: [
         c ? /* @__PURE__ */ R("p", { role: "status", children: e("discoveryRefreshing") }) : null,
@@ -8226,7 +8224,7 @@ function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i 
       ] }) : null,
       i ? /* @__PURE__ */ R("p", { className: "empty", children: e("loading") }) : r ? null : /* @__PURE__ */ G(Ue, { children: [
         F === "attention" ? /* @__PURE__ */ R("p", { className: "notice", children: e("noAction") }) : null,
-        se.length ? /* @__PURE__ */ R("div", { className: "list", "aria-label": e(F === "accepted" ? "accepted" : "all"), children: se.map(({ task: b }) => /* @__PURE__ */ G(Tc, { className: "row", "aria-pressed": M?.task.id === b.id, onClick: () => O(b.id), children: [
+        se.length ? /* @__PURE__ */ R("div", { className: "list", "aria-label": e(F === "accepted" ? "accepted" : "all"), children: se.map(({ task: b }) => /* @__PURE__ */ G(Tc, { className: "row", "aria-pressed": M?.task.id === b.id, onClick: () => D(b.id), children: [
           /* @__PURE__ */ G("span", { className: "row-main", children: [
             /* @__PURE__ */ R("span", { className: "row-title", children: b.title }),
             b.nextSteps[0] ? /* @__PURE__ */ G("span", { className: "meta", children: [
@@ -8276,7 +8274,7 @@ function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i 
           ] }) : /* @__PURE__ */ R("p", { className: "meta", children: e("unbound") }),
           M.task.resolution.state === "open" ? /* @__PURE__ */ G(Ue, { children: [
             /* @__PURE__ */ R(de, { size: "xs", variant: "ghost", disabled: l, onClick: () => x?.(M), children: e(M.task.primary ? "rebindPrimary" : "bindPrimary") }),
-            M.task.primary ? /* @__PURE__ */ R(de, { size: "xs", variant: "ghost", disabled: l, onClick: () => I?.(M), children: e("unbindPrimary") }) : null
+            M.task.primary ? /* @__PURE__ */ R(de, { size: "xs", variant: "ghost", disabled: l, onClick: () => v?.(M), children: e("unbindPrimary") }) : null
           ] }) : null,
           M.task.related.length ? /* @__PURE__ */ G(Ue, { children: [
             /* @__PURE__ */ R("h3", { children: e("related") }),
@@ -8287,7 +8285,7 @@ function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i 
           ] }) : null,
           /* @__PURE__ */ G("div", { className: "open", children: [
             M.task.resolution.state === "open" ? /* @__PURE__ */ G(Ue, { children: [
-              /* @__PURE__ */ R(de, { size: "sm", variant: "ghost", disabled: l, onClick: () => v?.(M), children: e("editTask") }),
+              /* @__PURE__ */ R(de, { size: "sm", variant: "ghost", disabled: l, onClick: () => I?.(M), children: e("editTask") }),
               " ",
               /* @__PURE__ */ R(de, { size: "sm", variant: "ghost", disabled: l, onClick: () => k?.(M), children: e("accept") })
             ] }) : /* @__PURE__ */ R(de, { size: "sm", variant: "ghost", disabled: l, onClick: () => A?.(M), children: e("reopen") }),
@@ -8303,23 +8301,23 @@ function Ea({ t: e, rows: t = [], coverage: n = "partial", error: r, loading: i 
 // src/followup-pane.jsx
 import { Fragment as ki, jsx as K, jsxs as oe } from "react/jsx-runtime";
 function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i }) {
-  let [o, a] = ne([]), [s, l] = ne(!0), [u, c] = ne(0), [p, d] = ne(null), [f, g] = ne(null), [v, E] = ne(null), [x, I] = ne(!1), [k, A] = ne(null), [_, S] = ne(!1), [F, U] = ne(""), [z, w] = ne(""), [W, O] = ne(""), [L, $] = ne(""), [V, Z] = ne("todo"), [ee, ue] = ne("normal"), [ie, m] = ne(null), [we, xe] = ne([]), [h, se] = ne(!1), [X, M] = ne(!1), [Ce, b] = ne(null), [le, me] = ne(""), [De, Fe] = ne(null), [he, He] = ne(null), [jn, Pt] = ne({}), [Xt, Zt] = ne(null), [en, ht] = ne(!1), Je = Qe(0), ae = Qe(null), ce = Qe(!1), Le = Qe(0), ve = Qe(!1), zt = Qe(!1), y = Qe(/* @__PURE__ */ Symbol("followup-pane")), T = Qe(0), j = Qe(!1), q = Fc(async (C = !1) => {
+  let [o, a] = ne([]), [s, l] = ne(!0), [u, c] = ne(0), [p, d] = ne(null), [f, g] = ne(null), [I, E] = ne(null), [x, v] = ne(!1), [k, A] = ne(null), [_, S] = ne(!1), [F, U] = ne(""), [z, w] = ne(""), [W, D] = ne(""), [L, $] = ne(""), [V, Z] = ne("todo"), [ee, ue] = ne("normal"), [ie, m] = ne(null), [we, xe] = ne([]), [h, se] = ne(!1), [X, M] = ne(!1), [Ce, b] = ne(null), [le, me] = ne(""), [Oe, Fe] = ne(null), [he, He] = ne(null), [jn, Pt] = ne({}), [Xt, Zt] = ne(null), [en, ht] = ne(!1), Je = Qe(0), ae = Qe(null), ce = Qe(!1), Le = Qe(0), Ie = Qe(!1), zt = Qe(!1), y = Qe(/* @__PURE__ */ Symbol("followup-pane")), T = Qe(0), j = Qe(!1), q = Fc(async (C = !1) => {
     let H = ae.current;
     if (!H) return;
     let re = ++Le.current;
-    I(!0);
+    v(!0);
     try {
       let Q = await H.list();
-      ve.current && ae.current === H && Le.current === re && (a(Q), zt.current = !0, l(!1), d(null), E(null));
+      Ie.current && ae.current === H && Le.current === re && (a(Q), zt.current = !0, l(!1), d(null), E(null));
     } catch (Q) {
-      ve.current && ae.current === H && Le.current === re && (l(!1), zt.current ? E({ error: Q, afterCommit: C }) : d(Q));
+      Ie.current && ae.current === H && Le.current === re && (l(!1), zt.current ? E({ error: Q, afterCommit: C }) : d(Q));
     } finally {
-      ve.current && ae.current === H && Le.current === re && I(!1);
+      Ie.current && ae.current === H && Le.current === re && v(!1);
     }
   }, []);
   Ta(() => {
     let C = !0;
-    return ve.current = !0, zt.current = !1, ht(!1), l(!0), d(null), r(globalThis.indexedDB, n).then(async (H) => {
+    return Ie.current = !0, zt.current = !1, ht(!1), l(!0), d(null), r(globalThis.indexedDB, n).then(async (H) => {
       if (!C) {
         H.close();
         return;
@@ -8328,7 +8326,7 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
     }).catch((H) => {
       C && (d(H), l(!1));
     }), () => {
-      C = !1, ve.current = !1, Le.current++, Je.current++, T.current++, ae.current?.close(), ae.current = null;
+      C = !1, Ie.current = !1, Le.current++, Je.current++, T.current++, ae.current?.close(), ae.current = null;
     };
   }, [n, r, q, u]), Ta(() => {
     let C = i?.subscribe((re) => {
@@ -8346,14 +8344,14 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
     let C = ++T.current;
     g(null);
     try {
-      let H = await Dn(e);
-      if (!ve.current || T.current !== C) return;
-      b(null), Fe(null), He(null), S(!1), m(null), A(H), U(""), w(""), O(""), $(""), Z("todo"), ue("normal");
+      let H = await On(e);
+      if (!Ie.current || T.current !== C) return;
+      b(null), Fe(null), He(null), S(!1), m(null), A(H), U(""), w(""), D(""), $(""), Z("todo"), ue("normal");
     } catch (H) {
-      ve.current && T.current === C && g(H);
+      Ie.current && T.current === C && g(H);
     }
   }, be = () => {
-    T.current++, g(null), b(null), Fe(null), He(null), m(null), A(null), U(""), w(""), O(""), $(""), Z("todo"), ue("normal"), S(!0);
+    T.current++, g(null), b(null), Fe(null), He(null), m(null), A(null), U(""), w(""), D(""), $(""), Z("todo"), ue("normal"), S(!0);
   }, _e = async (C) => {
     if (C.preventDefault(), !(!ae.current || !k && !_ || ce.current)) {
       ce.current = !0, M(!0), g(null);
@@ -8383,14 +8381,14 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
     }
   }, nt = (C) => {
     ce.current || (T.current++, g(null), A(null), S(!1), b(null), Fe(null), He(null), m(C), U(C.task.title), w(C.task.nextSteps.join(`
-`)), O(C.task.description), $(C.task.notes), Z(C.task.status), ue(C.task.priority), xe(C.task.related));
+`)), D(C.task.description), $(C.task.notes), Z(C.task.status), ue(C.task.priority), xe(C.task.related));
   }, rt = async () => {
     if (!ie || ce.current || j.current) return;
     let C = T.current;
     j.current = !0, se(!0), g(null);
     try {
-      let H = await Dn(e);
-      if (!ve.current || T.current !== C) return;
+      let H = await On(e);
+      if (!Ie.current || T.current !== C) return;
       let re = (Q) => JSON.stringify([Q.connectionId, Q.profile, Q.targetProfile, Q.storedId]);
       if ([ie.task.primary, ...we].filter(Boolean).some((Q) => re(Q) === re(H))) {
         let Q = new Error(t("duplicateRelated"));
@@ -8398,9 +8396,9 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
       }
       xe((Q) => [...Q, H]);
     } catch (H) {
-      ve.current && T.current === C && g(H);
+      Ie.current && T.current === C && g(H);
     } finally {
-      j.current = !1, ve.current && se(!1);
+      j.current = !1, Ie.current && se(!1);
     }
   }, tn = async (C) => {
     if (C.preventDefault(), !(!ae.current || !ie || ce.current || j.current)) {
@@ -8420,12 +8418,12 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
     let C = ++Je.current;
     ht(!0), g(null);
     try {
-      let H = await Ia(e);
-      ve.current && Je.current === C && Zt(H);
+      let H = await va(e);
+      Ie.current && Je.current === C && Zt(H);
     } catch (H) {
-      ve.current && Je.current === C && g(H);
+      Ie.current && Je.current === C && g(H);
     } finally {
-      ve.current && Je.current === C && ht(!1);
+      Ie.current && Je.current === C && ht(!1);
     }
   }, Ee = async (C) => {
     g(null);
@@ -8468,7 +8466,7 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
     ] }),
     /* @__PURE__ */ oe("label", { children: [
       t("description"),
-      /* @__PURE__ */ K(Un, { "aria-label": t("description"), value: W, disabled: X, onChange: (C) => O(C.target.value) })
+      /* @__PURE__ */ K(Un, { "aria-label": t("description"), value: W, disabled: X, onChange: (C) => D(C.target.value) })
     ] }),
     /* @__PURE__ */ oe("label", { children: [
       t("notes"),
@@ -8487,8 +8485,8 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
       /* @__PURE__ */ K(Aa, { options: ["low", "normal", "high", "urgent"].map((C) => ({ id: C, label: t(C) })), value: ee, onChange: ue, disabled: X })
     ] })
   ] }), Na = /* @__PURE__ */ oe(ki, { children: [
-    v ? /* @__PURE__ */ oe("div", { role: "alert", children: [
-      /* @__PURE__ */ K("span", { children: t(v.afterCommit ? "savedRefresh" : "staleRefresh") }),
+    I ? /* @__PURE__ */ oe("div", { role: "alert", children: [
+      /* @__PURE__ */ K("span", { children: t(I.afterCommit ? "savedRefresh" : "staleRefresh") }),
       " ",
       /* @__PURE__ */ K(ze, { size: "xs", variant: "secondary", onClick: () => {
         q();
@@ -8544,12 +8542,12 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
         /* @__PURE__ */ K(ze, { type: "button", size: "sm", variant: "ghost", disabled: X, onClick: () => b(null), children: t("cancel") })
       ] })
     ] }) : null,
-    De ? /* @__PURE__ */ oe("div", { role: "alertdialog", "aria-label": t("deleteTask"), children: [
+    Oe ? /* @__PURE__ */ oe("div", { role: "alertdialog", "aria-label": t("deleteTask"), children: [
       /* @__PURE__ */ K("p", { children: t("deleteHint") }),
       /* @__PURE__ */ K(ze, { type: "button", size: "sm", variant: "secondary", disabled: X, onClick: () => Fe(null), children: t("cancel") }),
       " ",
       /* @__PURE__ */ K(ze, { type: "button", size: "sm", variant: "ghost", disabled: X, onClick: () => {
-        Ne(De);
+        Ne(Oe);
       }, children: t("confirmDelete") })
     ] }) : null,
     he ? /* @__PURE__ */ oe("div", { role: "alertdialog", "aria-label": t(he.unlink ? "unbindPrimary" : "rebindPrimary"), children: [
@@ -8577,7 +8575,7 @@ function Ca({ host: e, t, storageName: n, openStore: r = qn, notifications: i })
       ] })
     ] }) : null
   ] });
-  return /* @__PURE__ */ K(Ea, { t, rows: o, loading: s, error: p, uncertain: x || !!v, exactNavigationAvailable: typeof e.openExactSession == "function", unavailableReferences: jn, busy: X || !!(k || _ || ie || Ce || De || he), discovery: Xt, discovering: en, onDiscover: Lt, onRetry: ye, onOpen: Ee, onTrack: te, onCreate: be, onEdit: nt, onDelete: Fe, onBind: (C) => {
+  return /* @__PURE__ */ K(Ea, { t, rows: o, loading: s, error: p, uncertain: x || !!I, exactNavigationAvailable: !1, unavailableReferences: jn, busy: X || !!(k || _ || ie || Ce || Oe || he), discovery: Xt, discovering: en, onDiscover: Lt, onRetry: ye, onOpen: Ee, onTrack: te, onCreate: be, onEdit: nt, onDelete: Fe, onBind: (C) => {
     if (!C.task.primary) {
       je(C);
       return;
@@ -8737,14 +8735,14 @@ var wi = {
     tracking: "\u8DDF\u8E2A\u4F1A\u8BDD",
     actionError: "\u64CD\u4F5C\u5931\u8D25",
     ownerIdentityUnavailable: "\u65E0\u6CD5\u6838\u5B9E\u5F53\u524D\u4F1A\u8BDD\u7684\u5B8C\u6574\u6765\u6E90\uFF0C\u5DF2\u963B\u6B62\u767B\u8BB0\u3002",
-    referenceIdentityUnavailable: "\u6B64\u4F1A\u8BDD\u7684\u8FDE\u63A5\u6A21\u5F0F\u672A\u77E5\uFF0C\u5DF2\u963B\u6B62\u6253\u5F00\u4EE5\u907F\u514D\u8FDB\u5165\u9519\u8BEF\u4F1A\u8BDD\u3002",
+    referenceIdentityUnavailable: "\u6B64\u4F1A\u8BDD\u7684\u6765\u6E90\u672A\u6838\u5B9E\uFF0C\u5DF2\u963B\u6B62\u6253\u5F00\u4EE5\u907F\u514D\u8FDB\u5165\u9519\u8BEF\u4F1A\u8BDD\u3002",
     editTask: "\u7F16\u8F91\u4E8B\u9879",
     saveEdit: "\u4FDD\u5B58\u4FEE\u6539",
     addRelated: "\u5173\u8054\u5F53\u524D\u4F1A\u8BDD",
     removeRelated: "\u79FB\u9664\u5173\u8054",
     duplicateRelated: "\u8BE5\u4F1A\u8BDD\u5DF2\u5173\u8054",
     routeChanged: "\u6765\u6E90\u5DF2\u53D8\u5316\u6216\u4E0D\u53EF\u7528\uFF0C\u8BF7\u91CD\u65B0\u5173\u8054\u540E\u518D\u4FDD\u5B58\u3002",
-    exactNavigationUnavailable: "\u5F53\u524D Desktop \u4E0D\u652F\u6301\u6838\u5B9E\u6765\u6E90\u7684\u8DF3\u8F6C\uFF0C\u5DF2\u963B\u6B62\u6253\u5F00\u4EE5\u907F\u514D\u8FDB\u5165\u9519\u8BEF\u4F1A\u8BDD\u3002",
+    exactNavigationUnavailable: "\u6B64\u7248\u672C\u65E0\u6CD5\u6838\u5B9E\u4F1A\u8BDD\u6765\u6E90\uFF0C\u5DF2\u963B\u6B62\u6253\u5F00\u4EE5\u907F\u514D\u8FDB\u5165\u9519\u8BEF\u4F1A\u8BDD\u3002",
     savedRefresh: "\u4E8B\u9879\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5217\u8868\u5237\u65B0\u5931\u8D25\uFF1B\u8BF7\u91CD\u8BD5\u3002",
     staleRefresh: "\u5237\u65B0\u5931\u8D25\uFF0C\u663E\u793A\u7684\u4E8B\u9879\u53EF\u80FD\u5DF2\u8FC7\u671F\u3002",
     accept: "\u6807\u8BB0\u5DF2\u9A8C\u6536",
@@ -8757,7 +8755,7 @@ var wi = {
     loadingSessions: "\u6B63\u5728\u52A0\u8F7D\u4F1A\u8BDD",
     discoveryRefreshing: "\u6B63\u5728\u5237\u65B0\uFF1B\u4EE5\u4E0B\u4F1A\u8BDD\u7ED3\u679C\u53EF\u80FD\u5DF2\u8FC7\u671F\u3002",
     discoveryScope: "\u6BCF\u6B21\u6700\u591A\u626B\u63CF 12 \u4E2A\u6765\u6E90\uFF1B\u591A\u4E8E 12 \u4E2A\u65F6\u518D\u6B21\u52A0\u8F7D\u4F1A\u8F6E\u6362\u6765\u6E90\uFF0C\u4E0D\u4F1A\u5408\u5E76\u4E0A\u6B21\u7ED3\u679C\u3002\u6BCF\u4E2A\u6765\u6E90\u8BFB\u53D6\u6309\u521B\u5EFA\u65F6\u95F4\u6392\u5E8F\u7684\u524D 100 \u6761\u53CA\u989D\u5916\u7F6E\u9876\u4F1A\u8BDD\u3002\u9690\u85CF\u3001\u5DF2\u5F52\u6863\u6216\u7A97\u53E3\u5916\u7684\u4F1A\u8BDD\u53EF\u80FD\u672A\u8986\u76D6\u3002",
-    discoveryUnknown: "\u6B64\u5217\u8868\u65E0\u6CD5\u5224\u65AD\u4E8B\u9879\u662F\u5426\u5B8C\u6210\uFF0C\u8BF7\u6253\u5F00\u4F1A\u8BDD\u6838\u5BF9\u3002",
+    discoveryUnknown: "\u6B64\u5217\u8868\u65E0\u6CD5\u5224\u65AD\u4E8B\u9879\u662F\u5426\u5B8C\u6210\uFF0C\u8BF7\u5230\u4F1A\u8BDD\u5217\u8868\u4E2D\u6838\u5BF9\u3002",
     discoveryEmpty: "\u5F53\u524D\u626B\u63CF\u8303\u56F4\u6CA1\u6709\u53EF\u663E\u793A\u7684\u4F1A\u8BDD\u3002",
     discoveryIncomplete: "\u90E8\u5206\u6765\u6E90\u672A\u8BFB\u53D6\uFF0C\u65E0\u6CD5\u5224\u65AD\u662F\u5426\u5B58\u5728\u4F1A\u8BDD\u3002",
     sourceSampled: "\u5DF2\u8BFB\u53D6\u7A97\u53E3",
@@ -8839,14 +8837,14 @@ var wi = {
     tracking: "Tracking session",
     actionError: "Action failed",
     ownerIdentityUnavailable: "The focused session\u2019s complete origin cannot be verified, so tracking was blocked.",
-    referenceIdentityUnavailable: "The session\u2019s connection mode is unknown, so opening was blocked to avoid the wrong conversation.",
+    referenceIdentityUnavailable: "The session source is unverified, so opening was blocked to avoid the wrong conversation.",
     editTask: "Edit item",
     saveEdit: "Save changes",
     addRelated: "Link focused session",
     removeRelated: "Remove link",
     duplicateRelated: "This session is already linked",
     routeChanged: "The source changed or is unavailable. Link it again before saving.",
-    exactNavigationUnavailable: "This Desktop build cannot verify the session owner, so opening was blocked to avoid the wrong conversation.",
+    exactNavigationUnavailable: "This plugin version cannot verify the session owner, so opening was blocked to avoid the wrong conversation.",
     savedRefresh: "The change was saved, but the list could not refresh. Retry.",
     staleRefresh: "Refresh failed; the displayed items may be stale.",
     accept: "Mark accepted",
@@ -8859,7 +8857,7 @@ var wi = {
     loadingSessions: "Loading sessions",
     discoveryRefreshing: "Refreshing; the session results below may be stale.",
     discoveryScope: "Scans up to 12 sources per load; additional loads rotate sources without merging earlier results. Each source returns its first 100 sessions by creation time plus additional pinned sessions. Hidden, archived and other out-of-window sessions may be absent.",
-    discoveryUnknown: "Completion cannot be inferred from this list; open sessions to review them.",
+    discoveryUnknown: "Completion cannot be inferred from this list; review sessions in the session list.",
     discoveryEmpty: "No sessions visible in the scanned window.",
     discoveryIncomplete: "Some sources were not read; whether sessions exist is unknown.",
     sourceSampled: "Window read",
@@ -8886,22 +8884,22 @@ function Hc({ notifications: e }) {
 }
 function jc({ source: e }) {
   let t = xi(Me);
-  return pi(e) ? /* @__PURE__ */ Vc(Dc, { size: "sm", variant: "secondary", onClick: () => Hn.revealPane(`${Me}:pane`), children: [
+  return pi(e) ? /* @__PURE__ */ Vc(Oc, { size: "sm", variant: "secondary", onClick: () => Hn.revealPane(`${Me}:pane`), children: [
     t("pane"),
     " \xB7 ",
     t("registration")
   ] }) : /* @__PURE__ */ mt("span", { children: e });
 }
-var Dx = {
+var Ox = {
   id: Me,
   name: "\u4EFB\u52A1\u6982\u89C8 / Task overview",
   description: "Read the focused session requirements, checklist, remaining work and evidence without confusing agent activity with acceptance.",
   register(e) {
     e.i18n.register(Object.fromEntries(Object.entries(la).map(([n, r]) => [n, { ...r, followup: wi[n] || wi.en }])));
     let t = Pa();
-    e.onDispose(() => t.close()), e.register({ id: "pane", area: "panes", title: "\u4EFB\u52A1\u6982\u89C8", data: { placement: "right", width: "360px" }, render: () => /* @__PURE__ */ mt(pa, {}) }), e.register({ id: "followup", area: "panes", title: "\u4E8B\u9879\u8DDF\u8FDB", data: { placement: "right", width: "520px", hideOnly: !0 }, render: () => /* @__PURE__ */ mt(Uc, { notifications: t }) }), e.register({ id: "followup-entry", area: Bc.right, order: 110, render: () => /* @__PURE__ */ mt(Hc, { notifications: t }) }), e.register({ id: "open", area: Oc, data: { id: "open", label: "\u4EFB\u52A1\u6982\u89C8 / Task overview", keywords: ["task", "overview", "\u4EFB\u52A1", "\u8FDB\u5EA6"], run: () => Hn.revealPane(`${Me}:pane`) } }), e.register({ id: "record", area: qc, data: { name: "task", render: (n) => /* @__PURE__ */ mt(jc, { ...n }) } });
+    e.onDispose(() => t.close()), e.register({ id: "pane", area: "panes", title: "\u4EFB\u52A1\u6982\u89C8", data: { placement: "right", width: "360px" }, render: () => /* @__PURE__ */ mt(pa, {}) }), e.register({ id: "followup", area: "panes", title: "\u4E8B\u9879\u8DDF\u8FDB", data: { placement: "right", width: "520px", hideOnly: !0 }, render: () => /* @__PURE__ */ mt(Uc, { notifications: t }) }), e.register({ id: "followup-entry", area: Bc.right, order: 110, render: () => /* @__PURE__ */ mt(Hc, { notifications: t }) }), e.register({ id: "open", area: Dc, data: { id: "open", label: "\u4EFB\u52A1\u6982\u89C8 / Task overview", keywords: ["task", "overview", "\u4EFB\u52A1", "\u8FDB\u5EA6"], run: () => Hn.revealPane(`${Me}:pane`) } }), e.register({ id: "record", area: qc, data: { name: "task", render: (n) => /* @__PURE__ */ mt(jc, { ...n }) } });
   }
 };
 export {
-  Dx as default
+  Ox as default
 };
