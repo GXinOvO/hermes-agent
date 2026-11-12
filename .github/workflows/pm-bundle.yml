@@ -73,7 +73,7 @@ jobs:
           # - label: linux-arm64
           #   runner: blacksmith-32vcpu-ubuntu-2404-arm
           - label: darwin-arm64
-            runner: macos-15-xlarge
+            runner: xcode-27
           - label: win32-x64
             runner: windows-2025
           - label: win32-arm64
