@@ -85,11 +85,11 @@ jobs:
           # Two slices: on the old free standard runner (3 cores, 3 workers) one lane ran
           # ~7.5 min and became the slowest required job once the Linux suite split.
           - name: macOS-only tests (1/2)
-            runner: macos-latest
+            runner: macos-15
             marker: macos
             slice: 1/2
           - name: macOS-only tests (2/2)
-            runner: macos-latest
+            runner: macos-15
             marker: macos
             slice: 2/2
           - name: Windows-only tests (1/4)

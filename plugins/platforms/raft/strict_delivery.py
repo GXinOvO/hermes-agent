@@ -282,6 +282,15 @@ async def send(adapter, chat_id, content, reply_to, metadata, *, prepared_plan, 
                 raise ValueError('Raft strict plan already consumed')
             state.used = True
             prepared_plan._used = True
+    except ValueError as exc:
+        # A refused declaration is not an unknown ACK: reusing one plan, a foreign
+        # plan or a changed binding must surface as a refusal a caller cannot retry.
+        # An unprepared call is ordinary delivery, so it keeps the failure result.
+        if type(prepared_plan) is not PreparedSend:
+            return SendResult(success=False, retryable=False,
+                              error='strict_delivery_unknown: Raft ACK or plan unavailable')
+        raise RuntimeError('strict_transport_unavailable: ' + str(exc)) from exc
+    try:
         # A new private POST session consumes frozen values only. aiohttp's
         # reconnect retries apply to idempotent methods; this operation is POST.
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=frozen.timeout_seconds),
