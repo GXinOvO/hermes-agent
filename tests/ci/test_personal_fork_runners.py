@@ -15,7 +15,7 @@ HOSTED = {
     "macos-latest",
     "macos-15",
     "macos-15-intel",
-    "macos-14",
+    "macos-15-xlarge",
     "macos-26",
 }
 
