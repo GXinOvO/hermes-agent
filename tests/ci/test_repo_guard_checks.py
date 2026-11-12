@@ -126,6 +126,26 @@ def test_only_unmapped_human_emails_fail_the_contributor_check(repo, step):
     assert status["results"][0]["detail"] == "zoe@example.net (Zoë New)"
 
 
+def test_contributor_check_uses_the_pr_base_not_an_older_main(repo, step):
+    commit(repo, {"old": "x"}, author=("Prior", "prior@example.net"))
+    base = git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, {"new": "x"}, author=("Known", "12+c@users.noreply.github.com"))
+    passing = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base)
+    assert passing.returncode == 0, passing.stdout
+
+    commit(repo, {"unmapped": "x"}, author=("New", "new@example.net"))
+    failing = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base)
+    assert failing.returncode == 1
+    assert "new@example.net" in failing.stdout
+    assert "prior@example.net" not in failing.stdout
+
+
+def test_contributor_check_refuses_an_unresolvable_pr_base(repo, step):
+    commit(repo, {"new": "x"}, author=("Known", "12+c@users.noreply.github.com"))
+    failed = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA="0" * 40)
+    assert failed.returncode != 0
+
+
 def test_supply_chain_scan_flags_payload_lines_but_not_lockfiles(repo, step):
     base = git(repo, "rev-parse", "HEAD").strip()
     # Built from pieces: the scanner reads this PR's own added lines, so no line here may match it.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when a commit since the merge base with origin/main has an unmapped author email.
+"""Fail when a commit since the merge base with the PR base has an unmapped author email.
 
 Run by the ``Check for unmapped contributor emails`` step of
 ``.github/workflows/repo-guards.yml``. An email is mapped if it has a file in
@@ -14,6 +14,7 @@ Exit codes: 0 = every email mapped (or no new commits), 1 = at least one unmappe
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import subprocess
 import sys
@@ -61,7 +62,8 @@ def new_author_emails() -> list[str] | int:
     Returns git's exit code instead when there is no merge base: the step's ``bash -e`` stopped
     there, before any review status.
     """
-    merge_base = _git("merge-base", "origin/main", "HEAD")
+    base = os.environ.get("_HERMES_PR_BASE_SHA") or "origin/main"
+    merge_base = _git("merge-base", base, "HEAD")
     if merge_base.returncode:
         return merge_base.returncode
     log = _git("log", f"{merge_base.stdout.strip()}..HEAD", "--format=%ae", "--no-merges").stdout

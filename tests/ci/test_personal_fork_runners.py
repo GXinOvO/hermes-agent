@@ -1,3 +1,4 @@
+import json
 from collections import deque
 from pathlib import Path
 
@@ -68,6 +69,14 @@ def test_core_suite_parallelism_fits_standard_linux_runner():
     assert int(run["env"]["HERMES_TEST_WORKERS"]) <= 4
     assert run["env"]["HERMES_TEST_SLICE"] == f"${{{{ matrix.slice }}}}/{len(slices)}"
     assert list(map(int, slices)) == list(range(1, len(slices) + 1))
+
+
+def test_core_suite_installs_the_platform_sdks_and_bubblewrap():
+    job = _workflows()["tests.yml"]["jobs"]["test"]
+    setup = next(step for step in job["steps"] if step.get("uses") == "./.github/actions/setup-pm")
+    extras = set(json.loads(setup["with"]["extras"]))
+    assert {"messaging", "matrix", "dingtalk", "teams"} <= extras
+    assert any("bubblewrap" in step.get("run", "") for step in job["steps"])
 
 
 def test_windows_x64_and_arm_slices_cover_the_same_files_once():

@@ -146,6 +146,8 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         if: ${{ !cancelled() && (inputs.python || inputs.catalog) }}
+        env:
+          _HERMES_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python3 scripts/ci/check_contributor_emails.py
 
       - name: Upload review status artifact (contributor check)
