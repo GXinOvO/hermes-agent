@@ -374,6 +374,7 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
     from hermes_state_reconcile import (
         DeclarativeDriftError, is_declarative_drift_error, reconcile_drift_for_browse,
     )
+    reconcile_attempted = False
 
     def _open_probed():
         db = SessionDB(db_path=db_path, read_only=True)
@@ -396,6 +397,7 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
             # owns it. Never destructive: additive DDL only, no repair from browse.
             if not is_declarative_drift_error(exc):
                 raise
+            reconcile_attempted = True
             try:
                 reconcile_drift_for_browse(db_path)
             except DeclarativeDriftError as drift:
@@ -409,7 +411,12 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
             # corrupt image names the repair (`hermes doctor`), never a generic "schema unavailable".
             from hermes_cli.web_routers._common import corrupt_store_status
             raise corrupt_store_status(db_path, exc) from exc
-        if isinstance(exc, sqlite3.OperationalError) and is_transient_sqlite_error(exc):
+        if reconcile_attempted:
+            from hermes_state_reconcile import _repair_command
+            detail = (
+                f"Session store schema catch-up could not complete ({exc}); nothing was changed. "
+                f"Run `{_repair_command(db_path.parent)}` to bring it up to date, then reload.")
+        elif isinstance(exc, sqlite3.OperationalError) and is_transient_sqlite_error(exc):
             detail = "Session store is busy (disk I/O or lock). Retry; the list was not cleared."
         else:
             detail = (

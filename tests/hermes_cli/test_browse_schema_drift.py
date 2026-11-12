@@ -72,6 +72,24 @@ def test_unowned_lagging_store_browses_after_one_reconcile(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_failed_reconcile_reopen_names_the_no_write_recovery(tmp_path, monkeypatch):
+    """A failed catch-up whose second read still sees drift must remain an explicit no-write 503."""
+    import hermes_state_reconcile as reconcile
+
+    path = _pre_merge_store(_profile_home(tmp_path) / "state.db")
+    before = _file_state(path)
+    monkeypatch.setattr(reconcile, "reconcile_drift_for_browse", lambda _path: False)
+
+    with pytest.raises(HTTPException) as caught:
+        _open_session_db_at_path(path, read_only=True)
+
+    assert caught.value.status_code == 503
+    detail = str(caught.value.detail)
+    assert "nothing was changed" in detail
+    assert "`hermes -p scribe sessions repair`" in detail
+    assert _file_state(path) == before
+
+
 def test_owned_lagging_store_is_not_written_and_names_the_remedy(tmp_path):
     from gateway.runtime_ownership import ProfileOwnership
 
