@@ -462,6 +462,7 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
 
               return (
                 <button
+                  aria-label={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   aria-selected={index === selected}
                   className={cn(
                     'flex h-6 w-full items-center gap-2 px-2.5 ps-7 text-left text-xs text-(--ui-text-tertiary)',
@@ -473,7 +474,6 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
                     setSelected(index)
                     openHit(hit)
                   }}
-                  title={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   type="button"
                 >
                   {hit.line ? <span className="shrink-0 text-(--ui-text-quaternary)">{hit.line}</span> : null}

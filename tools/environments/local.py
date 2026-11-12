@@ -944,6 +944,26 @@ def _sweep_escaped_descendants(descendants: list, pgid: int) -> None:
             continue
 
 
+def _process_group_members(pgid: int) -> list:
+    """Snapshot members by PGID when the group leader is already gone."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+    try:
+        processes = psutil.process_iter(["pid"])
+    except psutil.Error:
+        return []
+    members = []
+    for process in processes:
+        try:
+            if os.getpgid(process.pid) == pgid:
+                members.append(process)
+        except (OSError, psutil.Error):
+            continue
+    return members
+
+
 def _leader_is_ours(pgid, expected_start) -> bool:
     """The setsid group leader's PID == its PGID.  Confirm it is still the process we
     spawned before signalling the whole group, so a recycled PID/PGID can never take
@@ -1030,7 +1050,7 @@ def _kill_process_group_posix(proc) -> None:
             # drain hit its limit (#116855). Nothing group-wide is signalable, and the error
             # must not escape: the caller still owns the output it drained. Signal the known
             # PIDs instead so a live child (a group we may not signal) cannot outlive us.
-            _kill_known_pids(proc, descendants)
+            _kill_known_pids(proc, (*_process_group_members(pgid), *descendants))
     _sweep_escaped_descendants(descendants, pgid)
 
 

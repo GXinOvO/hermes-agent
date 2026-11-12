@@ -229,6 +229,10 @@ jobs:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
           HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '3' || '' }}
+          # The macOS lane has a real source-update/build fixture whose isolated
+          # file can exceed the Linux-sized cap under a cold hosted runner.
+          # Keep the per-file kill bounded while leaving the job timeout intact.
+          HERMES_TEST_FILE_TIMEOUT: ${{ matrix.marker == 'macos' && '600' || '300' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

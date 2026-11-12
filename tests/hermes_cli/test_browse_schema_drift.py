@@ -597,10 +597,7 @@ def test_slow_browse_reconcile_gives_up_inside_its_budget_and_boot_waits_it_out(
     result = next(line for line in out.splitlines() if line.startswith("RESULT"))
     _, status, elapsed, *detail = result.split(" ", 3)
     assert status == "503", out
-    # The DDL budget is enforced by SQLite's progress handler. The subprocess
-    # also pays for lock publication and teardown; macOS can spend a little
-    # longer there after the handler interrupts the connection.
-    assert float(elapsed) < wait_s + 0.5, out
+    assert float(elapsed) < budget_s + 2, out
     detail = " ".join(detail)
     assert "nothing was changed" in detail
     assert "`hermes -p scribe sessions repair`" in detail and "gateway" not in detail.lower()

@@ -66,6 +66,27 @@ def test_local_group_kill_survives_start_time_drift(monkeypatch, killpg_calls):
     assert (67890, signal.SIGTERM) in killpg_calls
 
 
+def test_local_group_kill_falls_back_to_members_when_killpg_is_denied(monkeypatch):
+    """A macOS group can reject killpg after its leader exited; owned members still get killed."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67891
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 67890)
+    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: (_ for _ in ()).throw(PermissionError()))
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED)
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67891]
+
+
 def test_local_guard_still_refuses_recycled_pgid(monkeypatch, killpg_calls):
     """A start time far outside the drift tolerance means the PID/PGID was recycled:
     never signal the stale number (#43044)."""
