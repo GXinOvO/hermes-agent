@@ -162,22 +162,27 @@ def _rewrite_v4a_patch_paths_for_host(patch: str, path_to_resolved: dict, path_t
     (which can differ — the git-worktree cwd bug). Delete and Move headers take
     ``path_to_entry``: they act on a symlink itself, never on its target.
 
-    In a hosted scope only a ``~`` header changes, to the sandbox's home; every other header is the
-    sandbox's to anchor and is sent as written.
+    In a hosted scope a recorded session cwd anchors relative headers; without one, only
+    a ``~`` header changes to the sandbox's home and other headers are sent as written.
     """
     from tools.environments.sandbox_scope import hosted_scope
+    from tools.terminal_tool import get_session_cwd
     hosted = hosted_scope() is not None
+    hosted_session_cwd = hosted and bool(get_session_cwd(task_id))
     if not _file_ops_uses_host_paths(file_ops) and not hosted:
         return patch
 
     def _res(raw: str, entry: bool = False) -> str:
         raw = raw.strip()
         if hosted:
+            resolved = (path_to_entry if entry else path_to_resolved).get(raw)
+            if hosted_session_cwd and resolved:
+                return resolved
             return _hosted_tilde(raw, task_id) if raw.startswith("~") else raw
         return (path_to_entry if entry else path_to_resolved).get(raw) or raw
 
     def _as_written(m: re.Match) -> bool:
-        return hosted and not any(g.strip().startswith("~") for g in m.groups()[1:])
+        return hosted and not hosted_session_cwd and not any(g.strip().startswith("~") for g in m.groups()[1:])
 
     patch = _V4A_SINGLE_HEADER_RE.sub(
         lambda m: m.group(0) if _as_written(m) else f"{m.group(1)}{_res(m.group(3), entry=m.group(2) == 'Delete')}",
@@ -773,7 +778,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
                 and version_before == cached_version and content_served_in_generation):
             return _dedup_stub_or_block(task_data, dedup_key, path)
 
-        result = file_ops.read_file(resolved_str if not unverified or _file_ops_uses_host_paths(file_ops) else path, offset, limit)
+        result = file_ops.read_file(path if unanchored else resolved_str, offset, limit)
         result_dict = result.to_dict()
 
         # Failed reads cannot establish whole-file knowledge.

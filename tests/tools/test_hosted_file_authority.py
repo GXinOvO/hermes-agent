@@ -146,6 +146,38 @@ def test_hosted_backend_switch_during_write_cannot_bypass_new_authority(remote_p
     assert target.read_text(encoding='utf-8') == 'unread original\n'
 
 
+@pytest.mark.parametrize('v4a', [False, True])
+def test_legacy_hosted_relative_operations_share_session_directory(remote_project, monkeypatch, v4a):
+    project, inner, task = remote_project
+    for name in ('A', 'B'):
+        (project / name).mkdir()
+        (project / name / 'doc.txt').write_text(f'{name} content\n', encoding='utf-8')
+    monkeypatch.setattr(inner, 'cwd', '/workspace/B')
+    scope = Scope('tenant', 'legacy-cwd', Principal('owner'), owner=Principal('owner'), can_administer=True)
+    identity = sandbox_identity(scope)
+    env = ScopedEnvironment(LegacyHostedFileBackend(inner, scope), identity, owner=scope)
+    monkeypatch.setitem(terminal_tool._active_environments, identity.key, env)
+    monkeypatch.setitem(file_tools._file_ops_cache, identity.key, ShellFileOperations(env))
+    with bind_state(scope):
+        terminal_tool.record_session_cwd(task, '/workspace/A')
+        try:
+            read = json.loads(file_tools.read_file_tool('doc.txt', task_id=task))
+            write = json.loads(file_tools.write_file_tool('doc.txt', 'shared marker\n', task_id=task))
+            if v4a:
+                patch = json.loads(file_tools.patch_tool(mode='patch', patch=(
+                    '*** Begin Patch\n*** Update File: doc.txt\n@@\n-shared marker\n+updated\n*** End Patch\n'
+                ), task_id=task))
+            else:
+                patch = json.loads(file_tools.patch_tool(path='doc.txt', old_string='shared marker', new_string='updated', task_id=task))
+        finally:
+            terminal_tool.clear_session_cwd(task)
+    assert 'A content' in read.get('content', ''), read
+    assert write.get('verified'), write
+    assert patch.get('success'), patch
+    assert (project / 'A' / 'doc.txt').read_text(encoding='utf-8') == 'updated\n'
+    assert (project / 'B' / 'doc.txt').read_text(encoding='utf-8') == 'B content\n'
+
+
 def test_hosted_read_uses_its_session_directory(remote_project, monkeypatch):
     project, inner, task = remote_project
     for name in ('A', 'B'):
