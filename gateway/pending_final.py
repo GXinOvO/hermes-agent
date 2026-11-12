@@ -379,6 +379,11 @@ def has_pending_final(event):
 
 
 async def prepare_delivery(adapter, value, source):
+    """Generic recovery loop entry. An adapter whose plans bind a durable claim
+    cannot be planned here: this loop carries no per-call execution identity, so
+    the sealed part stays pending for that adapter's own publisher."""
+    if getattr(type(adapter), '_strict_plan_requires_claim', False):
+        raise RuntimeError('sealed final recovery requires an explicit per-call execution identity')
     from gateway.pending_final_transport import prepare
     return await prepare(adapter, value, source)
 

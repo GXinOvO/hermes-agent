@@ -64,8 +64,17 @@ def _local_payloads(kwargs):
 
 
 async def prepare_strict_transport(adapter, method='send', **kwargs):
+    """Capability probe plus generic payload preparation, never a durable claim plan.
+
+    An adapter whose plans bind a durable claim (``_strict_plan_requires_claim``)
+    refuses here: nothing in this call carries the claim the plan would bind, so
+    minting one would produce a plan no send can honour. Those adapters issue
+    plans through ``prepare_call``.
+    """
     import asyncio
     require_strict_transport(adapter, method)
+    if getattr(type(adapter), '_strict_plan_requires_claim', False):
+        return None
     try:
         await asyncio.to_thread(_local_payloads, kwargs)
         prepare = getattr(type(adapter), '_prepare_strict_transport', None)
@@ -76,10 +85,19 @@ async def prepare_strict_transport(adapter, method='send', **kwargs):
 
 
 async def prepare_call(adapter, method='send', *, execution_id=None, claim_id=None, **kwargs):
+    import asyncio
     import copy
     kwargs = copy.deepcopy(kwargs)
     identity = {} if execution_id is None and claim_id is None else {'execution_id': execution_id, 'claim_id': claim_id}
-    plan = await prepare_strict_transport(adapter, method, **identity, **kwargs)
+    require_strict_transport(adapter, method)
+    plan = None
+    try:
+        await asyncio.to_thread(_local_payloads, kwargs)
+        prepare = getattr(type(adapter), '_prepare_strict_transport', None)
+        if prepare is not None:
+            plan = await prepare(adapter, method, **identity, **kwargs)
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError('strict_transport_payload_unavailable: ' + str(exc)) from exc
     if plan is not None:
         kwargs.update(identity)
     return method, dict(kwargs, prepared_plan=plan)

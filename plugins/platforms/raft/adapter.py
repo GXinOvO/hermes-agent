@@ -311,6 +311,10 @@ def _error_response(error: str, status: int) -> web.Response:
 class RaftAdapter(BasePlatformAdapter):
     """Local HTTP endpoint for Raft channel bridge delivery."""
 
+    # A Raft strict plan freezes one sealed (execution, claim) part, so only the
+    # durable-claim pipelines may mint one; the generic prepare is a probe here.
+    _strict_plan_requires_claim = True
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("raft"))
         extra = config.extra or {}
