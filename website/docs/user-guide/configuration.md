@@ -2322,7 +2322,7 @@ display:
   # notification; other terminals ignore it) and, inside Warp (TERM_PROGRAM=WarpTerminal with the CLI-agent
   # protocol advertised), a warp://cli-agent OSC 777 event (`stop` on completion, `permission_request` on
   # blocking prompts) so Warp's tab status and notification mailbox track Hermes. No extra keys needed.
-  show_reasoning: true    # Show model reasoning/thinking above each response (default: true; toggle with /reasoning show|hide)
+  show_reasoning: true    # Show model reasoning/thinking above each response (default: true; toggle with /reasoning show|hide). On a gateway reply that was streamed, it follows the answer as its own message
   streaming: false        # Stream tokens to terminal as they arrive (real-time output)
   show_cost: false        # Show estimated $ cost in the CLI status bar
   vim_mode: false         # CLI only: vi/vim keybindings in the input composer (Esc → NORMAL, i → INSERT). The live NORMAL/INSERT/REPLACE mode shows at the right of the status bar. Config-only, read at startup.
@@ -2493,7 +2493,7 @@ Example footer appended to a Telegram/Discord/Slack reply:
 — claude-opus-4.7 · 12 tool calls · 2m 14s · $0.042
 ```
 
-Only the **final** message of a turn gets the footer; interim updates stay clean.
+Only the **final** message of a turn gets the footer; interim updates stay clean. When that final message would otherwise be the footer on its own (a streamed reply, whose text is already on screen, or a reply that is only a `MEDIA:` photo), the footer goes into the last photo's caption instead, on platforms with photo captions (Telegram), and only if it fits the caption limit (1,024 characters on Telegram). Otherwise it is sent as its own short message, as before.
 
 ### Per-platform progress overrides
 
@@ -2517,7 +2517,7 @@ Platforms without an override fall back to the global `tool_progress` value. Val
 
 Signal is listed as a valid platform key because the setting can be saved per platform, but the current Signal adapter cannot edit sent messages and does not render tool-progress bubbles. Keep Signal `tool_progress` set to `off`; use the CLI or an editing-capable messaging platform if you need to watch each tool call live.
 
-`interim_assistant_messages` is gateway-only. When enabled, Hermes sends completed mid-turn assistant updates as separate chat messages. This is independent from `tool_progress` and does not require gateway streaming.
+`interim_assistant_messages` is gateway-only. When enabled, Hermes sends completed mid-turn assistant updates as separate chat messages. This is independent from `tool_progress` and does not require gateway streaming. When disabled, text the model writes in the same message as a `clarify` question is still sent just before the question. The question waits up to 15 seconds in total for that send; a send that is still running after that does not hold the question back, so on a very slow connection the choices can arrive before the end of their explanation.
 
 `show_commentary` (default `true`) controls Codex Responses models' commentary channel — the polished progress narration these models produce alongside their private reasoning. When enabled, each completed commentary message is delivered as a visible mid-turn update (on the gateway this also requires `interim_assistant_messages`). Set it to `false` if the extra narration annoys you: commentary then falls back to the reasoning channel and is only shown when `show_reasoning` is enabled.
 
@@ -3186,6 +3186,9 @@ delegation:
   max_spawn_depth: 1                        # Delegation tree depth cap (1-3, clamped). 1 = flat (default): parent spawns leaves that cannot delegate. 2 = orchestrator children can spawn leaf grandchildren. 3 = three levels.
   orchestrator_enabled: true                # Global kill switch. When false, role="orchestrator" is ignored and every child is forced to leaf regardless of max_spawn_depth.
   oneshot_max_children: 2                   # Total subagents a one-shot run (hermes chat -q / --oneshot) may spawn; 0 = unlimited. Interactive and gateway sessions are never capped by this.
+  resumable_ttl_hours: 48                   # A child stopped by a restart, crash or provider failure stays continuable (delegate_task action=continue) this long, and its worktree is kept from the startup sweep.
+  max_resumable: 32                         # Per profile, how many such children keep their worktree pinned; the oldest beyond it loses its pin (the record stays).
+  auto_resume: false                        # Opt-in: resume such children automatically. Off = you continue them.
   gateway_mode: auto                        # Gateway sessions: auto | inline | background. auto = join children inside the turn (one answer) on a messaging chat whose display.interim_assistant_messages is off. See Subagent Delegation → Messaging chats without interim messages.
 ```
 
