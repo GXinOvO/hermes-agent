@@ -39,7 +39,12 @@ async def test_dead_producer_recovery_keeps_original_seal_without_running_script
     assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     await _settle_quietly(bot)
     await asyncio.to_thread(_recover_in_fresh_reader, bot.home)
+    # The consumer's acceptance settles asynchronously: the next pass books that settlement
+    # instead of re-admitting, and only the pass after it finds nothing left to do.
+    assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 0
+    with sqlite3.connect(bot.home / 'cron' / 'deliveries.db') as db:
+        assert db.execute('SELECT status FROM deliveries WHERE execution_id=?', (execution_id,)).fetchone()[0] == 'delivered'
     assert len(_admissions(bot)) == len(payloads) == 1
     descriptor = _admissions(bot)[0]['payload']['local_automation_v1']
     assert descriptor['result_recovery_v1'] == 'consume_only'

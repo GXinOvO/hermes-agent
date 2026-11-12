@@ -3134,6 +3134,7 @@ def _deliver_crash_failure(
     incident_acked, failure_incident_id = _upsert_incident_for_failure(job, err_text)
     if incident_acked:
         return None, "suppressed_acked"
+    job["_failure_incident_id"] = failure_incident_id
     delivery_error = None
     try:
         delivery_error = _deliver_result(
@@ -3435,8 +3436,15 @@ def _run_one_job_body(
             # Never let bookkeeping mask the original interruption.
             logger.error("Failed to record interrupted run for job %s: %s", job["id"], record_err)
         try:
+            from cron.delivery_outcome import settled_outcome
+            # A queue row this run already terminalised states what happened to the message; the
+            # crash default below must not relabel a delivered send as suppressed.
+            delivery_outcome = settled_outcome(execution_id) or delivery_outcome
             finish_execution(
                 execution_id, success=False, error=_err_text, delivery_outcome=delivery_outcome)
+            if delivery_outcome == "queued":
+                from cron.delivery_outcome import settle_quietly
+                settle_quietly(job["id"], execution_id)
         except Exception as record_err:
             logger.error("Failed to finish execution record for job %s: %s", job["id"], record_err)
         if not contained:

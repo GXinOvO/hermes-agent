@@ -55,3 +55,40 @@ def test_drained_delivery_outcome_is_written_back(tmp_path, monkeypatch, transpo
         assert saved["last_status"] == "delivery_failed"
         assert "transport refused" in saved["last_delivery_error"]
         assert row["delivery_outcome"] == "failed"
+
+
+def test_run_bookkeeping_failure_keeps_the_drained_delivery_outcome(tmp_path, monkeypatch):
+    """A store write that fails after the drain delivered must not relabel the run ``suppressed``:
+    the ledger states what happened to the message, not which write failed."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = GatewayConfig()
+    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True, token='loopback-only')
+    monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
+    sent = []
+
+    async def send(platform, pconfig, chat_id, text, **kwargs):
+        sent.append(text)
+        return {"success": True, "message_id": "r"}
+
+    monkeypatch.setattr("tools.send_message_tool._send_to_platform", send)
+    monkeypatch.setattr(scheduler, "run_job", lambda job, **kw: (True, "raw", "the result", None))
+    from cron import delivery_queue
+    real_enqueue = delivery_queue.enqueue
+
+    def enqueue_then_drain(*args, **kwargs):
+        queued = real_enqueue(*args, **kwargs)
+        assert scheduler.drain_delivery_queue({}, None) == 1
+        return queued
+
+    monkeypatch.setattr(delivery_queue, "enqueue", enqueue_then_drain)
+    monkeypatch.setattr(scheduler, "mark_job_run",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("jobs store unavailable")))
+    # No recoverable tail: the run reaches the crash bookkeeping that has to state the outcome.
+    monkeypatch.setattr("cron.scheduler_results.defer_unverified_run", lambda *a, **k: False)
+    job = jobs.create_job(prompt="p", schedule="every 1h", deliver="telegram:fixture")
+    scheduler.run_one_job(job)
+
+    row = executions.latest_execution(job["id"])
+    assert len(sent) == 1
+    assert delivery_queue.get_status(row["id"])["status"] == "delivered"
+    assert row["delivery_outcome"] == "delivered"

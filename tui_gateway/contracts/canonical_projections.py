@@ -105,6 +105,7 @@ class CanonicalBotDeliverResult(Result):
 
 class CanonicalBotPrepareParams(CanonicalBotDeliverParams):
     create_missing: bool = False
+    require_unadmitted_v1: Literal[True] | None = None
 
 
 class CanonicalBotPrepareResult(Result):
@@ -114,6 +115,7 @@ class CanonicalBotPrepareResult(Result):
     lease_id: str
     authority_epoch: int
     principal_id: str
+    unadmitted_v1: Literal[True] | None = None
 
 
 class CanonicalBotCancelParams(Params):
