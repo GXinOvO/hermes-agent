@@ -15,6 +15,12 @@ from tools.file_tools import (
 )
 
 
+def _file_ops_mock():
+    """A FileOperations double for the HOST backend: ``env=None`` keeps the
+    file-state identity/probe path (Docker, SSH, sandbox) out of these tests."""
+    return MagicMock(env=None)
+
+
 class TestReadFileHandler:
 
 
@@ -23,7 +29,7 @@ class TestReadFileHandler:
         """The model omits ``limit`` on most reads; the dispatch handler must fall
         back to the SAME default the schema advertises (drifted to 500 vs 2000)."""
         from tools.file_tools import READ_FILE_SCHEMA, _handle_read_file
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.content = "x"
         result_obj.to_dict.return_value = {"content": "x", "total_lines": 1}
@@ -60,6 +66,7 @@ class TestWriteFileHandler:
     @patch("tools.file_tools._get_file_ops")
     def test_rejects_read_file_line_numbered_content(self, mock_get):
         """#19798 — do not persist read_file's LINE_NUM|CONTENT display format."""
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import write_file_tool
 
         content = " 1|setting: new_value\n 2|other: thing\n"
@@ -91,7 +98,7 @@ class TestWriteFileHandler:
         from tools.file_tools import _handle_write_file
 
         with patch("tools.file_tools._get_file_ops") as mock_get:
-            mock_ops = MagicMock()
+            mock_ops = _file_ops_mock()
             result_obj = MagicMock()
             result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/empty.txt", "bytes": 0}
             mock_ops.write_file.return_value = result_obj
@@ -116,6 +123,7 @@ class TestPatchHandler:
 
     @patch("tools.file_tools._get_file_ops")
     def test_unknown_mode_errors(self, mock_get):
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import patch_tool
         result = json.loads(patch_tool(mode="invalid_mode"))
         assert "error" in result
@@ -127,6 +135,7 @@ class TestPatchHandler:
         ``..`` traversal in the header must be rejected before the patch is
         applied, even though the explicit ``path=`` arg is allowed to use
         ``..`` for legitimate cross-worktree edits."""
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import patch_tool
         result = json.loads(patch_tool(
             mode="patch",
@@ -146,6 +155,7 @@ class TestPatchHandler:
 
     @patch("tools.file_tools._get_file_ops")
     def test_patch_v4a_rejects_traversal_in_add_header(self, mock_get):
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import patch_tool
         result = json.loads(patch_tool(
             mode="patch",
@@ -177,6 +187,7 @@ class TestPatchSensitivePathExtraction:
 
     @patch("tools.file_tools._get_file_ops")
     def test_patch_move_to_sensitive_dst_blocked(self, mock_get):
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import patch_tool
         patch_text = (
             "*** Begin Patch\n"
@@ -197,6 +208,7 @@ class TestPatchSensitivePathExtraction:
         sensitive path check must be at least as lenient or the check
         is bypassed.
         """
+        mock_get.return_value = _file_ops_mock()
         from tools.file_tools import patch_tool
         patch_text = (
             "*** Begin Patch\n"
@@ -215,7 +227,7 @@ class TestPatchSensitivePathExtraction:
     @patch("tools.file_tools._get_file_ops")
     def test_patch_move_safe_paths_not_blocked(self, mock_get):
         """Safe Move operations should still reach the file_ops dispatch."""
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {"status": "ok"}
         mock_ops.patch_v4a.return_value = result_obj
@@ -293,7 +305,7 @@ class TestPatchHints:
 
     @patch("tools.file_tools._get_file_ops")
     def test_no_match_includes_hint(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {
             "error": "Could not find match for old_string in foo.py"
@@ -309,7 +321,7 @@ class TestPatchHints:
 
     @patch("tools.file_tools._get_file_ops")
     def test_success_no_hint(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {"success": True, "diff": "--- a\n+++ b"}
         mock_ops.patch_replace.return_value = result_obj
@@ -332,7 +344,7 @@ class TestSearchHints:
 
     @patch("tools.file_tools._get_file_ops")
     def test_truncated_hint_with_nonzero_offset(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {
             "total_count": 150,
@@ -395,7 +407,7 @@ class TestSensitivePathCheck:
     def test_normal_file_not_blocked(self, mock_get, monkeypatch):
         monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved", "/home/user/.hermes/config.yaml")
         monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved_loaded", True)
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/other.txt", "bytes": 5}
         mock_ops.write_file.return_value = result_obj
@@ -651,7 +663,7 @@ class TestDedupInvalidationTaskResolution:
 class TestNotFoundCache:
     @patch("tools.file_tools._get_file_ops")
     def test_read_caches_file_not_found_and_skips_subprocess_on_retry(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.content = None
         # Shape returned by ShellFileOperations._suggest_similar_files
@@ -682,7 +694,7 @@ class TestNotFoundCache:
 
     @patch("tools.file_tools._get_file_ops")
     def test_read_cache_isolated_per_task(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {
             "error": "File not found: /tmp/does-not-exist-neg-2.txt",
@@ -704,7 +716,7 @@ class TestNotFoundCache:
 
     @patch("tools.file_tools._get_file_ops")
     def test_search_caches_path_not_found_and_skips_subprocess_on_retry(self, mock_get):
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.matches = []
         result_obj.to_dict.return_value = {
@@ -733,7 +745,7 @@ class TestNotFoundCache:
     def test_read_and_search_caches_are_namespaced(self, mock_get):
         # A read that misses must NOT serve a subsequent search call's miss
         # (different error JSON shapes).
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
 
         read_obj = MagicMock()
         read_obj.to_dict.return_value = {
@@ -767,7 +779,7 @@ class TestNotFoundCache:
     def test_write_invalidates_read_negative_cache(self, mock_get):
         # After write_file on a path, a subsequent read must hit disk,
         # not return the cached "not found" stub.
-        mock_ops = MagicMock()
+        mock_ops = _file_ops_mock()
 
         not_found_obj = MagicMock()
         not_found_obj.to_dict.return_value = {
@@ -971,7 +983,7 @@ class TestSecretFileReadRedaction:
 
     @staticmethod
     def _read_ops(body):
-        ops = MagicMock()
+        ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.content = body
         result_obj.to_dict.return_value = {"content": body, "total_lines": body.count("\n")}
@@ -1002,7 +1014,7 @@ class TestSecretFileReadRedaction:
     @patch("tools.file_tools._get_file_ops")
     def test_search_in_hermes_home_masks_opaque_token(self, mock_get, hermes_home):
         config = hermes_home / "config.yaml"
-        ops = MagicMock()
+        ops = _file_ops_mock()
         ops.search.return_value = self._SearchResult(
             [self._Match(str(config), f"      ADS_API_TOKEN: {self.SYNTH}")])
         mock_get.return_value = ops

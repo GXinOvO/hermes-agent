@@ -221,27 +221,33 @@ def file_backend_call(fn):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         task_id = bound.arguments.get('task_id', 'default')
+        header_paths: list[str] = []
         if fn.__name__ == 'write_file_tool':
-            from tools.environments.sandbox_scope import hosted_scope
-            from tools.file_tools_write_guards import _check_sensitive_path
+            from tools.file_tools_write_guards import _check_sensitive_path, _is_internal_file_tool_content
             path = bound.arguments['path']
-            if hosted_scope() is not None and os.path.isabs(path):
-                if error := _check_sensitive_path(path, task_id):
-                    return json.dumps({'error': error})
+            error = _check_sensitive_path(path, task_id) if isinstance(path, str) and os.path.isabs(path) else None
+            if not error and _is_internal_file_tool_content(bound.arguments['content']):
+                from tools.file_tools_write_guards import _INTERNAL_DISPLAY_CONTENT_ERROR as error
+            if error:
+                return json.dumps({'error': error})
+        if fn.__name__ == 'patch_tool' and bound.arguments.get('mode') == 'patch' and bound.arguments.get('patch'):
+            from tools.file_tools import _collect_v4a_header_paths, _write_precheck_error
+            collected = _collect_v4a_header_paths(bound.arguments['patch'])
+            if isinstance(collected, str):
+                return collected
+            header_paths = collected[0]
+            error = _write_precheck_error(
+                ([bound.arguments['path']] if bound.arguments.get('path') else []) + header_paths,
+                collected[1], task_id, bound.arguments.get('cross_profile', False))
+            if error:
+                from tools.registry import tool_error
+                return tool_error(error)
         if fn.__name__ in ('write_file_tool', 'patch_tool', 'search_tool'):
             from tools.environments.sandbox_scope import hosted_scope
             if hosted_scope() is not None:
                 from tools.file_tools_paths import _hosted_tilde
-                paths = [bound.arguments.get('path')]
-                patch = bound.arguments.get('patch')
-                if fn.__name__ == 'patch_tool' and bound.arguments.get('mode') == 'patch' and patch:
-                    from tools.file_tools import _collect_v4a_header_paths
-                    collected = _collect_v4a_header_paths(patch)
-                    if isinstance(collected, str):
-                        return collected
-                    paths.extend(collected[0])
                 try:
-                    for path in paths:
+                    for path in [bound.arguments.get('path'), *header_paths]:
                         if isinstance(path, str) and path.startswith('~'):
                             _hosted_tilde(path, task_id)
                 except ValueError as exc:
@@ -262,8 +268,9 @@ def file_backend_call(fn):
         try:
             with backend_io_scope(task_id):
                 return fn(*args, **kwargs)
-        except FileBackendUnavailable as exc:
-            return json.dumps({'error': str(exc)})
+        except (OSError, RuntimeError) as exc:
+            from tools.registry import tool_error
+            return tool_error(str(exc))
     return wrapped
 
 

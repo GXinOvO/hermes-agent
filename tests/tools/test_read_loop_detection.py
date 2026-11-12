@@ -49,6 +49,7 @@ class _FakeSearchResult:
 
 def _make_fake_file_ops():
     fake = MagicMock()
+    fake.env = None
     fake.read_file = _fake_read_file
     fake.search = lambda **kw: _FakeSearchResult()
     return fake
