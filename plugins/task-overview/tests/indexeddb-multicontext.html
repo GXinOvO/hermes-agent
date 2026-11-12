@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Follow-up storage: separate contexts</title></head>
+<body><pre id="result">Running</pre><script type="module">
+const output = document.querySelector('#result')
+try {
+  const name = new URL(location.href).searchParams.get('db')
+  if (!name || !name.startsWith('followup_isolated_test_')) throw Error('Isolated name required')
+  const version = `?test=${encodeURIComponent(name)}`
+  const { openFollowupStore } = await import(`../src/followup-indexeddb.mjs${version}`)
+  const { createFollowupTask, applyFollowupAction } = await import(`../src/followup-tasks.mjs${version}`)
+  const verify = (condition, message) => { if (!condition) throw Error(message) }
+  const contexts = [document.createElement('iframe'), document.createElement('iframe')]
+  for (const frame of contexts) document.body.append(frame)
+  const first = await openFollowupStore(contexts[0].contentWindow.indexedDB, name)
+  const second = await openFollowupStore(contexts[1].contentWindow.indexedDB, name)
+  const ref = { connectionId: 'source-a', profile: 'default', targetProfile: 'default', storedId: 'synthetic-session' }
+  const task = createFollowupTask({ id: 'multi-context', title: 'Synthetic task', primary: ref, related: [], nextSteps: ['Review'] }, 1000)
+  await first.create(task)
+  const read = await second.list()
+  verify(read.length === 1 && read[0].revision === 1, 'Second context could not read first context write')
+  const a = applyFollowupAction(task, { type: 'accept', at: 1100, note: 'first' })
+  const b = applyFollowupAction(task, { type: 'accept', at: 1200, note: 'second' })
+  const results = await Promise.allSettled([first.replace(a, 1), second.replace(b, 1)])
+  const success = results.filter(result => result.status === 'fulfilled')
+  const conflicts = results.filter(result => result.status === 'rejected' && /revision conflict/i.test(String(result.reason)))
+  verify(success.length === 1 && conflicts.length === 1, 'Expected one committed write and one explicit conflict')
+  const final = await second.list()
+  verify(final.length === 1 && final[0].revision === 2 && final[0].task.resolution.note === success[0].value.task.resolution.note, 'Final record does not match the winner')
+  first.close()
+  second.close()
+  for (const frame of contexts) frame.remove()
+  output.textContent = JSON.stringify({ status: 'PASS', cases: ['separate same-origin browsing contexts', 'cross-context read', 'concurrent compare-and-set', 'winner readback'] })
+} catch (error) { output.textContent = JSON.stringify({ status: 'FAIL', error: String(error), stack: error?.stack }) }
+</script></body></html>
