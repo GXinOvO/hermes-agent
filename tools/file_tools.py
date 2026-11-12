@@ -8,6 +8,7 @@ staleness state).
 
 import base64
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -15,8 +16,8 @@ import re
 import stat
 import threading
 import time
-from contextlib import ExitStack
-from pathlib import Path
+from contextlib import ExitStack, nullcontext
+from pathlib import Path, PurePosixPath
 
 from agent.file_safety import get_nt_namespace_error, get_read_block_error
 from agent.tool_result_classification import GUARDRAIL_REFUSAL_KEY
@@ -30,7 +31,7 @@ from tools.file_backend_io import file_backend_call, file_mtime, storage_path
 from hermes_platform.host import facts
 from agent.redact import _is_secret_file_arg, redact_sensitive_text
 from tools.file_tools_paths import (
-    _expand_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_entry_for_task,
+    _expand_tilde, _hosted_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_entry_for_task,
     _resolve_path_for_task)
 from tools.file_tools_write_guards import (
     _READ_DEDUP_STATUS_MESSAGE, _check_approval_required_write, _check_binary_document_write,
@@ -39,7 +40,7 @@ from tools.file_tools_write_guards import (
 from tools.file_tools_read_tracking import (
     _bump_consecutive, _cap_read_tracker_data, _carry_full_write_baselines, _check_file_staleness,
     _check_not_found_cache, _dedup_lookup, _known_full_content_sha256,
-    _file_metadata, _file_version,
+    _file_metadata, _file_version, _on_host,
     _mark_full_write_baseline, _mark_verification_stale, _note_read_coverage, _note_read_served, _patch_failure_lock,
     _patch_failure_tracker, _read_tracker, _read_tracker_lock, _record_not_found,
     _record_patch_failure, _reset_patch_failures, _task_data, _update_read_timestamp)
@@ -153,25 +154,37 @@ _V4A_MOVE_HEADER_RE = re.compile(r'^(\*\*\*\s*Move\s+File:\s*)(.+?)\s*->\s*(.+)$
 
 
 def _rewrite_v4a_patch_paths_for_host(patch: str, path_to_resolved: dict, path_to_entry: dict,
-                                      file_ops) -> str:
+                                      file_ops, task_id: str = "default") -> str:
     """Rewrite V4A file headers to the resolved host paths (host backends only).
 
     The shell layer must patch the SAME files ``patch_tool`` resolved for
     locking/staleness, not re-resolve a relative header against its own cwd
     (which can differ — the git-worktree cwd bug). Delete and Move headers take
     ``path_to_entry``: they act on a symlink itself, never on its target.
+
+    In a hosted scope only a ``~`` header changes, to the sandbox's home; every other header is the
+    sandbox's to anchor and is sent as written.
     """
-    if not _file_ops_uses_host_paths(file_ops):
+    from tools.environments.sandbox_scope import hosted_scope
+    hosted = hosted_scope() is not None
+    if not _file_ops_uses_host_paths(file_ops) and not hosted:
         return patch
 
     def _res(raw: str, entry: bool = False) -> str:
         raw = raw.strip()
+        if hosted:
+            return _hosted_tilde(raw, task_id) if raw.startswith("~") else raw
         return (path_to_entry if entry else path_to_resolved).get(raw) or raw
 
+    def _as_written(m: re.Match) -> bool:
+        return hosted and not any(g.strip().startswith("~") for g in m.groups()[1:])
+
     patch = _V4A_SINGLE_HEADER_RE.sub(
-        lambda m: f"{m.group(1)}{_res(m.group(3), entry=m.group(2) == 'Delete')}", patch)
+        lambda m: m.group(0) if _as_written(m) else f"{m.group(1)}{_res(m.group(3), entry=m.group(2) == 'Delete')}",
+        patch)
     return _V4A_MOVE_HEADER_RE.sub(
-        lambda m: f"{m.group(1)}{_res(m.group(2), entry=True)} -> {_res(m.group(3), entry=True)}", patch)
+        lambda m: m.group(0) if _as_written(m)
+        else f"{m.group(1)}{_res(m.group(2), entry=True)} -> {_res(m.group(3), entry=True)}", patch)
 
 
 def _is_blocked_device_path(path: str) -> bool:
@@ -188,12 +201,15 @@ def _is_blocked_device(filepath: str, base_dir: str | Path | None = None) -> boo
     Literal first so /dev/stdin is caught before resolving to a terminal path;
     every symlink hop is checked so an alias cannot bypass the guard.
     """
+    from tools.environments.sandbox_scope import hosted_scope
     expanded = _expand_tilde(filepath)
     if base_dir is not None and not os.path.isabs(expanded):
         expanded = os.path.join(os.fspath(base_dir), expanded)
     normalized = os.path.normpath(expanded)
     if _is_blocked_device_path(normalized):
         return True
+    if hosted_scope() is not None:
+        return False  # a sandbox path: its symlinks are not this host's to follow
 
     seen: set[str] = set()
     current = normalized
@@ -316,8 +332,10 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     Uses terminal_tool's per-task creation locks (no duplicate sandboxes).
     Subagent task_ids collapse to "default" (``_resolve_container_task_id``) so
     delegate_task children share the parent's container; RL/benchmark task_ids
-    with a registered env override keep their isolation.
+    with a registered env override keep their isolation. In a hosted scope every
+    task id resolves to the agent's sandbox, so these operations run there.
     """
+    from tools.environments.sandbox_scope import admit_env
     from tools.terminal_tool import (
         _active_environments, _env_lock, _last_activity, _start_cleanup_thread,
         _creation_locks, _creation_locks_lock, _resolve_container_task_id,
@@ -331,7 +349,8 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
         cached = _file_ops_cache.get(task_id)
     if cached is not None:
         with _env_lock:
-            if task_id in _active_environments:
+            active = admit_env(_active_environments.get(task_id))
+            if active is not None and getattr(cached, 'env', None) is active:
                 _last_activity[task_id] = time.time()
                 return cached
             # Env was cleaned up: rescue its cwd into the session record FILL-ONLY
@@ -342,7 +361,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             # ``cached.cwd`` is a snapshot of the SHARED env's cwd at cache-build time, so it is not
             # attributable to this session (same class as the interrupted-command bug, #85658). Rescue a
             # session that has no record, but never overwrite a record the session wrote for itself.
-            old_cwd = getattr(cached, "cwd", None)
+            old_cwd = getattr(cached, "cwd", None) if active is None else None
             if old_cwd:
                 try:
                     if get_session_cwd(raw_task_id) is None:
@@ -350,7 +369,11 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                 except Exception:
                     pass
             with _file_ops_lock:
-                _file_ops_cache.pop(task_id, None)
+                if _file_ops_cache.get(task_id) is cached:
+                    _file_ops_cache.pop(task_id, None)
+        if (old_env := getattr(cached, 'env', None)) is not None:
+            from tools.file_backend_io import revoke_backend_reads
+            revoke_backend_reads(old_env)
 
     with _creation_locks_lock:
         task_lock = _creation_locks.setdefault(task_id, threading.Lock())
@@ -358,7 +381,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     with task_lock:
         # Double-check: another thread may have created it while we waited.
         with _env_lock:
-            terminal_env = _active_environments.get(task_id)
+            terminal_env = admit_env(_active_environments.get(task_id))
             if terminal_env is not None:
                 _last_activity[task_id] = time.time()
         if terminal_env is None:
@@ -373,6 +396,16 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     with _file_ops_lock:
         _file_ops_cache[task_id] = file_ops
     return file_ops
+
+
+def retire_file_ops_backend(task_id: str, env) -> None:
+    from tools.file_backend_io import revoke_backend_reads
+
+    with _file_ops_lock:
+        cached = _file_ops_cache.get(task_id)
+        if cached is not None and getattr(cached, 'env', None) is env:
+            _file_ops_cache.pop(task_id, None)
+    revoke_backend_reads(env)
 
 
 def clear_file_ops_cache(task_id: str | None = None):
@@ -432,9 +465,12 @@ def _read_extracted_document(path: str, _resolved, offset: int, limit: int, task
     (size cap, encrypted, malformed), or ``None`` to fall through to the normal
     read path. Runs BEFORE the binary-extension guard.
     """
+    from tools.environments.sandbox_scope import hosted_scope
     from tools.read_extract import (
         ANYDOC_EXTENSIONS, EXTRACTABLE_EXTENSIONS, MAX_DOCUMENT_BYTES, ExtractionError,
         extract_document_bytes, is_extractable_document)
+    if hosted_scope() is not None:
+        return None  # extraction parses the bytes in host temp files and host tools; the binary guard answers
 
     if not is_extractable_document(str(_resolved)):
         return None
@@ -614,6 +650,50 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     return count
 
 
+def _count_unverified_read(result, task_data, task_id, path, offset, limit, read_revision):
+    returned = json.dumps(result, sort_keys=True, ensure_ascii=False).encode('utf-8', 'surrogatepass')
+    repeat_key = ('unverified-read', path, offset, limit, hashlib.sha256(returned).digest())
+    with _read_tracker_lock:
+        return (_bump_consecutive(task_data, repeat_key)
+                if _read_tracker.get(task_id) is task_data
+                and task_data.get('io_revision', 0) == read_revision else 0)
+
+
+def _unverified_read_message(count, blocked):
+    if blocked:
+        return (f"BLOCKED: You have received the same result for this file region {count} times in a row. "
+                "The underlying file was not verified. STOP re-reading and proceed with your task.")
+    return (f"You have received the same result for this file region {count} times consecutively. "
+            "The underlying file was not verified. Use the information you already have.")
+
+
+def _read_repeat_notice(result, count, unverified, path):
+    if count >= 4:
+        message = (_unverified_read_message(count, True) if unverified else
+                   f"BLOCKED: You have read this exact file region {count} times in a row. "
+                   "The content has NOT changed. You already have this information. "
+                   "STOP re-reading and proceed with your task.")
+        return tool_error(message, path=path, already_read=count, **{GUARDRAIL_REFUSAL_KEY: True})
+    if count >= 3:
+        result["_warning"] = (_unverified_read_message(count, False) if unverified else
+            f"You have read this exact file region {count} times consecutively. "
+            "The content has not changed since your last read. Use the information you already have. "
+            "If you are stuck in a loop, stop reading and proceed with writing or responding.")
+    return None
+
+
+def _read_device_base(path: str, task_id: str) -> tuple[Path | PurePosixPath | None, bool]:
+    """The base the device check anchors a relative read on, and whether the read is unanchored. In a hosted scope
+    with no known sandbox cwd the relative path is the sandbox's to anchor, sent as written (as search does)."""
+    try:
+        return (None if Path(path).expanduser().is_absolute() else _resolve_base_dir(task_id)), False
+    except ValueError:
+        from tools.environments.sandbox_scope import hosted_scope
+        if hosted_scope() is None:
+            raise
+        return None, True
+
+
 @file_backend_call
 def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, task_id: str = "default") -> str:
     """Read a file with pagination and line numbers.
@@ -633,14 +713,15 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         nt_err = get_nt_namespace_error(path, verb="Read")
         if nt_err:
             return tool_error(nt_err)
+        path = _hosted_tilde(path, task_id)  # a hosted read sends the path as given: ``~`` is the sandbox's home
 
-        device_base = None if Path(path).expanduser().is_absolute() else _resolve_base_dir(task_id)
+        device_base, unanchored = _read_device_base(path, task_id)
         if _is_blocked_device(path, base_dir=device_base):
             return tool_error(
                 f"Cannot read '{path}': this is a device file that would "
                 "block or produce infinite output.")
 
-        _resolved = _resolve_path_for_task(path, task_id)
+        _resolved = PurePosixPath(path) if unanchored else _resolve_path_for_task(path, task_id)
 
         # A read on a FIFO/socket blocks until the exec timeout: a self-shipped DoS.
         if _file_ops_uses_host_paths(_get_file_ops(task_id)):
@@ -684,13 +765,15 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         task_data, cached_version, content_served_in_generation, read_revision = _dedup_lookup(task_id, dedup_key)
         # Same rule as skill_view: the review fork shares the parent's task_id and its
         # read-before-write guard needs a real read, which the stub path never records (#95976).
-        file_ops = _get_file_ops(task_id)
-        version_before = _file_metadata(resolved_str)
+        from tools.file_backend_io import _hosted_compat, checked_file_ops
+        file_ops = checked_file_ops(_get_file_ops(task_id))
+        unverified = _hosted_compat.get() or unanchored
+        version_before = None if unverified else _file_metadata(resolved_str)
         if (cached_version is not None and not is_background_review()
                 and version_before == cached_version and content_served_in_generation):
             return _dedup_stub_or_block(task_data, dedup_key, path)
 
-        result = file_ops.read_file(resolved_str if _file_ops_uses_host_paths(file_ops) else path, offset, limit)
+        result = file_ops.read_file(resolved_str if not unverified or _file_ops_uses_host_paths(file_ops) else path, offset, limit)
         result_dict = result.to_dict()
 
         # Failed reads cannot establish whole-file knowledge.
@@ -741,26 +824,18 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
             end_line = offset + limit - 1
             if isinstance(total_lines, int) and total_lines > 0:
                 end_line = min(end_line, total_lines)
-        count = _record_successful_read(task_data, task_id, path, resolved_str, offset, limit,
-                                        dedup_key, partial=(offset > 1) or bool(result_dict.get("truncated")),
-                                        redacted=redacted or bool(result_dict.get("truncated_lines")),
-                                        end_line=end_line, total_lines=total_lines,
-                                        version_before=version_before,
-                                        snapshot=getattr(result, "_snapshot", None), read_revision=read_revision,
-                                        protected_ticket=getattr(result, '_protected_ticket', None))
-        if count >= 4:
-            return tool_error(
-                f"BLOCKED: You have read this exact file region {count} times in a row. "
-                "The content has NOT changed. You already have this information. "
-                "STOP re-reading and proceed with your task.",
-                path=path,
-                already_read=count,
-                **{GUARDRAIL_REFUSAL_KEY: True})
-        if count >= 3:
-            result_dict["_warning"] = (
-                f"You have read this exact file region {count} times consecutively. "
-                "The content has not changed since your last read. Use the information you already have. "
-                "If you are stuck in a loop, stop reading and proceed with writing or responding.")
+        if unverified:
+            count = _count_unverified_read(result_dict, task_data, task_id, path, offset, limit, read_revision)
+        else:
+            count = _record_successful_read(task_data, task_id, path, resolved_str, offset, limit,
+                                            dedup_key, partial=(offset > 1) or bool(result_dict.get("truncated")),
+                                            redacted=redacted or bool(result_dict.get("truncated_lines")),
+                                            end_line=end_line, total_lines=total_lines,
+                                            version_before=version_before,
+                                            snapshot=getattr(result, "_snapshot", None), read_revision=read_revision,
+                                            protected_ticket=getattr(result, '_protected_ticket', None))
+        if notice := _read_repeat_notice(result_dict, count, unverified, path):
+            return notice
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))
@@ -892,28 +967,32 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     if err:
         return tool_error(err)
     try:
+        from tools.file_backend_io import _hosted_compat
         from tools.file_tools_commit_binding import capture_write_binding, bind_write_commit, authorized_write
+        compat = _hosted_compat.get()
         _resolved = _resolve_or_none(path, task_id)
-        if not _resolved:
+        if not _resolved and not compat:
             return tool_error('Could not bind an absolute write target; refusing write')
-        binding = capture_write_binding(_resolved, task_id)
+        binding = None if compat else capture_write_binding(_resolved, task_id)
         path_to_resolved = {path: _resolved}
         with ExitStack() as _lock:
             if _resolved:
                 # Per-path lock serializes read→modify→write across concurrent
                 # subagents; different paths stay fully parallel.
-                _lock.enter_context(file_state.lock_path(binding.storage_key))
+                _lock.enter_context(file_state.lock_path(binding.storage_key if binding is not None else _resolved))
             # A whole-file overwrite of content this task never saw, or that
             # changed since, is refused HERE — before the write — instead of
             # warning after the clobber (#65604). Nothing below runs.
             blocker = _stale_overwrite_blocker(path, _resolved, task_id)
             if blocker:
                 return json.dumps(_stale_write_refusal(path, blocker, _resolved), ensure_ascii=False)
-            authorized_write(binding, task_id)
+            if binding is not None:
+                authorized_write(binding, task_id)
             warnings = _edit_warnings([path], path_to_resolved, task_id)
             rewrite_hint = _whole_file_rewrite_hint(task_id, _resolved, content)
-            with bind_write_commit(binding):
-                result = _get_file_ops(task_id).write_file(_resolved, content)
+            with bind_write_commit(binding) if binding is not None else nullcontext():
+                from tools.file_backend_io import checked_file_ops
+                result = checked_file_ops(_get_file_ops(task_id)).write_file(_resolved or path, content)
             result_dict = result.to_dict()
             if warnings:
                 result_dict["_warning"] = warnings[0]
@@ -930,10 +1009,10 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
                     result_dict["files_modified"] = [_resolved]
                     # Own write = current whole-file content: consecutive
                     # same-task writes stay unblocked (patch_tool carries it).
-                    if binding.protected_ticket is not None:
+                    if binding is not None and binding.protected_ticket is not None:
                         _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None),
                                                  published_ticket=getattr(result, '_protected_ticket', None))
-                    else:
+                    elif binding is not None:
                         _mark_full_write_baseline(_resolved, task_id, getattr(result, "_content_sha256", None))
                 _note_edited(task_id, [path], path_to_resolved, session_id)
         return json.dumps(result_dict, ensure_ascii=False)
@@ -1007,10 +1086,12 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
             for _r in sorted({storage_path(_r) for _r in (*_path_to_resolved.values(), *_path_to_entry.values()) if _r}):
                 _locks.enter_context(file_state.lock_path(_r))
             stale_warnings = _edit_warnings(_paths_to_check, _path_to_resolved, task_id)
-            file_ops = _get_file_ops(task_id)
+            from tools.file_backend_io import checked_file_ops
+            file_ops = checked_file_ops(_get_file_ops(task_id))
             # Whole-file knowledge held BEFORE the patch reads, under the same locks. Like
             # every baseline check it stats the host path, so a sandbox path carries nothing.
-            _known = _known_full_content_sha256(_path_to_resolved.values(), task_id)
+            from tools.file_backend_io import _hosted_compat
+            _known = {} if _hosted_compat.get() else _known_full_content_sha256(_path_to_resolved.values(), task_id)
 
             # Hand the shell layer the RESOLVED targets so both layers agree on
             # which file is edited even when the shell's cwd differs.
@@ -1029,7 +1110,7 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
                 from tools.file_protected_patch import protected_patch_scope
                 with protected_patch_scope(file_ops, task_id) as native_patch:
                     result = file_ops.patch_v4a(
-                        _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops))
+                        _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops, task_id))
             else:
                 return tool_error(f"Unknown mode: {mode}")
 
@@ -1047,7 +1128,7 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
                 if len(_resolved_modified) == 1:
                     result_dict["resolved_path"] = _resolved_modified[0]
                 _note_edited(task_id, _paths_to_check, _path_to_resolved, session_id)
-                if native_patch is None:
+                if native_patch is None and not _hosted_compat.get():
                     _carry_full_write_baselines(task_id, _known, getattr(result, "_writes", ()), _path_to_resolved)
                 # Clear failure counters so a future miss starts a fresh count.
                 _reset_patch_failures(task_id, [_r for _r in _path_to_resolved.values() if _r])
@@ -1108,6 +1189,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         nt_err = get_nt_namespace_error(path, verb="Search")
         if nt_err:
             return tool_error(nt_err)
+        path = _hosted_tilde(path, task_id)
         try:
             resolved_search_path = str(_resolve_path_for_task(path, task_id))
         except (OSError, ValueError, RuntimeError) as exc:
@@ -1126,7 +1208,8 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         if cached_search_nf is not None:
             return cached_search_nf
 
-        result = _get_file_ops(task_id).search(
+        from tools.file_backend_io import checked_file_ops
+        result = checked_file_ops(_get_file_ops(task_id)).search(
             pattern=pattern, path=path, target=target, file_glob=file_glob,
             limit=limit, offset=offset, output_mode=output_mode, context=context, order=order)
         omitted = _filter_read_blocked_search_results(result, task_id)

@@ -17,6 +17,7 @@ from tools.file_backend_probe import FileBackendUnavailable, environment_generat
 
 _active = ContextVar('hermes_file_backend_io', default=None)
 _generation: ContextVar[str | None] = ContextVar('hermes_file_backend_generation', default=None)
+_hosted_compat = ContextVar('hermes_file_hosted_compat', default=False)
 
 
 def revoke_backend_reads(env):
@@ -69,9 +70,21 @@ def _check_generation(env):
     return checked_generation(env, _generation.get())
 
 
+def checked_file_ops(ops):
+    from tools.environments.sandbox_scope import ScopedEnvironment
+    bound = _active.get()
+    if isinstance(bound, ScopedEnvironment) and getattr(ops, 'env', None) is not bound:
+        revoke_backend_reads(bound)
+        raise FileBackendUnavailable('hosted file backend changed during operation; retry')
+    return ops
+
+
 def storage_path(path):
     if isinstance(path, str) and path.startswith('hermes-storage://'):
         return path
+    if _hosted_compat.get():
+        from tools.environments.sandbox_scope import current_sandbox_key
+        return 'hermes-storage://hosted-compat/' + current_sandbox_key() + '/' + path
     env = _active.get()
     if env is None:
         return _host_storage_path(path)
@@ -114,6 +127,36 @@ def backend_io_scope(task_id):
     if env is None and isinstance(ops, ShellFileOperations):
         raise FileBackendUnavailable('file backend has no execution identity; refusing host fallback')
     backend = None if env is None or env_uses_host_filesystem(env) else env
+    from tools.environments.sandbox_scope import ScopedEnvironment
+    if isinstance(backend, ScopedEnvironment) and (
+        not callable(getattr(backend, 'file_generation', None))
+        or not callable(getattr(backend, 'execute_file_probe', None))
+    ):
+        revoke_backend_reads(backend)
+        if backend._file_authority_capable:
+            raise FileBackendUnavailable('hosted backend file authority disappeared; refusing operation')
+        from tools.file_tools_read_tracking import _read_tracker_lock, _task_data
+        with _read_tracker_lock:
+            data = _task_data(task_id or 'default')
+            if data.get('backend_binding') != (backend, None):
+                data['io_revision'] = data.get('io_revision', 0) + 1
+                for key in ('dedup', 'dedup_hits', 'read_timestamps', 'read_coverage',
+                            'full_write_baselines', 'storage_paths', 'protected_tickets',
+                            'blind_patches', 'dedup_generation_reads', 'not_found'):
+                    data.get(key, {}).clear()
+                data['backend_binding'] = (backend, None)
+        token = _active.set(backend)
+        generation_token = _generation.set(None)
+        compat_token = _hosted_compat.set(True)
+        try:
+            yield
+        finally:
+            _hosted_compat.reset(compat_token)
+            _generation.reset(generation_token)
+            _active.reset(token)
+        return
+    if isinstance(backend, ScopedEnvironment):
+        object.__setattr__(backend, '_file_authority_capable', True)
     try:
         generation = 'host' if backend is None else checked_generation(backend)
     except FileBackendUnavailable:
@@ -178,14 +221,43 @@ def file_backend_call(fn):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         task_id = bound.arguments.get('task_id', 'default')
+        if fn.__name__ == 'write_file_tool':
+            from tools.environments.sandbox_scope import hosted_scope
+            from tools.file_tools_write_guards import _check_sensitive_path
+            path = bound.arguments['path']
+            if hosted_scope() is not None and os.path.isabs(path):
+                if error := _check_sensitive_path(path, task_id):
+                    return json.dumps({'error': error})
+        if fn.__name__ in ('write_file_tool', 'patch_tool', 'search_tool'):
+            from tools.environments.sandbox_scope import hosted_scope
+            if hosted_scope() is not None:
+                from tools.file_tools_paths import _hosted_tilde
+                paths = [bound.arguments.get('path')]
+                patch = bound.arguments.get('patch')
+                if fn.__name__ == 'patch_tool' and bound.arguments.get('mode') == 'patch' and patch:
+                    from tools.file_tools import _collect_v4a_header_paths
+                    collected = _collect_v4a_header_paths(patch)
+                    if isinstance(collected, str):
+                        return collected
+                    paths.extend(collected[0])
+                try:
+                    for path in paths:
+                        if isinstance(path, str) and path.startswith('~'):
+                            _hosted_tilde(path, task_id)
+                except ValueError as exc:
+                    return json.dumps({'error': str(exc)})
         if fn.__name__ == 'read_file_tool':
-            from tools.file_tools import _is_blocked_device, get_nt_namespace_error
-            from tools.file_tools_paths import _resolve_base_dir
+            from tools.file_tools import _is_blocked_device, _read_device_base, get_nt_namespace_error
+            from tools.file_tools_paths import _hosted_tilde
             path = bound.arguments['path']
             if error := get_nt_namespace_error(path, verb='Read'):
                 return json.dumps({'error': error})
-            base = None if os.path.isabs(path) else _resolve_base_dir(task_id)
-            if _is_blocked_device(path, base_dir=base):
+            try:
+                checked_path = _hosted_tilde(path, task_id)
+                base, _ = _read_device_base(checked_path, task_id)
+            except (OSError, ValueError) as exc:
+                return json.dumps({'error': str(exc)})
+            if _is_blocked_device(checked_path, base_dir=base):
                 return json.dumps({'error': f"Cannot read '{path}': this is a device file that would block or produce infinite output."})
         try:
             with backend_io_scope(task_id):

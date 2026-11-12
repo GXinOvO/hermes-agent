@@ -89,6 +89,10 @@ def _result_paths():
 
 
 def save_completed_result(session) -> str:
+    """Retain *session*'s completion receipt under this profile's logs. A hosted agent's process
+    has none on this host: its command and output are the tenant's, kept in the live registry only."""
+    if session.sandbox_key:
+        return session.result_durability
     from agent.redact import redact_sensitive_text, redact_terminal_output
     from tools.process_registry import MAX_OUTPUT_CHARS
 
@@ -216,7 +220,9 @@ def _validated_record(path):
 def iter_completed_results(prefix=""):
     """Validate profile and immutable producer/result binding; no queue writes."""
     from tools.process_registry import ProcessSession
-
+    from tools.environments.sandbox_scope import hosted_scope
+    if hosted_scope() is not None:
+        return
     try:
         paths = _result_paths()
     except OSError:
@@ -233,6 +239,7 @@ def iter_completed_results(prefix=""):
             session = ProcessSession(
                 **{key: record[key] for key in _RESULT_FIELDS},
                 **{key: record[key] for key in _ROUTING_FIELDS if key in record},
+                sandbox_key=record.get("sandbox_key", ""),
                 exited=True, output_buffer=record["output"], exited_at=record.get("exited_at", 0),
                 total_output_chars=record.get("output_chars", len(record["output"])),
                 result_durability="persisted", result_verification=verification,
