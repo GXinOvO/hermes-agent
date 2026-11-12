@@ -148,6 +148,7 @@ jobs:
         if: ${{ !cancelled() && (inputs.python || inputs.catalog) }}
         env:
           _HERMES_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          _HERMES_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/ci/check_contributor_emails.py
 
       - name: Upload review status artifact (contributor check)

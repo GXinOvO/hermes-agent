@@ -79,6 +79,15 @@ def test_core_suite_installs_the_platform_sdks_and_bubblewrap():
     assert any("bubblewrap" in step.get("run", "") for step in job["steps"])
 
 
+def test_js_suite_provisions_ripgrep_from_the_locked_toolchain():
+    from scripts.ci.setup_toolchain import packages
+
+    job = _workflows()["js-tests.yml"]["jobs"]["check"]
+    setup = next(step for step in job["steps"] if step.get("uses") == "./.github/actions/setup-pm")
+    requested = [name.strip() for name in setup["with"].get("packages", "").split(",") if name.strip()]
+    assert "ripgrep" in packages(setup["with"]["toolchain"], requested)
+
+
 def test_windows_x64_and_arm_slices_cover_the_same_files_once():
     from scripts.run_tests_parallel import _slice_files
 

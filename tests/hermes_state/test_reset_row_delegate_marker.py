@@ -63,6 +63,26 @@ def test_a_config_arriving_with_a_delegate_marker_never_lands_on_a_reset_row(tmp
         db.close()
 
 
+def test_reset_backfill_without_session_key_keeps_permission_and_removes_delegate(tmp_path):
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        _reset_chat(db)
+        db.update_session_tool_names(LIVE, {"version": "recovery-r2", "tools": [], "allowed_tools": ["read_file"]})
+        db.create_session(LIVE, "telegram", model_config={"_delegate_from": OLD, "max_iterations": 90})
+        config = _config(db, LIVE)
+        assert config["_reset_from"] == OLD
+        assert config["max_iterations"] == 90
+        assert "_delegate_from" not in config
+        assert config["_tool_permissions"] == {"version": 1, "allowed_tools": ["read_file"]}
+        assert _listed(db)[0] == LIVE
+
+
+def test_unkeyed_reset_delegate_continuation_keeps_its_marker(tmp_path):
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("child", "subagent", model_config={"_reset_from": OLD, "_delegate_from": LIVE})
+        db.create_session("child", "subagent", model_config={"max_iterations": 10})
+        assert _config(db, "child") == {"_reset_from": OLD, "_delegate_from": LIVE, "max_iterations": 10}
+
+
 def test_a_new_reset_row_with_a_delegate_marker_is_visible_before_reopen(tmp_path):
     """A newly inserted polluted /new chat must not vanish until the store is reopened (#109073)."""
     db = SessionDB(db_path=tmp_path / "state.db")

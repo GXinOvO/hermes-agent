@@ -33,6 +33,7 @@ jobs:
           # the electron contracts drive real hermes_cli/pm code through
           # HERMES_PYTHON, which needs the application dependencies.
           toolchain: all
+          packages: ripgrep
           extras: '[]'
           test-environment: 'true'
 

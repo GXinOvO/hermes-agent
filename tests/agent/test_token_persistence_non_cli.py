@@ -42,6 +42,7 @@ def _make_agent(session_db, *, platform: str):
 
 def test_run_conversation_persists_tokens_for_telegram_sessions():
     session_db = MagicMock()
+    session_db.get_session.return_value = None
     agent = _make_agent(session_db, platform="telegram")
 
     result = agent.run_conversation("hello")

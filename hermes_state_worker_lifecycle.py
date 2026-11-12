@@ -303,9 +303,11 @@ def insert_session_row_in_transaction(
     )
     if model_config:
         from hermes_state_tool_permissions import merge_model_config
-        row = conn.execute("SELECT model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
+        row = conn.execute("SELECT model_config, session_key FROM sessions WHERE id=?", (session_id,)).fetchone()
         merged = merge_model_config(
             row[0] if row else None, model_config, allow_permission=bool(parent_session_id))
+        if row and row[1] and merged.get("_reset_from") is not None:
+            merged.pop("_delegate_from", None)
         conn.execute("UPDATE sessions SET model_config=? WHERE id=?", (json.dumps(merged), session_id))
     if system_prompt_hash is not None:
         self._delete_unreferenced_system_prompts(conn)
