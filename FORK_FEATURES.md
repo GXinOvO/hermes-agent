@@ -255,6 +255,20 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 - 技能守卫凭据规则（[9373dc1e31](https://github.com/GXinOvO/hermes-agent/commit/9373dc1e315a68446f9767afd7acd15d4c0642b8)、[843a2e39e9](https://github.com/GXinOvO/hermes-agent/commit/843a2e39e921e810204532e098bf36a2869e5fa0)、[cbab32f78e](https://github.com/GXinOvO/hermes-agent/commit/cbab32f78e6f798fa7aa6ff90707d89f648ad14d)、[04b3f4eb90](https://github.com/GXinOvO/hermes-agent/commit/04b3f4eb90fecb5eecf3e77ef0713bd5d435a356)、[a9ac999de2](https://github.com/GXinOvO/hermes-agent/commit/a9ac999de2b291805ebfd7a6a5e61cad575f996d)、[46c3569424](https://github.com/GXinOvO/hermes-agent/commit/46c3569424b9c443ad7167ada019f643ef1c0b9b)、[d1f6d7fcc9](https://github.com/GXinOvO/hermes-agent/commit/d1f6d7fcc9b6ba200d8855da38bab2d99722b0eb)、[0077e3bc0d](https://github.com/GXinOvO/hermes-agent/commit/0077e3bc0d1352c76f1e42253ea1c6b6911f58a0)、[303b2ce86b](https://github.com/GXinOvO/hermes-agent/commit/303b2ce86beb88c42c8ecc8191e775d020ca7590)）：`.py` 文件单次 tokenize，跳过注释与字符串中的读取；Hermes `.env` 规则只匹配 dotenv 调用内且指向真实 Hermes 路径；模型 provider key 读取为 high，其他第三方 key 仍为 medium。测试入口 `tests/tools/test_skills_guard.py`。
 - 同批 Telegram 排空停入站、富文本线性扫描、文本后照片同回合，以及 TTS 延迟与语音选择等修复见前述同步段及对应测试，不逐条登记为个人功能或验收结果。
 
+### 上游同步（子 Agent 续跑与 fork 委派增强的交汇）
+
+截至上游 [fdb6a09a](https://github.com/NousResearch/hermes-agent/commit/fdb6a09ae9235e392d3331e7af8a103a2589853a)。本轮冲突集中在委派模块，属上游新功能与 fork 既有增强的语义交汇，不新增个人编号；F05（结果找回）、F08（子 Agent 工具白名单）、F09（完成结果持久化）与上游「继续已结束子 Agent」共用同一批文件。
+
+- 上游新增 `delegate_task(action='continue')`：按子 Agent 自己的会话、路由与工作区继续一次已结束的运行，并写入可恢复记录（[PR #154163](https://github.com/NousResearch/hermes-agent/pull/154163)、[3c336ac979](https://github.com/NousResearch/hermes-agent/commit/3c336ac97919b1bb9bb95550f43cc8166c328c57)、[f21b52fc68](https://github.com/NousResearch/hermes-agent/commit/f21b52fc6883f30aaa2db77eaf519a3d8d5e4de2)）。fork 的按任务工具白名单、已保存结果读取与写观察在同文件冲突，按功能各自保留，没有整文件选边。
+- 归属判定：`_owns_subagent_record` 采用上游的祖先会话集合（`ancestor_owner_session_ids`），逐个用 fork 的 `_session_owned_by` 做会话／压缩谱系校验，两边的控制面与 `action='result'` 共用同一判定。
+- 恢复事件：保留 fork 把诊断信息提前到 `recovered_results` 之前的位置（无已完成子结果时也能带出转录尾部与 git 快照），另在上游位置补 `resumable_subagent_ids` 与继续提示。
+- 子 Agent 运行体：同时保留 fork 的写观察器（`observe_writes`，父 Agent 读过又被改动时提示重读）与上游的可恢复记录（`record_start`、心跳与工具进度检查点）。
+- `allowed_tools` 与续跑共用 `_build_child_agent`：恢复时的工具限制仍由会话工具 pin 经 `restore_saved_restriction` 施加，续跑路径不额外复制一份白名单，避免两套限制漂移。
+- 交付通道：`ledger_attempted_final` 保留 fork 的 strict／自动化事件不入账行为，同时满足上游 `-> bool` 约定（`gateway/run_turn_persistence.py` 用 `is True` 判断是否留下重投递行）；`ledger_attempted` 与 `attempted_final` 重复，删去前者。
+- 生成快照 `tests/fixtures/prompt_surface/`：代码合并后用 `scripts/ci/prompt_surface.py render` 重新渲染，`action` 枚举同时含 `result` 与 `continue`。
+
+验证（本机隔离 venv，非 CI）：委派与续跑 80 个文件 **562 通过、1 跳过**；交付账本／待发最终回复 64 个文件 **851 通过**；其中 5 个 `strict_enterprise_*`／`whatsapp_boundary` 文件 **146 失败**，与 fork `dev` 基线逐文件计数完全一致，原因是本地 venv 缺 `alibabacloud_dingtalk` 等企业 SDK，非本次合并引入；`scripts/check --base dev` 17 项通过。未跑全仓库测试，未运行真实网关或企业平台交付，未更新运行安装。
+
 ## 后续维护规则
 
 1. 新增、改变、移除个人增强时，在**同一交付**更新对应条目：用户用途、入口／开关、默认值、代码／启用状态、PR 或提交、验证证据。后续修复优先补到原编号，新增功能再分配稳定编号。

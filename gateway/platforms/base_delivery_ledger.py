@@ -37,23 +37,30 @@ async def send_final(adapter, event, session_key, text_content, metadata, *, rep
                                 is_ephemeral_response=is_ephemeral_response)
 
 
-async def attempted_final(adapter, event, session_key, response, *, error):
+async def attempted_final(adapter, event, session_key, response, *, error) -> bool:
+    """``BasePlatformAdapter.ledger_attempted_final``: ledger the uncertain final on the CURRENT transport as a
+    failed row instead of sending it again, so the timed redelivery sends it once more with the duplicate marker
+    and a lost send is not silence. False when nothing was saved (an automation/strict event, no text, ledger
+    off, or a refused reply)."""
     from gateway.session_delivery_policy import strict_event
     if strict_event(event):
-        return
+        return False
     text = (await adapter._extract_response_content(
         response, event, session_key, is_ephemeral_response=False)).text_content
     if not text:
-        return
+        return False
+    saved: list[str] = []
 
     async def attempted(_delivery_adapter, obligation_id):
         from gateway.platforms.base import SendResult
         if obligation_id:
+            saved.append(obligation_id)
             logger.warning("Final for session %s may not have landed; the delivery ledger "
                            "redelivers it with the duplicate marker", session_key)
         return SendResult(success=False, error=error)
 
     await ledger_bracket(adapter, event, session_key, text, attempted)
+    return bool(saved)
 
 
 async def ledger_bracket(adapter: Any, event: Any, session_key: str, text_content: str,

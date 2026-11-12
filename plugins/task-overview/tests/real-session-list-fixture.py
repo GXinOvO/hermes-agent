@@ -49,5 +49,5 @@ with tempfile.TemporaryDirectory(prefix='session-list-', dir=home) as temp:
     assert len(lineage) == 1 and lineage[0]['id'] == 'fixture-compression-tip', lineage
     safe = {**response, 'sessions': [{key: row.get(key) for key in ('id', '_lineage_root_id', 'profile', 'title', 'pinned', 'unread')} for row in sessions]}
     output = root / 'real-session-list-fixture.json'
-    output.write_text(json.dumps(safe, ensure_ascii=False, indent=2) + '\n')
+    output.write_text(json.dumps(safe, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'result': 'PASS', 'fixture': str(output), 'returned_rows': len(sessions), 'reported_total': response['profile_totals']['fixture-owner'], 'pinned_backfill': True, 'compression_tip_root': True, 'hidden_excluded': True}))
