@@ -4,9 +4,18 @@ Script-only execution has no session admission. Its prepared record is uncertain
 never permission to repeat the script; only the completed tuple authorizes its tail.
 """
 import json
+import logging
 import hashlib
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+
+logger = logging.getLogger('cron.scheduler')
+
+
+def _log_receipt_error(stage, job, execution_id, exc):
+    with suppress(Exception):
+        logger.error('Cron result receipt stage=%s job=%s execution=%s error_type=%s',
+                     stage, job.get('id'), execution_id, type(exc).__name__)
 
 
 def _save(path, record):
@@ -98,7 +107,15 @@ def run_script_job(job, *, execution_id, cancel_event=None):
     record['job'] = dict(job)
     try:
         _save(path, record)
+    except Exception as exc:
+        _log_receipt_error('journal_save', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
+    try:
         from cron.sealed_bot_result import freeze_completed_result
+    except Exception as exc:
+        _log_receipt_error('seal_import', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
+    try:
         freeze_completed_result(job, execution_id, record)
     except Exception as exc:
         raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
@@ -158,7 +175,15 @@ def record_completed_result(job, execution_id, result):
     job['_cron_result_binding'] = record['binding']
     try:
         _save(path, record)
+    except Exception as exc:
+        _log_receipt_error('journal_save', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
+    try:
         from cron.sealed_bot_result import freeze_completed_result
+    except Exception as exc:
+        _log_receipt_error('seal_import', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
+    try:
         freeze_completed_result(job, execution_id, record)
     except Exception as exc:
         raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
@@ -179,7 +204,8 @@ def defer_completed_tail(job, execution_id, error, result_ready, fence):
     if not (result_ready and isinstance(error, Exception)
             and not fence.operator_cancelled() and not fence.lost()):
         return False
-    scheduler.logger.warning('Cron %s completed; tail recovery deferred: %s', job['id'], error)
+    with suppress(Exception):
+        scheduler.logger.warning('Cron %s completed; tail recovery deferred: %s', job['id'], error)
     give_up_execution(execution_id, reason=f'Completed result awaiting tail recovery: {error}')
     return True
 
@@ -192,7 +218,8 @@ def defer_unverified_run(job, execution_id, error, result_ready, fence):
     if isinstance(error, CronExecutionUnknown):
         pause_for_unknown(job['id'], execution_id, str(error))
         give_up_execution(execution_id, reason=str(error))
-        scheduler.logger.error('Cron %s paused with unverified admission: %s', job['id'], error)
+        with suppress(Exception):
+            scheduler.logger.error('Cron %s paused with unverified admission: %s', job['id'], error)
         return True
     return defer_completed_tail(job, execution_id, error, result_ready, fence)
 
