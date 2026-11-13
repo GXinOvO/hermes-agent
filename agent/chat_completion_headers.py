@@ -20,6 +20,8 @@ def _chat_completion_capturing_headers(agent, client, api_kwargs: dict):
     captured only when the response itself is the usage-window kind. A capture failure never
     fails the turn.
     """
+    from agent.provider_request_audit import observe_sdk_request
+    observe_sdk_request(agent, api_kwargs)
     # `is True`: a Mock agent's invented attribute is not a window plan.
     state = getattr(agent, "_credits_state", None)
     if getattr(agent, "provider", "") != "nous" or getattr(state, "is_usage_window", False) is not True:

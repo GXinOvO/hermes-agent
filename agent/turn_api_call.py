@@ -73,7 +73,7 @@ def perform_api_call(
     agent: Any, *, api_kwargs: Any, _original_api_kwargs: Any, _llm_middleware_trace: Any,
     _moa_prepared_request: Any, _retry: Any, thinking_spinner: Any, retry_count: Any,
     api_call_count: Any, api_request_id: Any, effective_task_id: Any, turn_id: Any,
-    interrupted: Any,
+    interrupted: Any, audit_retry_count: Any = None,
 ) -> ApiCallVerdict:
     """Issue the request (see ``_should_stream`` for the streaming decision)."""
     from tools.delegate_tool_scope import validate_restricted_route
@@ -137,6 +137,10 @@ def perform_api_call(
     with _bracket:
         if _model_request_active is not None:
             _model_request_active.set()
+    from agent.provider_request_audit import bind_sdk_request, reset_sdk_request
+    audit_token = bind_sdk_request(
+        agent, api_request_id, api_call_count,
+        retry_count if audit_retry_count is None else audit_retry_count)
     try:
         response = run_llm_execution_middleware(
             api_kwargs, _perform_api_call, original_request=_original_api_kwargs,
@@ -146,6 +150,7 @@ def perform_api_call(
             api_call_count=api_call_count, middleware_trace=list(_llm_middleware_trace),
         )
     finally:
+        reset_sdk_request(audit_token)
         with _bracket:
             if _model_request_active is not None:
                 _model_request_active.clear()
