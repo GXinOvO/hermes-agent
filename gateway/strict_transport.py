@@ -43,6 +43,8 @@ async def strict_call(adapter, method='send', *, prepared_plan=_UNPREPARED,
     identity = {} if execution_id is None and claim_id is None else {'execution_id': execution_id, 'claim_id': claim_id}
     if prepared_plan is _UNPREPARED:
         prepared_plan = await prepare_strict_transport(adapter, method, **identity, **kwargs)
+    if prepared_plan is None and getattr(type(adapter), '_strict_plan_requires_claim', False):
+        raise RuntimeError('strict_transport_unavailable: claim-bound plan required')
     if prepared_plan is not None:
         kwargs['prepared_plan'] = prepared_plan
         kwargs.update(identity)
