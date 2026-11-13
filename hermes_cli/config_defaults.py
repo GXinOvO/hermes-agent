@@ -207,6 +207,13 @@ DEFAULT_CONFIG = {
         # force on everywhere; "auto" = on for interactive coding surfaces and programmatic callers,
         # off for messaging surfaces. Doc/markdown/skill-only edits never fire.
         "verify_on_stop": False,
+        # Handoff-summary guard: a model can answer a turn with a conversation recap
+        # (`<analysis>…</analysis><summary>…</summary>` plus the nine recap headings) instead of
+        # the user's answer. The transport cannot tell it from a real answer (finish_reason=stop,
+        # no tool calls, non-empty content), so it reaches the user verbatim. True (default) =
+        # nudge once for the real answer, then replace a repeat with an explicit notice. A user
+        # who asked for a recap is exempt. False = never intervene.
+        "handoff_summary_guard": True,
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
         # Max seconds any surface (CLI, TUI/Desktop, messaging gateway) blocks an agent awaiting a

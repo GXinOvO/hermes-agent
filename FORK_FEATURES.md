@@ -28,6 +28,7 @@
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
 | F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
+| F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
 
 ## 使用时需要记住的边界
 
@@ -46,6 +47,10 @@
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
 - **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，`evals/*/results/` 下的运行产物不计入审查路径，模型输入不包含隐藏检查点；批次内模型输出不完整或编辑片段无法唯一匹配时自动二分重试，单路径仍失败则整次失败。工作流单次超时上限为 60 分钟；全部批次成功后才原子写入本清单并推进隐藏检查点，失败或超时不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
+
+- **F19 交接摘要护栏：** 只按可见答复的形状判定（`<analysis>` 包裹 + `</summary>` + 至少三条九节标题 + ≥1500 字符），不是按模型、provider 或上下文大小判定——实测同一请求在 68k 与 280k tokens 下都出现过，与规模无关。用户明确要求总结、摘要、回顾、交接时（中英文关键词）一律不拦，此时文档就是答案。
+  **根因边界（2026-11-13 实测）：** 这是“种子 + 自我繁殖”两段，不能混为一谈。种子是模型倾向：近 30 天 550 个会话、23,103 次调用里 deepseek-v4.1-flash 出 63 篇（2.73 篇/千次），gpt-6.1-sol 0.13、terra 0.25、mimo 0.55，gpt-6-astra 在 29,180 次调用里为 0——差 21 倍，所以体感是“deepseek 有、别的没有”。繁殖是客户端侧：文档留在上下文里就成了范例，同一会话内实测 1→2→3 篇递增（受影响会话均值约 1.75 篇）；`session_search` 回放旧会话又会把别处的文档搬进来（实测 42KB/53KB 的工具结果里含完整文档）。DSH 等其它客户端没有这两条回路，所以同一模型在那里不出现。**种子本身仍未定位**：整份 payload 原样回放 24 次只出 2 次（约 8%），temperature=0/1、换措辞、截断上下文都不改变它，客户端这一侧已无可控变量；要定位得拿 response ID（如 `021794577272598aef91fec3a81c53339a5720099214cde8963a5`）去查中转上游日志。
+  **实现边界：** 判定基于文本形状，模型换一种写法就绕过了；剪裁只作用于 `session_search` 的回放内容，不改变磁盘上的会话记录。关闭开关见 `agent.handoff_summary_guard`。
 
 ## 追溯证据
 
