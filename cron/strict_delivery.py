@@ -189,7 +189,7 @@ def prepare(job, content, for_failure, *, adapters, loop):
         state = delivery._prepare_target_delivery(job, target, adapters=adapters, loop=loop, config=config,
             notify_delivery=delivery._cron_delivery_notify_enabled(cfg),
             mirror_enabled=delivery._cron_mirror_delivery_enabled(job, cfg), mirror_text=mirror,
-            delivery_errors=errors)
+            delivery_errors=errors, open_thread=False)
         if state is None or state.is_relay:
             raise RuntimeError('cron strict live transport unavailable: ' + platform)
         if not state.live_adapter_ready:

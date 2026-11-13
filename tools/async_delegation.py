@@ -13,6 +13,7 @@ import collections
 import contextvars
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -285,7 +286,19 @@ def record_unit_child(delegation_id: str, entry: dict[str, Any]) -> None:
 
 def _recovered_results(task: dict[str, Any], result_json: Optional[str], error: str) -> Optional[list[dict[str, Any]]]:
     """Per-task results for an abandoned unit: recorded children as they finished, the rest ``unknown``."""
-    partial = json.loads(result_json or "{}") or {}
+    partial = json.loads(result_json or "{}")
+    if not isinstance(partial, dict):
+        raise ValueError("invalid partial delegation result")
+    if "results" in partial and (
+        not isinstance(partial["results"], list)
+        or any(
+            not isinstance(child, dict)
+            or type(child.get("task_index")) is not int
+            or child["task_index"] < 0
+            for child in partial["results"]
+        )
+    ):
+        raise ValueError("invalid partial delegation children")
     if not (task.get("is_batch") and partial.get("partial") and partial.get("results")):
         return None
     recorded = {r["task_index"]: r for r in partial["results"] if isinstance(r.get("task_index"), int)}
@@ -302,8 +315,12 @@ def _owner_liveness() -> Optional[Callable[[Any, Any], bool]]:
         return None
 
     def alive(pid, started) -> bool:
-        return bool(pid) and _pid_exists(int(pid)) and (
-            started is None or start_time_fingerprints_match(started, get_process_start_time(int(pid)) or 0))
+        if not pid or not _pid_exists(int(pid)):
+            return False
+        if started is None:
+            return True
+        current = get_process_start_time(int(pid))
+        return current is None or start_time_fingerprints_match(started, current)
     return alive
 
 
@@ -328,21 +345,37 @@ def recover_abandoned_delegations() -> int:
             delegation_id, session_key, origin_ui, parent_id, dispatched_at, pid, started, task_json, origin_sid, result_json, last_state = row
             if alive(pid, started):
                 continue
-            task = json.loads(task_json or "{}")
             error = "Delegation owner exited before recording a terminal result; outcome unknown."
-            recovered_results = _recovered_results(task, result_json, error)
+            try:
+                if (pid is not None and (type(pid) is not int or pid <= 0)
+                        or started is not None and (type(started) not in (int, float) or not math.isfinite(started))):
+                    raise ValueError("invalid delegation ownership")
+                task = json.loads(task_json or "{}")
+                if (not isinstance(task, dict) or task.get("task_indexes") is not None
+                        and (not isinstance(task["task_indexes"], list)
+                             or any(type(index) is not int or index < 0 for index in task["task_indexes"]))
+                        or task.get("goals") is not None and not isinstance(task["goals"], list)
+                        or task.get("owner_cwd") is not None
+                        and (not isinstance(task["owner_cwd"], str) or "\0" in task["owner_cwd"])
+                        or task.get("task_transcripts") is not None
+                        and (not isinstance(task["task_transcripts"], dict)
+                             or any(not isinstance(path, str) or "\0" in path
+                                    for path in task["task_transcripts"].values()))):
+                    raise ValueError("invalid delegation task")
+                recovered_results = _recovered_results(task, result_json, error)
+                diagnostics = {"last_known_status": last_state, "task_transcripts": task.get("task_transcripts") or {}}
+                from tools.async_delegation_recovery_hints import git_state_hint, transcript_tails
+                if tails := transcript_tails(diagnostics["task_transcripts"]):
+                    diagnostics["transcript_tails"] = tails
+                if hint := git_state_hint(task.get("owner_cwd")):
+                    diagnostics["git_state_hint"] = hint
+            except (OSError, TypeError, ValueError, KeyError, OverflowError):
+                logger.warning("Async delegation %s has unreadable recovery input; preserve for reconciliation", delegation_id)
+                continue
             if recovered_results:
                 done = sum(1 for r in recovered_results if r.get("status") != "unknown")
                 error = (f"Delegation owner exited before the unit finished; {done}/{len(recovered_results)} child "
                          "results were recorded and are included below, the rest are unknown.")
-            diagnostics = {"last_known_status": last_state, "task_transcripts": task.get("task_transcripts") or {}}
-            # Verbatim transcript tails + a git snapshot of the owner's cwd, so the parent can
-            # continue or re-dispatch from the event alone instead of opening files (#116000).
-            from tools.async_delegation_recovery_hints import git_state_hint, transcript_tails
-            if tails := transcript_tails(diagnostics["task_transcripts"]):
-                diagnostics["transcript_tails"] = tails
-            if hint := git_state_hint(task.get("owner_cwd")):
-                diagnostics["git_state_hint"] = hint
             silent = False
             if continuable := continuable_of(conn, delegation_id):
                 diagnostics["resumable_subagent_ids"] = continuable
@@ -785,12 +818,17 @@ def get_durable_delegation(delegation_id: str) -> Optional[dict[str, Any]]:
     with _DB_LOCK, _transaction() as conn:
         row = conn.execute("""SELECT origin_session, state, dispatched_at, completed_at,
                       result_json, delivery_state, delivery_attempts,
-                      origin_session_id
+                      origin_session_id, delivered_at, parent_session_id, task_json
                FROM async_delegations WHERE delegation_id=?""", (delegation_id,)).fetchone()
-    return None if row is None else {
+    if row is None:
+        return None
+    result = redact_child_result(json.loads(row[4])) if row[4] else None
+    model = _json_object(row[10]).get("model") or (result.get("model") if isinstance(result, dict) else None)
+    return {
         "delegation_id": delegation_id, "origin_session": row[0], "state": row[1], "dispatched_at": row[2],
-        "completed_at": row[3], "result": redact_child_result(json.loads(row[4])) if row[4] else None, "delivery_state": row[5],
-        "delivery_attempts": row[6], "origin_session_id": row[7] or ""}
+        "completed_at": row[3], "result": result, "delivery_state": row[5],
+        "delivery_attempts": row[6], "origin_session_id": row[7] or "", "delivered_at": row[8],
+        "parent_session_id": row[9] or "", "model": model}
 
 
 _FAILED_TASK_STATES = frozenset({"error", "failed", "failure", "timeout", "stalled", "unknown", "interrupted"})
