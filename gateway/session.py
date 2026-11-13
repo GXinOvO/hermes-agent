@@ -1202,7 +1202,7 @@ class SessionStore(
         if path is None or not path.is_file():
             return None
         try:
-            with path.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
             value = data.get(self._terminal_cwd_state_key(session_key)) if isinstance(data, dict) else None
             return value if isinstance(value, str) and value else None
@@ -1220,7 +1220,7 @@ class SessionStore(
             try:
                 data: dict[str, str] = {}
                 if path.is_file():
-                    with path.open("r", encoding="utf-8") as handle:
+                    with path.open("r", encoding="utf-8-sig") as handle:
                         loaded = json.load(handle)
                     if isinstance(loaded, dict):
                         data = {str(key): value for key, value in loaded.items() if isinstance(value, str)}
@@ -1248,7 +1248,7 @@ class SessionStore(
             value = getter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key)) \
                 if callable(getter) else None
         except Exception as exc:
-            logger.warning("gateway.session: terminal cwd state read failed: %s", exc)
+            logger.warning("gateway.session: terminal cwd state read failed: %s", exc, exc_info=True)
             value = None
         if isinstance(value, str):
             return value or None  # "" is the cleared marker: the sidecar must not resurrect it
@@ -1262,7 +1262,7 @@ class SessionStore(
                 setter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key), cwd or "")
                 return True
             except Exception as exc:
-                logger.warning("gateway.session: terminal cwd state write failed: %s", exc)
+                logger.warning("gateway.session: terminal cwd state write failed: %s", exc, exc_info=True)
         return self._write_terminal_cwd_fallback(session_key, cwd)
 
     def persist_terminal_cwd(
