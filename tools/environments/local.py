@@ -1213,6 +1213,7 @@ class LocalEnvironment(BaseEnvironment):
             # The command dies with this process however it dies: a SIGKILLed / OOM-killed host left a
             # running `npm run dev` or `sleep` on init. Released once the wait returns (see below).
             own_process_groups([proc.pid])
+            proc._hermes_pgid = proc.pid
             proc._hermes_owned_pgid = proc.pid
             with contextlib.suppress(ProcessLookupError):
                 proc._hermes_pgid = os.getpgid(proc.pid)
@@ -1249,6 +1250,7 @@ class LocalEnvironment(BaseEnvironment):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             **({"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}))
         if not _IS_WINDOWS:
+            proc._hermes_pgid = proc.pid
             with contextlib.suppress(ProcessLookupError):
                 proc._hermes_pgid = os.getpgid(proc.pid)
             proc._hermes_owned_pgid = proc.pid
