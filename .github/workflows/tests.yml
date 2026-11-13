@@ -67,12 +67,9 @@ jobs:
       - name: Install test system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap apparmor-profiles ffmpeg
-          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-          # The owned-process provider creates a second user namespace from inside its
-          # bwrap scope. Ubuntu's AppArmor userns restriction otherwise rejects that
-          # nested operation after the outer probe has passed.
+          sudo apt-get install -y bubblewrap ffmpeg
+          # The owned-process provider needs nested user namespaces. The restrictive
+          # bwrap AppArmor profile denies child capabilities and breaks that contract.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/true
           bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/unshare --user --map-root-user -- /usr/bin/true
@@ -341,6 +338,10 @@ jobs:
           # The upgrade start version is the newest release behind HEAD (tests/e2e/core/upgrade/_install_helpers.upgrade_base).
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Fetch upstream release tags for fork
+        if: github.repository == 'GXinOvO/hermes-agent'
+        run: git fetch --no-tags https://github.com/NousResearch/hermes-agent.git 'refs/tags/v*:refs/tags/v*'
 
       - name: Set up Node
         # `hermes update` builds the web UI / TUI workspaces.

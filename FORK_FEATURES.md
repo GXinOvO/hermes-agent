@@ -28,6 +28,7 @@
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
 | F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
+| F19 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；用 `workflow_dispatch` 触发时贡献者邮箱检查按 `dev` 比对，不再扫全部历史而误报 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；本地测试通过，待随 PR 合入 |
 
 ## 使用时需要记住的边界
 
@@ -116,6 +117,7 @@
 | 编号 | 实现与验证入口 |
 | --- | --- |
 | F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
+| F19 | [升级工作流](.github/workflows/tests.yml) · [贡献者守卫](.github/workflows/repo-guards.yml) · [测试](tests/ci/test_personal_fork_runners.py)；未合入，本地 13 个用例通过（含分叉 tag 抓取不改写已有 tag、PR base 优先于 `dev` 兜底） |
 
 ### 2026-11-10 上游同步兼容
 

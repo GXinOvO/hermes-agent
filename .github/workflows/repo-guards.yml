@@ -147,7 +147,9 @@ jobs:
         id: check-emails
         if: ${{ !cancelled() && (inputs.python || inputs.catalog) }}
         env:
-          _HERMES_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # A fork's PRs target dev, so a dispatched run (no PR base) must diff against origin/dev;
+          # the script's origin/main default then scans every fork commit and reports stale emails.
+          _HERMES_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || (github.repository == 'GXinOvO/hermes-agent' && 'origin/dev') || '' }}
           _HERMES_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/ci/check_contributor_emails.py
 
