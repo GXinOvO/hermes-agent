@@ -1566,7 +1566,7 @@ from hermes_constants import get_hermes_home, get_hermes_home_override, get_proc
 _hermes_home = get_process_hermes_home()
 
 # Load ~/.hermes/.env first: user-managed env files must override stale shell exports on restart.
-from hermes_cli.env_loader import load_hermes_dotenv
+from hermes_cli.env_loader import bridge_config_scalars, load_hermes_dotenv
 _env_path = _hermes_home / '.env'
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve().parents[1] / '.env')
 
@@ -2042,9 +2042,7 @@ def _bridge_auxiliary_config_to_env(_auxiliary_cfg: dict) -> None:
 
 def _bridge_config_to_env(_cfg: dict) -> None:
     """Export config.yaml settings to the env vars os.getenv() consumers read."""
-    for _key, _val in _cfg.items():  # top-level scalars: fallback only, never override .env
-        if isinstance(_val, (str, int, float, bool)) and _key not in os.environ:
-            os.environ[_key] = str(_val)
+    bridge_config_scalars(_cfg, os.environ)  # top-level scalars: fallback only, never override .env
     _terminal_cfg = _cfg.get("terminal", {})
     if _terminal_cfg and isinstance(_terminal_cfg, dict):
         _bridge_terminal_config_to_env(_terminal_cfg)
@@ -2471,11 +2469,11 @@ def _event_media_is_audio(event, index: int) -> bool:
 
 
 def _event_media_is_stt_input(event, index: int) -> bool:
-    """True when an audio attachment should enter the automatic STT pipeline."""
-    message_type = getattr(event, "message_type", None)
-    if message_type in {MessageType.AUDIO, MessageType.DOCUMENT}:
+    """Audio entering auto-STT; a VOICE message's photo/PDF never does (unknown/octet-stream MIME follows VOICE)."""
+    mtype, mime = getattr(event, "message_type", None), _event_media_type_at(event, index).lower()
+    if mtype in {MessageType.AUDIO, MessageType.DOCUMENT}:
         return False
-    return message_type == MessageType.VOICE or _event_media_type_at(event, index).startswith("audio/")
+    return mime.startswith("audio/") or (mtype == MessageType.VOICE and mime in {"", "application/octet-stream"})
 
 
 def _event_media_is_video(event, index: int) -> bool:
@@ -2622,9 +2620,8 @@ def _reap_gateway_turn_processes(
     return killed
 
 
-_TURN_STACK_DUMP_FRAME_MARKERS = (
-    "run_conversation", "run_sync", "_run_sync_with_timeout_lifecycle",
-    "finalize_turn", "end_turn", "run_in_session")
+_TURN_STACK_DUMP_FRAME_MARKERS = ("run_conversation", "run_sync", "_run_sync_with_timeout_lifecycle", "finalize_turn",
+    "end_turn", "run_in_session", "_hmwa_resolve_session", "_hmwa_prepare_turn", "_handle_message_with_agent")
 
 
 def _dump_wedged_turn_stacks(task_id: str) -> None:
