@@ -20,6 +20,11 @@ def _home():
     return str(get_hermes_home().resolve())
 
 
+def _binding_digest(binding):
+    return hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=False).encode()).hexdigest()
+
+
 def result_binding(job):
     """Bind script bytes and the resolved send addresses, including home-channel indirection."""
     from cron import scheduler
@@ -36,10 +41,12 @@ def result_binding(job):
 
 
 def validate_binding(record, job):
-    from cron.scheduler_authority import CronExecutionUnknown
+    from cron.scheduler_authority import CronBindingDrift
     binding = record.get('binding')
-    if binding is not None and binding != result_binding(job):
-        raise CronExecutionUnknown('Cron result input or resolved delivery target changed')
+    if binding is not None:
+        observed = result_binding(job)
+        if binding != observed:
+            raise CronBindingDrift(_binding_digest(binding), _binding_digest(observed))
 
 
 def run_script_job(job, *, execution_id, cancel_event=None):
@@ -186,9 +193,34 @@ def defer_unverified_run(job, execution_id, error, result_ready, fence):
 def local_recovery_state(record, params, journal):
     """Select a sealed result/refusal or park a script whose outcome was never sealed."""
     from cron.jobs import get_job, pause_job
-    from cron.scheduler_authority import CronExecutionUnknown, _pause_identity
+    from cron.scheduler_authority import CronBindingDrift, CronExecutionUnknown, _pause_identity
     validate_record(record, params['job_id'], params['request_id'])
-    validate_binding(record, record.get('job') or get_job(params['job_id']) or {})
+    job = record.get('job') or get_job(params['job_id']) or {}
+    current_job = get_job(params['job_id'])
+    deferred = record.get('recovery_deferred')
+    if (isinstance(deferred, dict) and deferred.get('status') == 'binding_drift'
+            and deferred.get('recorded_binding_sha256') == _binding_digest(record.get('binding'))):
+        if not recovery_job_matches(record, current_job):
+            raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
+        observed = result_binding(current_job)
+        observed_digest = _binding_digest(observed)
+        if observed_digest == deferred.get('observed_binding_sha256'):
+            return {'status': 'deferred'}
+        record.pop('recovery_deferred', None)
+        _save(journal, record)
+    try:
+        validate_binding(record, job)
+    except CronBindingDrift as exc:
+        record['recovery_deferred'] = {
+            'status': 'binding_drift',
+            'recorded_binding_sha256': exc.recorded_binding_sha256,
+            'observed_binding_sha256': exc.observed_binding_sha256,
+        }
+        _save(journal, record)
+        import logging
+        logging.getLogger('cron.scheduler_authority').warning(
+            'Cron receipt recovery deferred after binding drift: %s', journal)
+        return {'status': 'deferred'}
     if 'result' in record:
         if not recovery_job_matches(record, get_job(params['job_id'])):
             raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
