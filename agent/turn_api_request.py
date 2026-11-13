@@ -61,9 +61,20 @@ def _fire_pre_api_request_hook(
     agent: Any, api_kwargs: Any, api_messages: Any, _llm_middleware_trace: Any, *, messages: Any,
     original_user_message: Any, approx_tokens: Any, total_chars: Any, retry_count: Any,
     api_call_count: Any, api_request_id: Any, api_start_time: Any, effective_task_id: Any,
-    turn_id: Any,
+    turn_id: Any, audit_retry_count: Any = None,
 ) -> None:
     from agent.conversation_loop import _system_prompt_for_hooks
+
+    try:
+        from agent.provider_request_audit import route_snapshot
+        callback = getattr(agent, "event_callback", None)
+        if callback is not None and getattr(agent, "platform", "") == "cron":
+            callback("provider.request", route_snapshot(
+                agent, api_request_id=api_request_id, api_call_count=api_call_count,
+                retry_count=retry_count if audit_retry_count is None else audit_retry_count,
+                api_kwargs=api_kwargs))
+    except Exception:
+        logger.debug("provider request audit callback failed", exc_info=True)
 
     try:
         from hermes_cli.lifecycle import has_hook, invoke_hook as _invoke_hook
@@ -178,7 +189,7 @@ def build_api_request(
     agent: Any, *, api_messages: Any, _moa_prepared_request: Any, tools_for_api: Any,
     system_message: Any, messages: Any, original_user_message: Any, approx_tokens: Any,
     total_chars: Any, retry_count: Any, api_call_count: Any, api_request_id: Any,
-    api_start_time: Any, effective_task_id: Any, turn_id: Any,
+    api_start_time: Any, effective_task_id: Any, turn_id: Any, audit_retry_count: Any = None,
 ) -> ApiRequestBuild:
     """Assemble the attempt's request in the original order (every mutation happens BEFORE
     middleware/hooks/debug dumps observe the payload)."""
@@ -196,6 +207,7 @@ def build_api_request(
         total_chars=total_chars, retry_count=retry_count, api_call_count=api_call_count,
         api_request_id=api_request_id, api_start_time=api_start_time,
         effective_task_id=effective_task_id, turn_id=turn_id,
+        audit_retry_count=audit_retry_count,
     )
 
     if env_var_enabled("HERMES_DUMP_REQUESTS"):

@@ -1008,13 +1008,22 @@ class ClientLifecycleMixin:
         # A supplied request-local client was already refreshed in _create_request_anthropic_client.
         if client is None and self.api_mode == "anthropic_messages":
             self._try_refresh_anthropic_client_credentials()
-        # Strips Responses-only kwargs that leak in under an api_mode-flip race.
         from agent.anthropic_adapter import create_anthropic_message
-        # on_response: rate-limit + credits state live in response headers, which the parsed Message drops.
+        from agent.provider_request_audit import observe_sdk_request
+
+        def _observe_call(filtered, call):
+            observe_sdk_request(self, filtered)
+            return call(**filtered)
+
+        def _observe_stream(filtered, stream):
+            observe_sdk_request(self, filtered)
+            return stream(**filtered)
+
         return create_anthropic_message(
             client or self._anthropic_client, api_kwargs, log_prefix=getattr(self, "log_prefix", ""),
             prefer_stream=not bool(getattr(self, "_disable_streaming", False)),
             on_response=self._capture_anthropic_response_headers,
+            stream_wrapper=_observe_stream, call_wrapper=_observe_call,
         )
 
     def _rebuild_anthropic_client(self) -> None:

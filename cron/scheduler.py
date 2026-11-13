@@ -43,6 +43,7 @@ from cron.worker_bootstrap import WORKER_MARKER, finish_worker_boot
 from hermes_constants import get_hermes_home, hermes_home_key
 from hermes_cli.observability.shared_metrics_gateway import note_cron_execution, note_cron_skipped
 from cron.env_settings import cron_env_setting
+from cron.provider_audit import FireAudit
 from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_cli.config import (
     load_config, load_config_readonly)
@@ -1744,7 +1745,13 @@ def _resolve_job_runtime(job: dict, job_id: str, jc: _CronJobConfig) -> tuple[di
         }
         if job.get("base_url"):
             runtime_kwargs["explicit_base_url"] = job.get("base_url")
-        return resolve_runtime_provider(**runtime_kwargs), model
+        runtime = resolve_runtime_provider(**runtime_kwargs)
+        runtime["_cron_requested_model"] = model
+        runtime["_cron_requested_provider"] = str(
+            runtime.get("requested_provider") or runtime.get("provider") or requested or ""
+        )
+        runtime["_cron_requested_api_mode"] = str(runtime.get("api_mode") or "")
+        return runtime, model
     except Exception as resolve_exc:
         # Walk the fallback chain on AuthError AND transient network/DNS failures (e.g. during
         # OAuth refresh); anything else re-raises.
@@ -1773,6 +1780,12 @@ def _resolve_job_runtime(job: dict, job_id: str, jc: _CronJobConfig) -> tuple[di
                 # Named custom entries resolve to the bare "custom" billing class; keep the configured
                 # identity so job sessions record the provider name (#98739).
                 runtime["provider"] = effective_runtime_provider(entry, runtime)
+                runtime["_cron_requested_model"] = model
+                runtime["_cron_requested_provider"] = str(
+                    requested or (jc.model_cfg.get("provider")
+                                  if isinstance(jc.model_cfg, dict) else "") or ""
+                )
+                runtime["_cron_requested_api_mode"] = ""
                 logger.info(
                     "Job '%s': fallback resolved to %s model %s",
                     job_id, runtime.get("provider"), fb_model)
@@ -2434,7 +2447,8 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
     return setup
 
 
-def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup, *, workdir, session_id, session_db):
+def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup, *, workdir, session_id,
+                          session_db, event_callback=None):
     runtime = setup.runtime
     pr = _cfg.get("provider_routing") or {}
     return AIAgent(
@@ -2468,30 +2482,10 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
         platform="cron",
         session_id=session_id,
         session_db=session_db,
+        event_callback=event_callback,
     )
 
 
-class _FireAudit:
-    """One usage_audit.jsonl line per fire (created once the agent exists; fire id + start clock)."""
-
-    def __init__(self, job: dict, job_id: str, model: str):
-        self.job, self.job_id, self.model = job, job_id, model
-        self.fire_id = uuid.uuid4().hex
-        self.t_start = time.monotonic()
-
-    def write(self, result: dict, error: Optional[str]) -> None:
-        _write_usage_audit({
-            "ts": _utcnow_iso_ms(),
-            "job_id": self.job_id,
-            "fire_id": self.fire_id,
-            "prompt_tokens": result.get("prompt_tokens"),
-            "completion_tokens": result.get("completion_tokens"),
-            "total_tokens": result.get("total_tokens"),
-            "response_silent": bool(result.get("response_silent")),
-            "deliver_target": self.job.get("deliver"),
-            "model": self.model or None,
-            "duration_ms": int((time.monotonic() - self.t_start) * 1000),
-            "error": error})
 
 
 
@@ -2541,7 +2535,7 @@ def run_job(
     agent = None
     model = ""
     _session_db = None
-    _audit: Optional[_FireAudit] = None
+    _audit: Optional[FireAudit] = None
     _worker_state: dict = {}
     scope = _CronRunScope(job, job_id, execution_id)
     try:
@@ -2560,10 +2554,20 @@ def run_job(
 
         # Open state.db only after every early-return gate has passed.
         _session_db = _open_cron_session_db(job)
+        _audit = FireAudit(
+            job, job_id, model,
+            requested_provider=str(setup.runtime.get("_cron_requested_provider") or ""),
+            requested_api_mode=str(setup.runtime.get("_cron_requested_api_mode") or ""),
+            requested_model=str(setup.runtime.get("_cron_requested_model") or jc.model),
+            execution_id=str(execution_id or job.get("execution_id") or ""),
+            pre_agent_fallback=bool(setup.fallback_notice),
+        )
         agent = _construct_cron_agent(
             AIAgent, job, _cfg, setup, workdir=scope.workdir, session_id=_cron_session_id,
-            session_db=_session_db)
-        _audit = _FireAudit(job, job_id, model)
+            session_db=_session_db, event_callback=_audit.on_agent_event)
+        agent._cron_requested_model = _audit.requested_model
+        agent._cron_requested_provider = _audit.requested_provider
+        agent._cron_requested_api_mode = _audit.requested_api_mode
 
         result = _run_agent_with_watchdog(
             agent, prompt, job, job_id, job_name, scope.task_id, cancel_event,
@@ -2609,7 +2613,7 @@ def run_job(
             logger.debug("Job '%s': unreachable-failure classification failed", job_id)
         # No audit row when we failed before the agent existed; the audit write must never raise.
         if _audit is not None:
-            _audit.write({}, error_msg)
+            _audit.write({}, e, worker_future=_worker_state.get("future"))
         from cron.scheduler_diagnostics import format_run_error
         output = (
             _run_doc_header(job, f"{job_name} (FAILED)", job_id, prompt)

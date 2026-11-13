@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List
@@ -759,13 +760,24 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
         raise _checkpoint_blocked("codex_app_server owns the authoritative thread and compacts it "
                                   "without a truthful pre-compaction transcript boundary")
     _ensure_codex_session(agent, messages)
+    audit_request_id = f"{turn_id or uuid.uuid4().hex}:app-server"
     try:
         _start_codex_thread(agent)
         wire_model = _codex_wire_model(agent, getattr(agent, "_codex_session_model_provider", None))
-        turn = agent._codex_session.run_turn(
-            user_input=user_message,
-            model=wire_model, reasoning_effort=_codex_turn_effort(agent, wire_model),
-            service_tier=_codex_turn_service_tier(agent))
+        effort = _codex_turn_effort(agent, wire_model)
+        service_tier = _codex_turn_service_tier(agent)
+        from agent.provider_request_audit import emit_external_request, emit_external_response
+        emit_external_request(
+            agent, api_request_id=audit_request_id, api_call_count=1, retry_count=0,
+            api_kwargs={"model": wire_model, "reasoning_effort": effort},
+            observation="codex_app_server_turn")
+        try:
+            turn = agent._codex_session.run_turn(
+                user_input=user_message, model=wire_model, reasoning_effort=effort,
+                service_tier=service_tier)
+        finally:
+            emit_external_response(agent, response=SimpleNamespace(), api_request_id=audit_request_id,
+                                   api_call_count=1, retry_count=0)
     except Exception as exc:
         logger.exception("codex app-server turn failed")
         _close_codex_session(agent)
@@ -887,6 +899,7 @@ class _CodexResponseAssembler:
     terminal_status: str = "completed"
     terminal_usage = terminal_response_id = terminal_incomplete_details = terminal_error = None
     terminal_service_tier = None  # the tier the backend SERVED (may differ from the one requested)
+    terminal_model = None
     # terminal_status defaults to "completed", so settlement needs an explicitly observed response.completed frame.
     saw_response_completed = False
     # An assistant answer message item was announced (output_item.added, not commentary/analysis): its text deltas
@@ -1059,6 +1072,7 @@ class _CodexResponseAssembler:
         if resp_obj is not None:
             self.terminal_usage, self.terminal_response_id = _event_field(resp_obj, "usage"), _event_field(resp_obj, "id")
             self.terminal_service_tier = _event_field(resp_obj, "service_tier")
+            self.terminal_model = _event_field(resp_obj, "model")
             rstatus = _event_field(resp_obj, "status")
             if isinstance(rstatus, str):
                 self.terminal_status = rstatus
@@ -1135,6 +1149,7 @@ class _CodexResponseAssembler:
         return SimpleNamespace(
             output=output, output_text="".join(self.text_deltas), usage=self.terminal_usage, status=self.terminal_status,
             id=self.terminal_response_id, model=self.model, incomplete_details=self.terminal_incomplete_details,
+            _endpoint_model=self.terminal_model,
             error=self.terminal_error, service_tier=self.terminal_service_tier)
 
 
@@ -1287,6 +1302,8 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
             )
         stream_kwargs = _sanitize_consumer_codex_request(agent, next_api_kwargs)
         stream_kwargs["stream"] = True
+        from agent.provider_request_audit import observe_sdk_request
+        observe_sdk_request(agent, stream_kwargs)
         return active_client.responses.create(**bypass_sdk_request_transform(stream_kwargs))
 
     def _log_failure(exc: BaseException) -> None:

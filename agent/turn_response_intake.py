@@ -66,9 +66,20 @@ def _coerce_content_text(raw: Any) -> str:
 def _fire_post_api_request_hook(
     agent: Any, response: Any, assistant_message: Any, finish_reason: Any, *, api_messages: Any,
     api_call_count: Any, api_duration: Any, api_start_time: Any, api_request_id: Any,
-    effective_task_id: Any, turn_id: Any,
+    effective_task_id: Any, turn_id: Any, retry_count: Any = 0, audit_retry_count: Any = None,
 ) -> None:
     from agent.conversation_loop import _moa_reference_metrics_for_hook
+
+    try:
+        callback = getattr(agent, "event_callback", None)
+        if callback is not None and getattr(agent, "platform", "") == "cron":
+            from agent.provider_request_audit import response_snapshot
+            callback("provider.response", response_snapshot(
+                agent, response, api_request_id=api_request_id,
+                api_call_count=api_call_count,
+                retry_count=retry_count if audit_retry_count is None else audit_retry_count))
+    except Exception:
+        logger.debug("provider response audit callback failed", exc_info=True)
 
     try:
         from hermes_cli.lifecycle import has_hook, invoke_hook as _invoke_hook
@@ -165,7 +176,8 @@ def _relay_thinking(agent: Any, content: str, assistant_message: Any = None) -> 
 def normalize_model_response(
     agent: Any, *, response: Any, messages: Any, api_messages: Any, conversation_history: Any,
     api_call_count: Any, api_duration: Any, api_start_time: Any, api_request_id: Any,
-    effective_task_id: Any, turn_id: Any, active_system_prompt: Any = None,
+    effective_task_id: Any, turn_id: Any, active_system_prompt: Any = None, retry_count: Any = 0,
+    audit_retry_count: Any = None,
 ) -> ResponseIntakeVerdict:
     """Normalize ``response`` into ``assistant_message`` (str content, never dict/list) and run
     the post-response hooks and continuation guards, in the original order."""
@@ -192,6 +204,8 @@ def normalize_model_response(
         agent, response, assistant_message, finish_reason, api_messages=api_messages,
         api_call_count=api_call_count, api_duration=api_duration, api_start_time=api_start_time,
         api_request_id=api_request_id, effective_task_id=effective_task_id, turn_id=turn_id,
+        retry_count=retry_count,
+        audit_retry_count=audit_retry_count,
     )
     from hermes_cli.observability.shared_metrics_harness import record_reply_content
     record_reply_content(agent, response, assistant_message)
