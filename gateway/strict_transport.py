@@ -90,6 +90,10 @@ async def prepare_call(adapter, method='send', *, execution_id=None, claim_id=No
     kwargs = copy.deepcopy(kwargs)
     identity = {} if execution_id is None and claim_id is None else {'execution_id': execution_id, 'claim_id': claim_id}
     require_strict_transport(adapter, method)
+    claim_bound = getattr(type(adapter), '_strict_plan_requires_claim', False)
+    if claim_bound and (not isinstance(execution_id, str) or not execution_id
+                        or not isinstance(claim_id, str) or not claim_id):
+        raise ValueError('strict_transport_claim_identity_required')
     plan = None
     try:
         await asyncio.to_thread(_local_payloads, kwargs)
