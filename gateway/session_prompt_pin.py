@@ -64,7 +64,7 @@ class SessionPromptPinMixin:
                 return False
             if entry.prompt_pin != cleaned:
                 self._save_entry(
-                    session_key, entry_data=replace(entry, prompt_pin=cleaned).to_dict(), lock_held=True)
+                    session_key, entry_data=replace(entry, prompt_pin=cleaned).to_routing_dict(), lock_held=True)
                 entry.prompt_pin = cleaned
             return True
 
