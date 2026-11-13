@@ -8,11 +8,6 @@ import signal
 import subprocess
 import sys
 
-spec = importlib.util.spec_from_file_location('protected_scope_init', '/authority/code/scope_init.py')
-scope_init = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(scope_init)
-
-
 def payload_identity():
     os.setgroups([])
     os.setgid(456597)
@@ -51,6 +46,9 @@ def protect_init():
 def main():
     if os.getpid() != 1:
         raise RuntimeError('protected init requires an owned PID namespace')
+    spec = importlib.util.spec_from_file_location('protected_scope_init', '/authority/code/scope_init.py')
+    scope_init = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scope_init)
     subprocess.run(['/bin/mount', '--make-rprivate', '/'], stdin=subprocess.DEVNULL, check=True, timeout=5)
     subprocess.run(['/bin/mount', '-t', 'tmpfs', '-o', 'mode=000,nosuid,nodev,noexec', 'tmpfs', '/authority'], stdin=subprocess.DEVNULL, check=True, timeout=5)
     scope_init.harden = protect_init
