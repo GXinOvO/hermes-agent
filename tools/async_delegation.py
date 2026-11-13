@@ -343,7 +343,12 @@ def recover_abandoned_delegations() -> int:
                FROM async_delegations WHERE state IN ('running','finalizing')""").fetchall()
         for row in rows:
             delegation_id, session_key, origin_ui, parent_id, dispatched_at, pid, started, task_json, origin_sid, result_json, last_state = row
-            if alive(pid, started):
+            try:
+                owner_alive = alive(pid, started)
+            except (OSError, TypeError, ValueError, KeyError, OverflowError):
+                logger.warning("Async delegation %s has unreadable owner liveness; preserve for reconciliation", delegation_id)
+                continue
+            if owner_alive:
                 continue
             error = "Delegation owner exited before recording a terminal result; outcome unknown."
             try:
