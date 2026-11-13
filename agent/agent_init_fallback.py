@@ -40,6 +40,14 @@ def _init_fallback_chain(agent, fallback_model):
             print(f"🔄 Fallback chain ({len(chain)} providers): " + " → ".join(labels))
 
 
+def activate_init_fallback(agent, model, provider):
+    agent._fallback_activated = True
+    if getattr(agent, "platform", None) == "cron":
+        agent._cron_initial_provider_fallback = True
+        agent._cron_initial_fallback_route = (model, provider)
+        agent._cron_initial_requested_api_mode = getattr(agent, "api_mode", None)
+
+
 def recompute_init_fallback_api_mode(agent, fb_client) -> None:
     """Give an init-time fallback its own api_mode instead of the unreachable primary's.
 

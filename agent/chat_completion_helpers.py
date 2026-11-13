@@ -33,6 +33,7 @@ from agent.sdk_transform_bypass import bypass_chat_sdk_request_transform
 from agent.errors import EmptyStreamError
 from agent.chat_completion_local import _streams_llamacpp, stale_giveup
 from agent.chat_completion_headers import _chat_completion_capturing_headers
+from agent.chat_completion_bedrock import converse_call as _bedrock_converse_call
 from agent.chat_completion_stream_monitor import StreamingWaitMonitor, StreamLifetimeExceeded
 from agent.transports.chat_completions import is_router_timeout_shim, router_timeout_shim_may_follow
 from agent.fast_mode import effective_request_overrides
@@ -728,33 +729,6 @@ def _bedrock_reasoning_stale_floor(model_id: object) -> float | None:
     return next((f for f in map(get_reasoning_stale_timeout_floor, candidates) if f is not None), None)
 
 
-def _bedrock_converse_call(api_kwargs: dict, *, stream: bool, on_stream_denied=None):
-    """Pop the Hermes routing keys and call ``converse`` / ``converse_stream`` (boto3 directly) with the
-    adapter's shared recovery: a cachePoint rejection (Nova: toolConfig.tools, #97281) or a replayed sealed
-    reasoning rejection resends once without the offending blocks inside the same attempt; a streaming IAM
-    denial hands off to ``on_stream_denied(client, kwargs, exc)``; a stale connection evicts the cached
-    client so the outer retry builds a fresh pool. Streaming returns the event stream; else a SimpleNamespace."""
-    from agent.bedrock_adapter import (_get_bedrock_runtime_client, invalidate_runtime_client,
-        is_stale_connection_error, is_streaming_access_denied_error, normalize_converse_response,
-        recover_from_cache_point_rejection, recover_from_redacted_reasoning_rejection)
-    region = api_kwargs.pop("__bedrock_region__", "us-east-1")
-    api_kwargs.pop("__bedrock_converse__", None)
-    client = _get_bedrock_runtime_client(region, api_kwargs.get("modelId"))  # the active model's timeout
-    method = client.converse_stream if stream else client.converse
-    finish = (lambda raw: raw.get("stream", [])) if stream else normalize_converse_response
-    try:
-        raw_response = method(**api_kwargs)
-    except Exception as exc:
-        retry_kwargs = (recover_from_cache_point_rejection(exc, api_kwargs)
-                        or recover_from_redacted_reasoning_rejection(exc, api_kwargs))
-        if retry_kwargs is not None:
-            return finish(method(**retry_kwargs))
-        if on_stream_denied is not None and is_streaming_access_denied_error(exc):
-            return on_stream_denied(client, api_kwargs, exc)
-        if is_stale_connection_error(exc):
-            invalidate_runtime_client(region)
-        raise
-    return finish(raw_response)
 
 
 def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
@@ -774,7 +748,7 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
         request_client = make_client("anthropic_messages_request", kind="anthropic_messages")
         return agent._anthropic_messages_create(api_kwargs, client=request_client)
     if agent.api_mode == "bedrock_converse":
-        return _bedrock_converse_call(api_kwargs, stream=False)
+        return _bedrock_converse_call(api_kwargs, stream=False, audit_agent=agent)
     if agent.provider == "moa":
         # MoA is a virtual provider backed by the in-process MoAClient facade — never
         # rebuild a request-local client from the virtual metadata. After a client
@@ -2550,7 +2524,9 @@ class _BedrockStream:
         return _on
 
     def _open_stream(self, next_api_kwargs: dict[str, Any]):
-        return _bedrock_converse_call(dict(next_api_kwargs), stream=True, on_stream_denied=self._fall_back_to_converse)
+        return _bedrock_converse_call(dict(next_api_kwargs), stream=True,
+                                      on_stream_denied=self._fall_back_to_converse,
+                                      audit_agent=self.agent)
 
     def _fall_back_to_converse(self, client, final_kwargs: dict, exc: Exception):
         # InvokeModel-only IAM policies cannot stream; fall back inside the same Relay
@@ -2562,6 +2538,8 @@ class _BedrockStream:
             "   Grant that action to restore streaming output.\n", diagnostic=True)
         logger.info("bedrock: converse_stream denied by IAM (%s) — "
             "using non-streaming converse() on this route.", type(exc).__name__)
+        from agent.provider_request_audit import observe_sdk_request
+        observe_sdk_request(self.agent, final_kwargs)
         return normalize_converse_response(client.converse(**final_kwargs))
 
     def _worker(self):
@@ -2935,6 +2913,8 @@ class _StreamingCall(StreamingWaitMonitor):
         # #93650: as above — the streaming path carries the same bulk
         # messages/tools payload and pays the same client-side walk.
         stream_kwargs = bypass_chat_sdk_request_transform(stream_kwargs, request_client)
+        from agent.provider_request_audit import observe_sdk_request
+        observe_sdk_request(self.agent, stream_kwargs)
         return request_client.chat.completions.create(**stream_kwargs)
 
     def _chat_stream_created(self, raw_stream: Any) -> None:
@@ -3382,6 +3362,8 @@ class _StreamingCall(StreamingWaitMonitor):
         def _open_anthropic_stream(next_api_kwargs: dict[str, Any]):
             final_kwargs = dict(next_api_kwargs)
             sanitize_anthropic_kwargs(final_kwargs, log_prefix=getattr(self.agent, "log_prefix", ""))
+            from agent.provider_request_audit import observe_sdk_request
+            observe_sdk_request(self.agent, final_kwargs)
             manager = request_client.messages.stream(**final_kwargs)
             _stream_context["manager"] = manager
             return normalize_stream_usage(manager.__enter__())

@@ -1550,6 +1550,7 @@ class _LoopState:
     thinking_spinner: Any = None
     api_start_time: Any = None
     retry_count: int = 0
+    audit_retry_count: int = 0
     max_retries: Any = None
     _retry: Any = None
     finish_reason: str = "stop"
@@ -1601,7 +1602,10 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[dict[str, Any]]:
 
     Returns a turn result dict when a phase ends the turn, else None once the loop is left
     (success, a restart armed on ``s._retry``, interrupt, or retries exhausted)."""
+    s.audit_retry_count = 0
     while s.retry_count < s.max_retries:
+        agent._current_api_call_count = s.api_call_count
+        agent._current_retry_count = s.audit_retry_count
         _ng = _run_phase(nous_rate_limit_guard, agent, s)
         if _ng.action == "return":
             return _ng.result
@@ -1625,6 +1629,7 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[dict[str, Any]]:
                 return _ae.result
             if _ae.action == "break":
                 return None
+        s.audit_retry_count += 1
     return None
 
 
