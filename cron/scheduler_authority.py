@@ -10,6 +10,15 @@ class CronExecutionUnknown(RuntimeError):
     """The owner may have accepted this fire; never book it as failed or re-fire."""
 
 
+class CronBindingDrift(CronExecutionUnknown):
+    """A saved result no longer matches the inputs or targets it was bound to."""
+
+    def __init__(self, recorded_binding_sha256, observed_binding_sha256):
+        super().__init__('Cron result input or resolved delivery target changed')
+        self.recorded_binding_sha256 = recorded_binding_sha256
+        self.observed_binding_sha256 = observed_binding_sha256
+
+
 def journal_path(job_id, request_id):
     from hermes_constants import get_hermes_home
     key = hashlib.sha256(json.dumps([job_id, request_id]).encode()).hexdigest()

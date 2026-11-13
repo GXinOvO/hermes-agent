@@ -110,7 +110,11 @@ async def test_bot_mixed_handoff_freezes_owner_and_stops_after_lost_ack(sealed_b
         loop = asyncio.get_running_loop()
         assert await asyncio.to_thread(scheduler.drain_delivery_queue, {Platform.SLACK: adapter}, loop) == 1
         await _settle_quietly(bot)
+        if case in {'normal', 'diagnostic', 'done-recover'} and not stopped:
+            assert await asyncio.to_thread(scheduler.drain_delivery_queue, {Platform.SLACK: adapter}, loop) in (0, 1)
+            await _settle_quietly(bot)
         if case.endswith('-recover'):
+            assert stopped, 'the requested failure point must be exercised'
             monkeypatch.setattr(queue, '_finish', finish)
             with queue._transaction() as conn:
                 conn.execute("UPDATE deliveries SET status='delivering', owner_process_id='dead-fixture', "

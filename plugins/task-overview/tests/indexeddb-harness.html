@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Isolated follow-up storage verification</title></head>
+<body><main><h1>Isolated storage test</h1><pre id="result">Loading</pre></main>
+<script type="module">
+  try {
+    const { openFollowupStore } = await import('../src/followup-indexeddb.mjs')
+    const { createFollowupTask } = await import('../src/followup-tasks.mjs')
+    const name = new URL(location.href).searchParams.get('db')
+    const ref = { connectionId: 'test-source', profile: 'default', targetProfile: 'default', storedId: 'synthetic-session' }
+    const task = createFollowupTask({ id: 'synthetic-task', title: 'Synthetic test', primary: ref, related: [], nextSteps: ['Verify'] }, 1000)
+    const store = await openFollowupStore(indexedDB, name)
+    await store.create(task)
+    store.close()
+    const reopened = await openFollowupStore(indexedDB, name)
+    const rows = await reopened.list()
+    if (rows.length !== 1 || JSON.stringify(rows[0].task) !== JSON.stringify(task) || rows[0].revision !== 1) throw Error('Reopened record differs')
+    reopened.close()
+    document.querySelector('#result').textContent = 'PASS'
+  } catch (error) {
+    document.querySelector('#result').textContent = `FAIL: ${error.message}`
+  }
+</script></body></html>

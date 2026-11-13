@@ -81,8 +81,10 @@ async def owner(home, url, stop='none'):
     env = {key: value for key, value in os.environ.items() if key in {'PATH', 'TZ', 'LANG'}}
     scratch = home / 'child-tmp'
     scratch.mkdir(exist_ok=True)
-    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(home), TMPDIR=str(scratch))
-    proc = await asyncio.create_subprocess_exec(sys.executable,
+    child_python = os.environ.get('HERMES_PYTHON') or sys.executable
+    env.update(HOME=str(home), USERPROFILE=str(home), HERMES_HOME=str(home), TMPDIR=str(scratch),
+               HERMES_PYTHON=child_python)
+    proc = await asyncio.create_subprocess_exec(child_python,
         str(Path(__file__).with_name('strict_fanout_fixture.py')), str(home), url, stop,
         env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await asyncio.wait_for(proc.communicate(), 45)

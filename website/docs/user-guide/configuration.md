@@ -1394,6 +1394,26 @@ The evidence that feeds this guard (which test/lint/build commands ran, which fi
 
 For a user/plugin policy gate at the same point — keep the agent going with your own checks — see the [`pre_verify` hook](./features/hooks.md#pre_verify).
 
+## Handoff-summary guard
+
+A model can answer a turn with a *conversation recap* instead of the answer: an `<analysis>…</analysis><summary>…</summary>` document that retells the session, lists the files it touched and the next step, and never addresses what was asked. The provider reports it as an ordinary answer (`finish_reason=stop`, no tool calls, non-empty content), so without a guard it reaches the user verbatim — it is indistinguishable from a real answer at the transport layer, and it is not Hermes' own compaction summary (that one carries a `[CONTEXT COMPACTION …]` prefix and is recognised separately).
+
+With the guard on (the default), Hermes checks the visible text of a finishing turn for that shape — the analysis/summary wrapper, at least 1500 characters, and three or more recap headings — and:
+
+1. rejects the candidate, keeps it out of the visible reply, and asks the model for the real answer — twice per turn, because a long turn can reach the end, recap, recover on the nudge and recap again later in the same turn;
+2. if both retries are recaps too, ends the turn with an explicit notice saying the reply was withheld, instead of showing the document.
+
+A turn where you asked for a recap yourself (`总结`, `摘要`, `summarize`, `recap`, `handoff`, …) is never gated: the document is the answer there.
+
+The guard also has to break the loop that makes one document into many. A recap that stays in the conversation is a worked example of the pattern, and a later turn copies what it sees — an affected session averages ~1.75 recaps and climbs one per turn. So a withheld document is **not** written back into the history, even as a hidden row; its text stays in the in-memory budget fallback and in the wire capture for post-mortems. The same shape test also elides a document that [`session_search`](./features/session-search.md) replays from an older transcript, because reading a past session back into context is the other way the example re-enters.
+
+```yaml
+agent:
+  handoff_summary_guard: true    # false = never intervene; a recap is shown as-is
+```
+
+The rejected candidate is still persisted as a hidden transcript row (for budget fallback and post-mortems), so "withheld from the chat" does not mean "lost". Turning the guard off restores the previous behaviour with no other change.
+
 ## Standing Goals (`/goal`)
 
 When a standing goal is active, Hermes judges whether each assistant response satisfies it. If not, it feeds a continuation prompt back into the same session and keeps working until the goal is done, the turn budget is exhausted, or the user pauses/clears it. The turn budget is the real backstop — judge failures fail **open** (continue) so a flaky judge never wedges progress.

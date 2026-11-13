@@ -8281,6 +8281,19 @@
             "default": false,
             "title": "Create Missing",
             "type": "boolean"
+          },
+          "require_unadmitted_v1": {
+            "anyOf": [
+              {
+                "const": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Require Unadmitted V1"
           }
         },
         "required": [
@@ -8316,6 +8329,19 @@
           "principal_id": {
             "title": "Principal Id",
             "type": "string"
+          },
+          "unadmitted_v1": {
+            "anyOf": [
+              {
+                "const": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unadmitted V1"
           }
         },
         "required": [

@@ -81,7 +81,12 @@ async def test_bad_abandoned_row_preserves_evidence_and_healthy_bot_drains_once(
     await _settle_quietly(bot)
     assert len(payloads) == len(_admissions(bot)) == 1
     assert _admissions(bot)[0]['payload']['local_automation_v1']['result_recovery_v1'] == 'consume_only'
-    assert queue.get_status(execution_id)['status'] == 'unknown'
+    status = queue.get_status(execution_id)['status']
+    if status == 'pending':
+        assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
+    else:
+        assert status == 'delivered'
+    assert queue.get_status(execution_id)['status'] == 'delivered'
     for key in ('dead-before', 'dead-after'):
         assert queue.get_status(key)['status'] == 'unknown'
         assert queue.enqueue(key, {}, 'do not resend')['status'] == 'unknown'
@@ -91,7 +96,7 @@ async def test_bad_abandoned_row_preserves_evidence_and_healthy_bot_drains_once(
     assert (bot.home / 'producer-calls').read_text().splitlines() == ['executed']
     with sqlite3.connect(bot.home / 'cron' / 'deliveries.db') as db:
         assert set(db.execute('SELECT execution_id, terminal_status FROM delivery_tombstones')) == {
-            (execution_id, 'unknown'), ('dead-before', 'unknown'), ('dead-after', 'unknown')}
+            (execution_id, 'delivered'), ('dead-before', 'unknown'), ('dead-after', 'unknown')}
         assert set(db.execute('SELECT execution_id FROM deliveries')) == {('damaged',), ('live-damaged',)}
     print(json.dumps({'damage': damage, 'consumed': execution_id, 'model_replay': 0,
-                      'script_calls': 1, 'damaged_row_preserved': True, 'unknown_tombstones': 3}))
+                      'script_calls': 1, 'damaged_row_preserved': True, 'unknown_tombstones': 2}))

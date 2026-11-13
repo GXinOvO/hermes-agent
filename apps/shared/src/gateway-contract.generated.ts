@@ -5559,6 +5559,7 @@ export interface CanonicalBotPrepareParams {
   notification_category?: string | null
   sealed_cron_result_v1?: Record<string, unknown> | null
   create_missing?: boolean
+  require_unadmitted_v1?: true | null
 }
 export interface CanonicalBotPrepareResult {
   profile_home: string
@@ -5567,6 +5568,7 @@ export interface CanonicalBotPrepareResult {
   lease_id: string
   authority_epoch: number
   principal_id: string
+  unadmitted_v1?: true | null
 }
 export interface CanonicalBotCancelParams {
   profile?: string | null

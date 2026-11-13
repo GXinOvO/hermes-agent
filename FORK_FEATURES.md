@@ -13,7 +13,7 @@
 | F01 | 文件树彩色类型图标 | 按文件类型和常见文件名区分图标，更容易扫读目录 | Desktop → Files；已合入 |
 | F02 | 鼠标跟随会话焦点开关 | 经过其他会话去 Files 时，可以选择不切走当前会话 | 设置 → 外观 → 鼠标经过时自动切换会话；默认开启，可关闭；已合入 |
 | F03 | 文件名与内容搜索、结果跳转 | 在当前项目或子目录搜文件／正文，逐步显示结果并跳到匹配行列 | Files 顶部搜索按钮；支持大小写、正则、范围；已合入 |
-| F04 | 会话任务概览面板 | 同时看原始目标、当前要求、todo、剩余事项及验收证据 | `task-overview` 插件；需后端和 Desktop 两端加载 |
+| F04 | 会话任务概览与独立事项面板 | 同时看原始目标、当前要求、todo、剩余事项及验收证据；另可建不依赖会话的事项，记名称、说明、备注、下一步、手动状态与优先级，并搜索、筛选、排序 | `task-overview` 插件；需后端和 Desktop 两端加载；事项在 Desktop 面板维护 |
 | F05 | 子 Agent 交付检查与结果找回 | 核对真实产物，复用有效验证证据；错过回调后读取原结果 | `delegate_task(action="result", delegation_id=...)`；结构化交付按需用检查脚本；已合入 |
 | F06 | 后台通知降噪与未完成工作提示 | 已消费的心跳和子任务内部进程退出不反复打断主任务；子任务未做完仍保留进展并提示 | 后台进程／委派自动路径；已合入 |
 | F07 | `execute_code` 显式只读并行批次 | 一次组织多个独立文件读取、搜索或网页读取，保留预算、取消和调用身份 | 本地 transport 的 `hermes_tools.parallel`；需 Agent 显式使用；已合入 |
@@ -28,12 +28,13 @@
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
 | F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
-| F19 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；用 `workflow_dispatch` 触发时贡献者邮箱检查按 `dev` 比对，不再扫全部历史而误报 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；本地测试通过，待随 PR 合入 |
+| F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
+| F20 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；用 `workflow_dispatch` 触发时贡献者邮箱检查按 `dev` 比对，不再扫全部历史而误报 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；本地 13 个用例通过，PR #46 的 Hosted Runner 与平台工作流已运行，完整 Python 基线仍有失败 |
 
 ## 使用时需要记住的边界
 
 - **F03 文件搜索：** 搜索绑定发起时的连接、profile、会话和目录；宿主侧执行有界搜索，支持取消。达到范围、数量或预览上限时会显示不完整，不能把返回片段当成全项目搜尽。
-- **F04 任务概览：** 读取持久化会话和原生 todo，展示实现、测试、审查、集成、启用五个阶段；缺少证据显示未验证。Agent 注册的状态不等于独立验收，插件也不会自动替你关闭任务。安装和两端加载方式见[插件说明](plugins/task-overview/README.md)。
+- **F04 任务概览：** 读取持久化会话和原生 todo，展示实现、测试、审查、集成、启用五个阶段；缺少证据显示未验证。Agent 注册的状态不等于独立验收，插件也不会自动替你关闭任务。安装和两端加载方式见[插件说明](plugins/task-overview/README.md)。事项面板与原生概览相互独立：状态只由本人手动修改，标为完成必须写验收说明，会话空闲、回合结束或绑定会话都不改状态；本版本将会话来源保存为未核实线索，保留事项但禁用面板内跳转。连接标签和会话库标识都不能单独证明来源；同标签后端替换或库副本可能复用它们。
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
 - **F07 并行：** 只开放 `read_file`、`search_files`、`web_search`、`web_extract`，一次最多 16 项、最多 4 个工作线程，结果按输入顺序返回；写入和终端命令不在该并行入口内。格式是 `parallel([{"tool": "read_file", "args": {"path": "..."}}, ...])`，只适用于本地 transport；取消返回时，已开始的读取可能仍在收尾。
 - **F08 工具白名单：** 名称必须是父 Agent 已有且当前启用的精确原生／MCP 工具名；不接收别名和通配符。受限子 Agent 的工具名修复保持 fail-closed，不会把未授权近似名自动改名到允许工具；无限制会话仍保留自动修复路径。限制覆盖工具发现、调用和恢复；显式限制不支持的外部 Agent 路由会被拒绝。它限制 Hermes 工具调用，不代表任意代码的文件系统、网络或凭据隔离，详见[委派说明](website/docs/user-guide/features/delegation.md)。
@@ -46,8 +47,11 @@
 - **F15 终端与项目卷：** [插件说明](plugins/owned-process/README.md)列出 `owned_process` 的命名空间、进程生命周期与依赖要求；失败不回退成本地执行，两种后端均不能据此标为生产采用。进程已退出但输出尚未排空时，`process_running=false, output_pending=true` 表示仍需读取最终输出。`protected_owned` 另需匹配的 authority 包、容器镜像及卷配置，仓库说明仍标为候选、待独立审查和生产采用；最近的受保护读取修复也不能单独证明可信身份完整绑定。合入源码不等于完成启用或整体安全验收。上游同步新增终端环境 `cleanup_stops_processes` 清理契约：仅对该标志为真的后端，在清理成功或确认沙箱已不存在后，把仍经该环境轮询的后台进程结算为 lost；清理失败且沙箱可能仍在运行时不结算，清理失败但沙箱已不存在仍结算。SSH 声明为 false（cleanup 只关 ControlMaster，后台任务继续由下次连接轮询）。owned 后端是否按自身语义覆盖该契约仍待核对。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
-- **F17 fork CI 适配：** PR 工作流及其调用链使用个人公开仓库可用的 GitHub 托管 runner，保留 Linux、Windows、macOS 和相关 ARM 测试，测试分片适配标准机并发；发布、合入和实际云端验证状态以 PR 回执为准。
 - **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，`evals/*/results/` 下的运行产物不计入审查路径，模型输入不包含隐藏检查点；批次内模型输出不完整或编辑片段无法唯一匹配时自动二分重试，单路径仍失败则整次失败。工作流单次超时上限为 60 分钟；全部批次成功后才原子写入本清单并推进隐藏检查点，失败或超时不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
+
+- **F19 交接摘要护栏：** 只按可见答复的形状判定（`<analysis>` 包裹 + `</summary>` + 至少三条九节标题 + ≥1500 字符），不是按模型、provider 或上下文大小判定——实测同一请求在 68k 与 280k tokens 下都出现过，与规模无关。用户明确要求总结、摘要、回顾、交接时（中英文关键词）一律不拦，此时文档就是答案。
+  **根因边界（2026-11-13 实测）：** 这是“种子 + 自我繁殖”两段，不能混为一谈。种子是模型倾向：近 30 天 550 个会话、23,103 次调用里 deepseek-v4.1-flash 出 63 篇（2.73 篇/千次），gpt-6.1-sol 0.13、terra 0.25、mimo 0.55，gpt-6-astra 在 29,180 次调用里为 0——差 21 倍，所以体感是“deepseek 有、别的没有”。繁殖是客户端侧：文档留在上下文里就成了范例，同一会话内实测 1→2→3 篇递增（受影响会话均值约 1.75 篇）；`session_search` 回放旧会话又会把别处的文档搬进来（实测 42KB/53KB 的工具结果里含完整文档）。DSH 等其它客户端没有这两条回路，所以同一模型在那里不出现。**种子本身仍未定位**：整份 payload 原样回放 24 次只出 2 次（约 8%），temperature=0/1、换措辞、截断上下文都不改变它，客户端这一侧已无可控变量；要定位得拿 response ID（如 `021794577272598aef91fec3a81c53339a5720099214cde8963a5`）去查中转上游日志。
+  **实现边界：** 判定基于文本形状，模型换一种写法就绕过了；剪裁只作用于 `session_search` 的回放内容，不改变磁盘上的会话记录。关闭开关见 `agent.handoff_summary_guard`。
 
 ## 追溯证据
 
@@ -58,7 +62,7 @@
 | F01 | [PR #3](https://github.com/GXinOvO/hermes-agent/pull/3)、[#4](https://github.com/GXinOvO/hermes-agent/pull/4) | [文件图标](apps/desktop/src/app/right-sidebar/files/file-icon.tsx) · [测试](apps/desktop/src/app/right-sidebar/files/file-icon.test.tsx) |
 | F02 | [PR #2](https://github.com/GXinOvO/hermes-agent/pull/2)；后续默认值修复见提交索引 | [焦点偏好](apps/desktop/src/store/focus-follows-mouse.ts) · [测试](apps/desktop/src/store/focus-follows-mouse.test.ts) |
 | F03 | [PR #11](https://github.com/GXinOvO/hermes-agent/pull/11)、[#12](https://github.com/GXinOvO/hermes-agent/pull/12)、[#14](https://github.com/GXinOvO/hermes-agent/pull/14)、[#19](https://github.com/GXinOvO/hermes-agent/pull/19)、[#20](https://github.com/GXinOvO/hermes-agent/pull/20) | [搜索面板](apps/desktop/src/app/right-sidebar/files/search-panel.tsx) · [宿主搜索](hermes_cli/file_search.py) · [归属测试](apps/desktop/src/app/right-sidebar/files/search-panel.owner.test.tsx) |
-| F04 | [PR #23](https://github.com/GXinOvO/hermes-agent/pull/23) | [插件说明](plugins/task-overview/README.md) · [测试](plugins/task-overview/tests/core.test.mjs) |
+| F04 | [PR #23](https://github.com/GXinOvO/hermes-agent/pull/23) · [e9b3c66163](https://github.com/GXinOvO/hermes-agent/commit/e9b3c661631baa65dd310547393879e34a09812b) | [插件说明](plugins/task-overview/README.md) · [概览测试](plugins/task-overview/tests/core.test.mjs) · [事项测试](plugins/task-overview/tests/followup-tasks.test.mjs) · [导航测试](plugins/task-overview/tests/followup-navigation.test.mjs) |
 | F05 | [PR #6](https://github.com/GXinOvO/hermes-agent/pull/6)、[#15](https://github.com/GXinOvO/hermes-agent/pull/15)、[#28](https://github.com/GXinOvO/hermes-agent/pull/28)；移植来源 [官方 #136266](https://github.com/NousResearch/hermes-agent/pull/136266)、[#148550](https://github.com/NousResearch/hermes-agent/pull/148550) | [执行指导](skills/autonomous-ai-agents/hermes-agent/references/task-execution.md) · [结果找回](tools/delegate_tool_registry.py) · [材料检查测试](tests/skills/test_delegated_result_lifecycle.py) |
 | F06 | [PR #7](https://github.com/GXinOvO/hermes-agent/pull/7)、[#22](https://github.com/GXinOvO/hermes-agent/pull/22)、[#24](https://github.com/GXinOvO/hermes-agent/pull/24) | [通知策略测试](tests/tui_gateway/test_child_process_notification_policy.py) · [未完成提示测试](tests/tools/test_delegate_incomplete_notice.py) |
 | F07 | [PR #26](https://github.com/GXinOvO/hermes-agent/pull/26)、[#27](https://github.com/GXinOvO/hermes-agent/pull/27)、[#31](https://github.com/GXinOvO/hermes-agent/pull/31) | [批处理实现](tools/code_execution_parallel.py) · [身份测试](tests/tools/test_code_execution_parallel_identity.py) |
@@ -117,7 +121,6 @@
 | 编号 | 实现与验证入口 |
 | --- | --- |
 | F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
-| F19 | [升级工作流](.github/workflows/tests.yml) · [贡献者守卫](.github/workflows/repo-guards.yml) · [测试](tests/ci/test_personal_fork_runners.py)；未合入，本地 13 个用例通过（含分叉 tag 抓取不改写已有 tag、PR base 优先于 `dev` 兜底） |
 
 ### 2026-11-10 上游同步兼容
 

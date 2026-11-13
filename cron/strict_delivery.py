@@ -12,6 +12,12 @@ class UnknownDelivery(str):
     pass
 
 
+class DeferredDelivery(Exception):
+    def __init__(self, message, *, receipt=None):
+        super().__init__(message)
+        self.receipt = receipt
+
+
 def media_identity(content):
     import hashlib
     from gateway.platforms.base import BasePlatformAdapter
@@ -168,7 +174,7 @@ def prepare(job, content, for_failure, *, adapters, loop):
             continue
         if for_failure and platform == delivery.BOT_CHAT_PLATFORM:
             from cron.strict_bot_delivery import suppressed
-            if suppressed(target, job):
+            if suppressed(target, job, content):
                 continue
         if platform in {delivery.BOT_CHAT_PLATFORM, delivery.ROOM_PLATFORM, 'local'}:
             plans.append((target, None, text, []))
@@ -249,10 +255,20 @@ def deliver(job, content, for_failure):
     if not plans:
         job['_notification_all_targets_suppressed'] = True
         return None
+    for _, _, _, frozen in plans:
+        if isinstance(frozen, dict) and frozen.get('kind') == 'bot-chat' and (frozen.get('receipt') or {}).get('refused') is True:
+            try:
+                from cron.strict_bot_delivery import recheck_refusal
+                recheck_refusal(frozen)
+            except Exception:
+                return UnknownDelivery('strict Bot refusal could not be revalidated')
+            return UnknownDelivery('strict Bot delivery refused; not resent')
     if prepared.get('thread') is not None:
         from cron.strict_thread_delivery import deliver as deliver_thread
         try:
             deliver_thread(execution, plans)
+        except DeferredDelivery as exc:
+            return exc
         except Exception as exc:
             logger.exception('Cron thread outcome unknown; no fallback')
             return UnknownDelivery('cron thread outcome unknown: ' + type(exc).__name__)
@@ -262,6 +278,12 @@ def deliver(job, content, for_failure):
         if state is None:
             if platform == delivery.BOT_CHAT_PLATFORM:
                 error = delivery._deliver_to_bot_chat(job, content, target['chat_id'], for_failure=for_failure)
+                if error:
+                    receipt_target = f"bot-chat:{target['chat_id'] or '(own)'}"
+                    receipt = job.get("_bot_chat_delivery_receipts", {}).get(receipt_target)
+                    if receipt and receipt.get("status") in {"queued", "claimed"}:
+                        return DeferredDelivery(str(error))
+                    return UnknownDelivery(str(error))
             elif platform == delivery.ROOM_PLATFORM:
                 error = delivery.deliver_to_room(job, content, target['chat_id'], for_failure=for_failure)
             else:

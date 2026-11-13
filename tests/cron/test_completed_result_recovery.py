@@ -232,6 +232,90 @@ def test_recovery_respects_owner_identity_and_terminal_send(tmp_path, monkeypatc
             assert executions.get_execution(eid)['status'] == case
 
 
+def test_binding_drift_is_parked_after_first_observation(tmp_path, monkeypatch, caplog):
+    import logging
+
+    home = tmp_path / 'profile'
+    (home / 'scripts').mkdir(parents=True)
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    script = home / 'scripts' / 'report.py'
+    script.write_text('print("completed payload")\\n')
+    job = jobs.create_job(prompt=None, script='report.py', no_agent=True,
+                          schedule='every 1h', deliver='telegram:original')
+    eid = job['execution_id'] = executions.create_execution(job['id'], source='test')['id']
+    assert executions.mark_execution_handoff_pending(eid)
+    _crash_after_result(home, job, 'save')
+    script.write_text('print("changed input bytes")\\n')
+
+    caplog.set_level(logging.WARNING, logger='cron.scheduler_authority')
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    journal = scheduler_authority.journal_path(job['id'], eid)
+    record = json.loads(journal.read_text())
+    assert record['recovery_deferred']['status'] == 'binding_drift'
+    assert record['recovery_deferred']['recorded_binding_sha256']
+    assert record['recovery_deferred']['observed_binding_sha256']
+    assert any('Cron receipt recovery deferred' in r.message for r in caplog.records)
+    assert not list(jobs._job_output_dir(job['id']).glob('*.md'))
+    assert delivery_queue.get_status(eid) is None
+
+    caplog.clear()
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    assert not any('Cron receipt recovery deferred' in r.message for r in caplog.records)
+    assert json.loads(journal.read_text())['result'] == record['result']
+    assert not list(jobs._job_output_dir(job['id']).glob('*.md'))
+    assert delivery_queue.get_status(eid) is None
+
+    jobs.update_job(job['id'], {'deliver': 'telegram:new-target'})
+    caplog.clear()
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    assert any('Cron receipt recovery deferred' in r.message for r in caplog.records)
+    assert delivery_queue.get_status(eid) is None
+
+    jobs.update_job(job['id'], {'deliver': 'telegram:original'})
+    script.write_text('print("completed payload")\\n')
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    assert jobs.get_job(job['id'])['repeat']['completed'] == 1
+    assert list(jobs._job_output_dir(job['id']).glob('*.md'))
+    queued = delivery_queue.get_status(eid)
+    assert queued and queued['status'] == 'pending'
+
+
+def test_unsealed_bot_result_is_refused_without_replay(tmp_path, monkeypatch, caplog):
+    import logging
+
+    home = tmp_path / 'profile'
+    (home / 'scripts').mkdir(parents=True)
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    script = home / 'scripts' / 'report.py'
+    original = 'print("completed payload")\\n'
+    script.write_text(original)
+    job = jobs.create_job(prompt=None, script='report.py', no_agent=True,
+                          schedule='every 1h', deliver='bot-chat')
+    eid = job['execution_id'] = executions.create_execution(job['id'], source='test')['id']
+    assert executions.mark_execution_handoff_pending(eid)
+    _crash_after_result(home, job, 'save')
+    journal = scheduler_authority.journal_path(job['id'], eid)
+    record = json.loads(journal.read_text())
+    record['job'].pop('_sealed_bot_result_v1', None)
+    from cron.scheduler_results import _save
+    _save(journal, record)
+    script.write_text('print("changed input bytes")\\n')
+
+    caplog.set_level(logging.WARNING, logger='cron.scheduler_authority')
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    refused = json.loads(journal.read_text())
+    assert refused['recovery_refused']['status'] == 'missing_sealed_provenance'
+    assert any('without sealed Bot provenance' in r.message for r in caplog.records)
+    assert delivery_queue.get_status(eid) is None
+
+    script.write_text(original)
+    caplog.clear()
+    scheduler_authority.reconcile_pending(allow_connect=False)
+    assert not caplog.records
+    assert json.loads(journal.read_text())['recovery_refused'] == refused['recovery_refused']
+    assert delivery_queue.get_status(eid) is None
+
+
 @pytest.mark.parametrize('phase', ['save', 'mark', 'handoff'])
 def test_completed_result_tail_error_defers_instead_of_overwriting_result(tmp_path, monkeypatch, phase):
     home = tmp_path / 'profile'

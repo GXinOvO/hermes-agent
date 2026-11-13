@@ -746,6 +746,20 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
         # Read BEFORE discovery: the previous owner may have exited after accepting.
         receipt = read_delivery_result(home, key)
         target = f"bot-chat:{profile_label}"
+        if receipt is None:
+            from cron.bot_chat_legacy import pending_status
+            parked = pending_status(key, job, content, home, for_failure=for_failure)
+            if parked in {'queued', 'claimed'}:
+                job.setdefault('_bot_chat_delivery_receipts', {})[target] = {'status': parked, 'delivery_id': key}
+                return f'{target} {parked} (receipt {key}): deferred consumer owns delivery'
+            if parked is not None:
+                receipt = read_delivery_result(home, key)
+                if receipt is None and parked == 'suppressed':
+                    job.setdefault('_bot_chat_delivery_receipts', {})[target] = {'status': parked, 'delivery_id': key}
+                    job['_notification_all_targets_suppressed'] = True
+                    return None
+                if receipt is None:
+                    raise ValueError(f'deferred Bot delivery {parked}; outcome unknown, do not resend')
         if receipt is None and suppress_notification:
             # Suppression is a durable disposition, not a send: the failure notice is booked
             # against the job and never handed to the owner (the target profile hides
@@ -1788,9 +1802,15 @@ def _deliver_legacy_result(
         delivery_status = get_status(external_execution)
         if delivery_status and delivery_status["status"] == "suppressed":
             job["_notification_all_targets_suppressed"] = True
-        from cron.jobs import get_job
-        refreshed = get_job(job["id"]) or {}
-        job["last_delivery_queued"] = refreshed.get("last_delivery_queued")
+        if delivery_status and delivery_status["status"] in {"pending", "delivering"}:
+            job["last_delivery_queued"] = {
+                "canonical": {"status": delivery_status["status"], "execution_id": external_execution}}
+        else:
+            if delivery_status and delivery_status["status"] in {"failed", "unknown"}:
+                error = error or str(delivery_status.get("error") or f"delivery {delivery_status['status']}")
+            from cron.jobs import get_job
+            refreshed = get_job(job["id"]) or {}
+            job["last_delivery_queued"] = refreshed.get("last_delivery_queued")
         return error
 
     from gateway.config import load_gateway_config

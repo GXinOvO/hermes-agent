@@ -208,6 +208,41 @@ class CatalogTests(unittest.TestCase):
                 self.assertFalse(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
                 request.assert_not_called()
 
+    def test_desktop_bundles_stay_out_of_catalog_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = lambda *args: subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            run("init", "-q", "-b", "dev")
+            run("config", "user.name", "Test")
+            run("config", "user.email", "test@example.invalid")
+            path = root / "FORK_FEATURES.md"
+            path.write_text("# Catalog\n| F01 | old |\n")
+            run("add", ".")
+            run("commit", "-qm", "baseline")
+            base = run("rev-parse", "HEAD")
+            path.write_text(updater.set_checkpoint(path.read_text(), base))
+            run("add", ".")
+            run("commit", "-qm", "checkpoint")
+            bundle = root / "plugins" / "demo" / "desktop" / "plugin.js"
+            bundle.parent.mkdir(parents=True)
+            bundle.write_text("var vendored='" + "x" * 300_000 + "'\n")
+            (root / "plugins" / "demo" / "src" / "plugin.jsx").parent.mkdir(parents=True)
+            (root / "plugins" / "demo" / "src" / "plugin.jsx").write_text("export const value = 1\n")
+            run("add", ".")
+            run("commit", "-qm", "rebuild bundle")
+            with patch.object(updater, "request_edits", return_value={
+                    "edits": [{"old": "| F01 | old |", "new": "| F01 | reviewed |"}]}) as request:
+                self.assertTrue(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(request.call_args.args[-1]["changed_paths"], "plugins/demo/src/plugin.jsx")
+
+            bundle.write_text("var vendored='" + "y" * 300_000 + "'\n")
+            run("add", ".")
+            run("commit", "-qm", "bundle only")
+            with patch.object(updater, "request_edits") as request:
+                self.assertFalse(updater.update(root, "unused", "http://localhost/v1", "deepseek-v4.1-flash"))
+                request.assert_not_called()
+
     def test_batched_update_is_atomic_when_a_later_batch_fails(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -6,11 +6,15 @@ message and owner before admission. Same-uid file writers remain in the runtime 
 boundary; this is neither a filesystem sandbox nor a new authorization grant.
 """
 from copy import deepcopy
+from contextlib import suppress
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
+
+logger = logging.getLogger('cron.scheduler')
 
 _FIELD = '_sealed_bot_result_v1'
 _EVENT_SEAL = object()
@@ -28,6 +32,17 @@ def _home():
 
 def freeze_completed_result(job, execution_id, record):
     """Called only by the native result writer AFTER its exact tuple was saved."""
+    stage = ['seal']
+    try:
+        return _freeze_completed_result(job, execution_id, record, stage)
+    except Exception as exc:
+        with suppress(Exception):
+            logger.error('Cron result receipt stage=%s job=%s execution=%s error_type=%s',
+                         stage[0], job.get('id'), execution_id, type(exc).__name__)
+        raise
+
+
+def _freeze_completed_result(job, execution_id, record, stage):
     if not any(t.get('platform') == 'bot-chat' for targets in (record.get('binding') or {}).get('targets', {}).values()
                for t in targets):
         return
@@ -61,7 +76,9 @@ def freeze_completed_result(job, execution_id, record):
     # dies before enqueue. Keep the original tuple and binding unchanged.
     record['job'][_FIELD] = deepcopy(value)
     from cron.scheduler_results import _save
-    _save(journal_path(job['id'], execution_id), record)
+    path = journal_path(job['id'], execution_id)
+    stage[0] = 'seal_writeback'
+    _save(path, record)
 
 
 def _definition(job):
@@ -326,7 +343,11 @@ async def prepare(connection, params):
     require_serving(authority)
     authority._require_admission_open()
     create_missing = params.get('create_missing') is True
-    delivery_params = {key: value for key, value in params.items() if key != 'create_missing'}
+    require_unadmitted = params.get('require_unadmitted_v1') is True
+    if require_unadmitted and create_missing:
+        raise RuntimeStoreError('invalid_params')
+    delivery_params = {key: value for key, value in params.items()
+                       if key not in {'create_missing', 'require_unadmitted_v1'}}
     if create_missing and delivery_params.get('session_id') == '':
         delivery_params.pop('session_id')
     home, key, _, _, _ = bot._delivery_params(authority, actor, delivery_params)
@@ -344,12 +365,17 @@ async def prepare(connection, params):
             raise RuntimeStoreError('admission_conflict')
         if not create_missing:
             _require_pinned_target(authority, actor, params.get('session_id'))
+            if bot._pin_committed(authority, {'session_id': params['session_id']}, 'bot:' + key):
+                raise RuntimeStoreError('admission_conflict')
         ref, _, entry = await bot._target(authority, actor)
         if not create_missing and ref.session_id != params.get('session_id'):
             raise RuntimeStoreError('admission_conflict')
         require_serving(authority)
-        return {'profile_home': str(home), 'session_id': ref.session_id, 'live_session_id': entry.session_id,
-                'lease_id': authority.instance_id, 'authority_epoch': authority.epoch, 'principal_id': actor.subject}
+        result = {'profile_home': str(home), 'session_id': ref.session_id, 'live_session_id': entry.session_id,
+                  'lease_id': authority.instance_id, 'authority_epoch': authority.epoch, 'principal_id': actor.subject}
+        if require_unadmitted:
+            result['unadmitted_v1'] = True
+        return result
 
 
 async def deliver_inside(connection, params):

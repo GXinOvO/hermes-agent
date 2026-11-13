@@ -4,9 +4,18 @@ Script-only execution has no session admission. Its prepared record is uncertain
 never permission to repeat the script; only the completed tuple authorizes its tail.
 """
 import json
+import logging
 import hashlib
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+
+logger = logging.getLogger('cron.scheduler')
+
+
+def _log_receipt_error(stage, job, execution_id, exc):
+    with suppress(Exception):
+        logger.error('Cron result receipt stage=%s job=%s execution=%s error_type=%s',
+                     stage, job.get('id'), execution_id, type(exc).__name__)
 
 
 def _save(path, record):
@@ -18,6 +27,11 @@ def _save(path, record):
 def _home():
     from hermes_constants import get_hermes_home
     return str(get_hermes_home().resolve())
+
+
+def _binding_digest(binding):
+    return hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=False).encode()).hexdigest()
 
 
 def result_binding(job):
@@ -36,10 +50,19 @@ def result_binding(job):
 
 
 def validate_binding(record, job):
-    from cron.scheduler_authority import CronExecutionUnknown
+    from cron.scheduler_authority import CronBindingDrift
     binding = record.get('binding')
-    if binding is not None and binding != result_binding(job):
-        raise CronExecutionUnknown('Cron result input or resolved delivery target changed')
+    if binding is not None:
+        observed = result_binding(job)
+        if binding != observed:
+            raise CronBindingDrift(_binding_digest(binding), _binding_digest(observed))
+
+
+def _requires_sealed_bot_result(record):
+    targets = (record.get('binding') or {}).get('targets') or {}
+    return any(isinstance(target, dict) and target.get('platform') == 'bot-chat'
+               for lane in targets.values() if isinstance(lane, list)
+               for target in lane)
 
 
 def run_script_job(job, *, execution_id, cancel_event=None):
@@ -84,7 +107,15 @@ def run_script_job(job, *, execution_id, cancel_event=None):
     record['job'] = dict(job)
     try:
         _save(path, record)
+    except Exception as exc:
+        _log_receipt_error('journal_save', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
+    try:
         from cron.sealed_bot_result import freeze_completed_result
+    except Exception as exc:
+        _log_receipt_error('seal_import', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
+    try:
         freeze_completed_result(job, execution_id, record)
     except Exception as exc:
         raise CronExecutionUnknown('Cron script finished but its result receipt could not be saved') from exc
@@ -144,7 +175,15 @@ def record_completed_result(job, execution_id, result):
     job['_cron_result_binding'] = record['binding']
     try:
         _save(path, record)
+    except Exception as exc:
+        _log_receipt_error('journal_save', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
+    try:
         from cron.sealed_bot_result import freeze_completed_result
+    except Exception as exc:
+        _log_receipt_error('seal_import', job, execution_id, exc)
+        raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
+    try:
         freeze_completed_result(job, execution_id, record)
     except Exception as exc:
         raise CronExecutionUnknown('Cron completed result receipt could not be saved') from exc
@@ -165,7 +204,8 @@ def defer_completed_tail(job, execution_id, error, result_ready, fence):
     if not (result_ready and isinstance(error, Exception)
             and not fence.operator_cancelled() and not fence.lost()):
         return False
-    scheduler.logger.warning('Cron %s completed; tail recovery deferred: %s', job['id'], error)
+    with suppress(Exception):
+        scheduler.logger.warning('Cron %s completed; tail recovery deferred: %s', job['id'], error)
     give_up_execution(execution_id, reason=f'Completed result awaiting tail recovery: {error}')
     return True
 
@@ -178,7 +218,8 @@ def defer_unverified_run(job, execution_id, error, result_ready, fence):
     if isinstance(error, CronExecutionUnknown):
         pause_for_unknown(job['id'], execution_id, str(error))
         give_up_execution(execution_id, reason=str(error))
-        scheduler.logger.error('Cron %s paused with unverified admission: %s', job['id'], error)
+        with suppress(Exception):
+            scheduler.logger.error('Cron %s paused with unverified admission: %s', job['id'], error)
         return True
     return defer_completed_tail(job, execution_id, error, result_ready, fence)
 
@@ -186,9 +227,52 @@ def defer_unverified_run(job, execution_id, error, result_ready, fence):
 def local_recovery_state(record, params, journal):
     """Select a sealed result/refusal or park a script whose outcome was never sealed."""
     from cron.jobs import get_job, pause_job
-    from cron.scheduler_authority import CronExecutionUnknown, _pause_identity
+    from cron.scheduler_authority import CronBindingDrift, CronExecutionUnknown, _pause_identity
     validate_record(record, params['job_id'], params['request_id'])
-    validate_binding(record, record.get('job') or get_job(params['job_id']) or {})
+    job = record.get('job') or get_job(params['job_id']) or {}
+    current_job = get_job(params['job_id'])
+    if 'result' in record and _requires_sealed_bot_result(record):
+        if not recovery_job_matches(record, current_job):
+            raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
+        refused = record.get('recovery_refused')
+        if (isinstance(refused, dict)
+                and refused.get('status') == 'missing_sealed_provenance'):
+            return {'status': 'refused'}
+        if not isinstance((record.get('job') or {}).get('_sealed_bot_result_v1'), dict):
+            record['recovery_refused'] = {
+                'status': 'missing_sealed_provenance',
+                'recorded_binding_sha256': _binding_digest(record.get('binding')),
+                'recorded_result_sha256': _binding_digest(record['result']),
+            }
+            _save(journal, record)
+            import logging
+            logging.getLogger('cron.scheduler_authority').warning(
+                'Cron result recovery refused without sealed Bot provenance: %s', journal)
+            return {'status': 'refused'}
+    deferred = record.get('recovery_deferred')
+    if (isinstance(deferred, dict) and deferred.get('status') == 'binding_drift'
+            and deferred.get('recorded_binding_sha256') == _binding_digest(record.get('binding'))):
+        if not recovery_job_matches(record, current_job):
+            raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
+        observed = result_binding(current_job)
+        observed_digest = _binding_digest(observed)
+        if observed_digest == deferred.get('observed_binding_sha256'):
+            return {'status': 'deferred'}
+        record.pop('recovery_deferred', None)
+        _save(journal, record)
+    try:
+        validate_binding(record, job)
+    except CronBindingDrift as exc:
+        record['recovery_deferred'] = {
+            'status': 'binding_drift',
+            'recorded_binding_sha256': exc.recorded_binding_sha256,
+            'observed_binding_sha256': exc.observed_binding_sha256,
+        }
+        _save(journal, record)
+        import logging
+        logging.getLogger('cron.scheduler_authority').warning(
+            'Cron receipt recovery deferred after binding drift: %s', journal)
+        return {'status': 'deferred'}
     if 'result' in record:
         if not recovery_job_matches(record, get_job(params['job_id'])):
             raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
