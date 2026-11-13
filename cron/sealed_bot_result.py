@@ -6,11 +6,15 @@ message and owner before admission. Same-uid file writers remain in the runtime 
 boundary; this is neither a filesystem sandbox nor a new authorization grant.
 """
 from copy import deepcopy
+from contextlib import suppress
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
+
+logger = logging.getLogger('cron.scheduler')
 
 _FIELD = '_sealed_bot_result_v1'
 _EVENT_SEAL = object()
@@ -28,6 +32,17 @@ def _home():
 
 def freeze_completed_result(job, execution_id, record):
     """Called only by the native result writer AFTER its exact tuple was saved."""
+    stage = ['seal']
+    try:
+        return _freeze_completed_result(job, execution_id, record, stage)
+    except Exception as exc:
+        with suppress(Exception):
+            logger.error('Cron result receipt stage=%s job=%s execution=%s error_type=%s',
+                         stage[0], job.get('id'), execution_id, type(exc).__name__)
+        raise
+
+
+def _freeze_completed_result(job, execution_id, record, stage):
     if not any(t.get('platform') == 'bot-chat' for targets in (record.get('binding') or {}).get('targets', {}).values()
                for t in targets):
         return
@@ -61,7 +76,9 @@ def freeze_completed_result(job, execution_id, record):
     # dies before enqueue. Keep the original tuple and binding unchanged.
     record['job'][_FIELD] = deepcopy(value)
     from cron.scheduler_results import _save
-    _save(journal_path(job['id'], execution_id), record)
+    path = journal_path(job['id'], execution_id)
+    stage[0] = 'seal_writeback'
+    _save(path, record)
 
 
 def _definition(job):
