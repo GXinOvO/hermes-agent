@@ -49,6 +49,13 @@ def validate_binding(record, job):
             raise CronBindingDrift(_binding_digest(binding), _binding_digest(observed))
 
 
+def _requires_sealed_bot_result(record):
+    targets = (record.get('binding') or {}).get('targets') or {}
+    return any(isinstance(target, dict) and target.get('platform') == 'bot-chat'
+               for lane in targets.values() if isinstance(lane, list)
+               for target in lane)
+
+
 def run_script_job(job, *, execution_id, cancel_event=None):
     """Keep the low-level tuple API; explicit production attempts acquire a durable receipt."""
     from cron import scheduler
@@ -197,6 +204,24 @@ def local_recovery_state(record, params, journal):
     validate_record(record, params['job_id'], params['request_id'])
     job = record.get('job') or get_job(params['job_id']) or {}
     current_job = get_job(params['job_id'])
+    if 'result' in record and _requires_sealed_bot_result(record):
+        if not recovery_job_matches(record, current_job):
+            raise CronExecutionUnknown('Cron completed result retained after job source/target changed')
+        refused = record.get('recovery_refused')
+        if (isinstance(refused, dict)
+                and refused.get('status') == 'missing_sealed_provenance'):
+            return {'status': 'refused'}
+        if not isinstance((record.get('job') or {}).get('_sealed_bot_result_v1'), dict):
+            record['recovery_refused'] = {
+                'status': 'missing_sealed_provenance',
+                'recorded_binding_sha256': _binding_digest(record.get('binding')),
+                'recorded_result_sha256': _binding_digest(record['result']),
+            }
+            _save(journal, record)
+            import logging
+            logging.getLogger('cron.scheduler_authority').warning(
+                'Cron result recovery refused without sealed Bot provenance: %s', journal)
+            return {'status': 'refused'}
     deferred = record.get('recovery_deferred')
     if (isinstance(deferred, dict) and deferred.get('status') == 'binding_drift'
             and deferred.get('recorded_binding_sha256') == _binding_digest(record.get('binding'))):
