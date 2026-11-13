@@ -143,9 +143,42 @@ def bind_row(row, prepared):
     if saved is None:
         return prepared
     saved = validate(json.loads(saved))
-    if prepared is None or encode(saved['binding']) != encode(prepared['binding']):
+    if prepared is None:
         raise ValueError('strict thread saved plan drift')
-    return saved
+    if encode(saved['binding']) == encode(prepared['binding']):
+        return saved
+    validate(prepared)
+    if saved['binding']['version'] != 2 or len(saved['binding']['targets']) != len(prepared['binding']['targets']):
+        raise ValueError('strict thread saved plan drift')
+    merged = json.loads(json.dumps(prepared))
+    merged['items'] = json.loads(json.dumps(saved['items']))
+    normalized = json.loads(json.dumps(prepared['binding']))
+    for saved_target, candidate, item in zip(saved['binding']['targets'], normalized['targets'], saved['items']):
+        if encode(saved_target) == encode(candidate):
+            continue
+        if saved_target['kind'] != 'bot-chat' or candidate['kind'] != 'bot-chat' or item['stage'] != 'initial':
+            raise ValueError('strict thread saved plan drift')
+        old = saved_target['plan']['identity']
+        new = candidate['plan']['identity']
+        old_endpoint, new_endpoint = old['endpoint'], new['endpoint']
+        old_ref = old['params']['sealed_cron_result_v1']
+        new_ref = new['params']['sealed_cron_result_v1']
+        if (old_endpoint['instance_id'] != old_ref['owner_instance_id']
+                or new_endpoint['instance_id'] != new_ref['owner_instance_id']):
+            raise ValueError('strict thread saved plan drift')
+        for key in ('instance_id', 'authority_epoch', 'api_origin'):
+            new_endpoint[key] = old_endpoint[key]
+        new_ref['owner_instance_id'] = old_ref['owner_instance_id']
+        candidate['plan']['sha256'] = digest(new)
+    if encode(saved['binding']) != encode(normalized):
+        raise ValueError('strict thread saved plan drift')
+    merged['binding_sha256'] = digest(merged['binding'])
+    for target, item in zip(merged['binding']['targets'], merged['items']):
+        if item['receipt'] is not None:
+            item['receipt_sha256'] = digest({'binding': merged['binding_sha256'],
+                                             'target': target, 'ack': item['receipt']})
+    merged = validate(merged)
+    return merged
 
 
 def validate_row(row):
@@ -191,11 +224,16 @@ def transition(execution_id, index, before, after, receipt=None):
         kind = target.get('kind', 'thread') if value['binding']['version'] == 2 else 'thread'
         allowed = ({('initial', 'create_claimed'), ('create_claimed', 'root_acked'),
                     ('root_acked', 'body_claimed'), ('body_claimed', 'done')} if kind in {'thread', 'native-thread'}
-                   else {('initial', 'target_claimed'), ('target_claimed', 'done')})
+                   else {('initial', 'target_claimed'), ('target_claimed', 'initial'), ('target_claimed', 'done')})
+        if kind == 'bot-chat':
+            allowed |= {('target_claimed', 'bot_waiting'), ('bot_waiting', 'done')}
         if (before, after) not in allowed:
             return False
         item['stage'] = after
-        if receipt is not None:
+        if after == 'initial':
+            item['receipt'] = None
+            item['receipt_sha256'] = None
+        elif receipt is not None:
             item['receipt'] = receipt
             item['receipt_sha256'] = digest({'binding': value['binding_sha256'],
                                            'target': value['binding']['targets'][index], 'ack': receipt})
@@ -231,6 +269,7 @@ def _deliver_thread(execution, index, state, frozen, item):
 def deliver(execution, plans):
     from cron import delivery_queue as queue
     from hermes_constants import get_hermes_home
+    from cron.strict_delivery import DeferredDelivery
     saved = validate_row(queue.get_status(execution))
     if saved['binding']['home'] != str(get_hermes_home().resolve()):
         raise RuntimeError('strict thread profile changed after claim')
@@ -245,10 +284,22 @@ def deliver(execution, plans):
         elif kind == 'native-thread':
             from cron.strict_native_delivery import deliver_thread
             deliver_thread(execution, index, state, frozen, item)
+        elif kind == 'bot-chat' and item['stage'] == 'bot_waiting':
+            if frozen.get('receipt') is None:
+                raise RuntimeError('strict Bot receipt missing after admission; do not resend')
+            receipt = send_target(state, frozen)
+            if not transition(execution, index, 'bot_waiting', 'done', receipt):
+                raise RuntimeError('strict Bot deferred settlement lost')
         else:
             if not queue.claim_fanout_target(execution, index):
                 raise RuntimeError('strict fanout target claim lost')
-            receipt = send_target(state, frozen)
+            try:
+                receipt = send_target(state, frozen)
+            except DeferredDelivery as exc:
+                after = 'bot_waiting' if kind == 'bot-chat' else 'initial'
+                if not transition(execution, index, 'target_claimed', after, exc.receipt):
+                    raise RuntimeError('strict fanout deferred target reset lost')
+                raise
             if not transition(execution, index, 'target_claimed', 'done', receipt):
                 raise RuntimeError('strict fanout target settlement lost')
 
@@ -285,9 +336,19 @@ def _fanout_item(item, target, binding_hash):
     if not isinstance(item, dict) or set(item) != {'stage', 'receipt', 'receipt_sha256'}:
         raise ValueError('invalid strict fanout item')
     stage = item['stage']
-    if not isinstance(stage, str) or stage not in {'initial', 'target_claimed', 'done'}:
+    if not isinstance(stage, str) or stage not in ({'initial', 'target_claimed', 'bot_waiting', 'done'}
+                                                   if kind == 'bot-chat' else {'initial', 'target_claimed', 'done'}):
         raise ValueError('invalid strict fanout stage')
-    if stage != 'done':
+    if stage == 'bot_waiting':
+        receipt = item['receipt']
+        params = target['plan']['identity']['params']
+        if (not isinstance(receipt, dict) or set(receipt) != {'ok', 'delivery_id', 'session_id', 'admission_id'}
+                or receipt['ok'] is not True or receipt['delivery_id'] != params['id']
+                or receipt['session_id'] != params['session_id']
+                or not isinstance(receipt['admission_id'], str) or not receipt['admission_id']
+                or item['receipt_sha256'] != digest({'binding': binding_hash, 'target': target, 'ack': receipt})):
+            raise ValueError('invalid strict Bot waiting receipt')
+    elif stage != 'done':
         if item['receipt'] is not None or item['receipt_sha256'] is not None:
             raise ValueError('unacknowledged strict fanout receipt')
     elif (not isinstance(item['receipt'], dict) or item['receipt'].get('ok') is not True

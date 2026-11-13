@@ -326,7 +326,11 @@ async def prepare(connection, params):
     require_serving(authority)
     authority._require_admission_open()
     create_missing = params.get('create_missing') is True
-    delivery_params = {key: value for key, value in params.items() if key != 'create_missing'}
+    require_unadmitted = params.get('require_unadmitted_v1') is True
+    if require_unadmitted and create_missing:
+        raise RuntimeStoreError('invalid_params')
+    delivery_params = {key: value for key, value in params.items()
+                       if key not in {'create_missing', 'require_unadmitted_v1'}}
     if create_missing and delivery_params.get('session_id') == '':
         delivery_params.pop('session_id')
     home, key, _, _, _ = bot._delivery_params(authority, actor, delivery_params)
@@ -344,12 +348,17 @@ async def prepare(connection, params):
             raise RuntimeStoreError('admission_conflict')
         if not create_missing:
             _require_pinned_target(authority, actor, params.get('session_id'))
+            if bot._pin_committed(authority, {'session_id': params['session_id']}, 'bot:' + key):
+                raise RuntimeStoreError('admission_conflict')
         ref, _, entry = await bot._target(authority, actor)
         if not create_missing and ref.session_id != params.get('session_id'):
             raise RuntimeStoreError('admission_conflict')
         require_serving(authority)
-        return {'profile_home': str(home), 'session_id': ref.session_id, 'live_session_id': entry.session_id,
-                'lease_id': authority.instance_id, 'authority_epoch': authority.epoch, 'principal_id': actor.subject}
+        result = {'profile_home': str(home), 'session_id': ref.session_id, 'live_session_id': entry.session_id,
+                  'lease_id': authority.instance_id, 'authority_epoch': authority.epoch, 'principal_id': actor.subject}
+        if require_unadmitted:
+            result['unadmitted_v1'] = True
+        return result
 
 
 async def deliver_inside(connection, params):

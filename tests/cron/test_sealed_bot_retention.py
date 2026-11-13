@@ -77,7 +77,8 @@ async def test_native_seal_consumes_once_after_history_eviction(sealed_bot, monk
         assert json.loads(pending.read_text())['status'] == 'queued'
         monkeypatch.setattr(queue, 'MAX_TERMINAL_DELIVERIES', 0)
         queue.recover_abandoned()
-        assert 'job_json' not in queue.get_status(row['execution_id'])
+        assert queue.get_status(row['execution_id'])['status'] == 'pending'
+        assert 'job_json' in queue.get_status(row['execution_id'])
     await asyncio.to_thread(_evict, bot.home, monkeypatch)
     assert executions.get_execution(row['execution_id']) is None, 'ordinary history cap must still evict'
     monkeypatch.setattr(mailbox, 'find_canonical_live_owner', live)
@@ -102,6 +103,8 @@ async def test_native_seal_consumes_once_after_history_eviction(sealed_bot, monk
     answer = await asyncio.to_thread(mailbox.authority_delivery, bot.home, payloads[0])
     assert answer['admission_id'] == admission['admission_id']
     await asyncio.to_thread(drain_legacy_pending)
+    assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
+    assert queue.get_status(row['execution_id'])['status'] == 'delivered'
     assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 0
     assert len(_admissions(bot)) == 1
     _assert_no_replay(bot, agent)
@@ -184,8 +187,9 @@ async def test_legacy_pending_seal_retains_only_its_required_native_row(sealed_b
     else:
         assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     await _settle_quietly(bot)
+    assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     assert len(payloads) == len(_admissions(bot)) == 1
-    assert queue.get_status(row['execution_id'])['status'] == 'unknown'
+    assert queue.get_status(row['execution_id'])['status'] == 'delivered'
     other = executions.create_execution('ordinary-history', source='control')
     executions.finish_execution(other['id'], success=True)
     assert executions.get_execution(row['execution_id']) is None
@@ -203,8 +207,8 @@ def test_real_gateway_boot_consumes_evicted_result_and_reopens_receipt(tmp_path,
     import threading
     from http.server import ThreadingHTTPServer
     from tests.gateway.fixtures.local_recovery_probe import Model, child_env, daemon, rpc, websocket
-    from tests.waiting import async_wait_until
-    from cron import executions, jobs, scheduler
+    from tests.waiting import async_wait_until, wait_until
+    from cron import delivery_queue, executions, jobs, scheduler
     from cron.scheduler_provider import _profile_cron_scope
     from tools.bot_live_delivery import authority_delivery
     from types import SimpleNamespace
@@ -269,6 +273,9 @@ def test_real_gateway_boot_consumes_evicted_result_and_reopens_receipt(tmp_path,
             assert receipt['status'] == 'settled' and receipt['admission_id'] == admission['admission_id']
             assert receipt['reply'] == first_receipt['reply']
             with _profile_cron_scope(home):
+                scheduler.drain_delivery_queue(None, None)
+                wait_until(lambda: (delivery_queue.get_status(queued['execution_id']) or {}).get('status') == 'delivered',
+                           timeout=30, what='settled Bot receipt to reach the delivery ledger')
                 assert scheduler.drain_delivery_queue(None, None) == 0
             assert len(_daemon_rows(home)) == len(peer.requests) == 1
         assert pids[0] != pids[1]
@@ -323,6 +330,7 @@ async def test_canonical_row_missing_recovery_keeps_the_completed_bot_result(sea
     assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     await _settle_quietly(bot)
     await asyncio.to_thread(_recover_in_fresh_reader, bot.home)
+    assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 1
     assert await asyncio.to_thread(scheduler.drain_delivery_queue, None, None) == 0
     assert len(payloads) == len(_admissions(bot)) == 1
     assert (bot.home / 'producer-calls').read_text().splitlines() == ['executed']

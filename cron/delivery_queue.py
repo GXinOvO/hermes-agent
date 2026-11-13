@@ -294,13 +294,23 @@ def claim_fanout_target(execution_id, index):
 
 
 def _finish(execution_id: str, *, error: Optional[str], suppressed: bool = False) -> bool:
-    from cron.strict_delivery import UnknownDelivery
-    status = "unknown" if isinstance(error, UnknownDelivery) else "failed" if error else "suppressed" if suppressed else "delivered"
+    from cron.strict_delivery import DeferredDelivery, UnknownDelivery
     safe_error = (
         redact_sensitive_text(str(error), force=True, redact_url_credentials=True)
         if error
         else None
     )
+    if isinstance(error, DeferredDelivery):
+        with _transaction() as conn:
+            cur = conn.execute(
+                """UPDATE deliveries SET status='pending', owner_process_id=NULL,
+                       owner_pid=NULL, owner_started_at=NULL, finished_at=NULL, error=NULL
+                   WHERE execution_id=? AND status='delivering'
+                     AND owner_process_id=? AND owner_pid=?""",
+                (execution_id, _PROCESS_ID, os.getpid()),
+            )
+        return cur.rowcount == 1
+    status = "unknown" if isinstance(error, UnknownDelivery) else "failed" if error else "suppressed" if suppressed else "delivered"
     with _transaction() as conn:
         cur = conn.execute(
             """UPDATE deliveries SET status=?, finished_at=?, error=?
@@ -421,6 +431,9 @@ def _prepared_next(prepare, excluded):
                 bind_row(row, plan.get('thread'))
             if media_identity(row['content']) != media:
                 raise RuntimeError('cron media changed during preflight')
+            from cron.strict_bot_delivery import waiting
+            if waiting(row, plan):
+                continue
         except Exception:
             logger.warning('Cron delivery %s retained pending: transport preflight refused', row['execution_id'], exc_info=True)
             continue
@@ -453,10 +466,13 @@ def drain(
                     with delivery_scope(row['execution_id'], plan):
                         error = send(row["job"], row["content"], bool(row["for_failure"]))
             except BaseException as exc:
-                error = f"{type(exc).__name__}: {exc}"
-                if prepare is not None:
-                    from cron.strict_delivery import UnknownDelivery
-                    error = UnknownDelivery(error)
+                from cron.strict_delivery import DeferredDelivery, UnknownDelivery
+                if isinstance(exc, DeferredDelivery):
+                    error = exc
+                else:
+                    error = f"{type(exc).__name__}: {exc}"
+                    if prepare is not None:
+                        error = UnknownDelivery(error)
             if _finish(row["execution_id"], error=error,
                        suppressed=bool(row["job"].get("_notification_all_targets_suppressed"))):
                 from cron.delivery_outcome import settle_quietly

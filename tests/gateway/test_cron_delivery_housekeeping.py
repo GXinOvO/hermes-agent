@@ -3,6 +3,8 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
+
 from cron import scheduler
 from cron import scheduler_preflight as sched_preflight
 import gateway.run as gateway_run
@@ -161,7 +163,8 @@ def test_multiplex_housekeeping_uses_primary_routes_for_credentialless_satellite
     ]
 
 
-def test_primary_drain_delivers_credentialless_satellite_queue_row_through_primary_adapter(
+@pytest.mark.asyncio
+async def test_primary_drain_delivers_credentialless_satellite_queue_row_through_primary_adapter(
     tmp_path, monkeypatch,
 ):
     """Regression for #115656 (the chain #101113's tests skipped): an external restart-safe worker
@@ -171,7 +174,6 @@ def test_primary_drain_delivers_credentialless_satellite_queue_row_through_prima
     plain adapter dict and reported ``No adapter configured for discord``.
     """
     import asyncio
-    import threading
     from unittest.mock import patch
 
     import hermes_yaml as yaml
@@ -179,26 +181,22 @@ def test_primary_drain_delivers_credentialless_satellite_queue_row_through_prima
     from cron import delivery_queue
     from gateway.config import Platform
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tests.gateway import strict_native_thread_support as native
 
     root = tmp_path / "root"
     satellite_home = root / "profiles" / "satellite"
     (satellite_home / "cron").mkdir(parents=True)
     (root / "config.yaml").write_text(yaml.safe_dump({
         "gateway": {"multiplex_profiles": True, "profile_routes": [
-            {"platform": "discord", "guild_id": "G1", "chat_id": "C1", "profile": "satellite"}]},
+            {"platform": "discord", "guild_id": "444", "chat_id": "555", "profile": "satellite"}]},
     }), encoding="utf-8")
     # The satellite names its home channel but holds no token: block present, ``enabled`` False.
     (satellite_home / "config.yaml").write_text(
-        yaml.safe_dump({"platforms": {"discord": {"home_channel": "C1"}}}), encoding="utf-8")
+        yaml.safe_dump({"platforms": {"discord": {"home_channel": "555"}}}), encoding="utf-8")
     monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: root)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
 
-    sent, standalone = [], []
-
-    class PrimaryDiscord:
-        async def send(self, chat_id, content, metadata=None):
-            sent.append(chat_id)
-            return {"success": True, "message_id": "m1"}
+    standalone = []
 
     async def _standalone(platform, pconfig, chat_id, text, **kwargs):
         standalone.append(chat_id)
@@ -207,20 +205,17 @@ def test_primary_drain_delivers_credentialless_satellite_queue_row_through_prima
     # The external worker: no adapters, queues under the OWNING (satellite) home.
     token = set_hermes_home_override(str(satellite_home))
     try:
-        delivery_queue.enqueue("exec-1", {"id": "job1", "name": "probe", "deliver": "discord:C1"}, "hello")
+        delivery_queue.enqueue("exec-1", {"id": "job1", "name": "probe", "deliver": "discord:555"}, "hello")
     finally:
         reset_hermes_home_override(token)
 
-    loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
     runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=True), _profile_adapters={"satellite": {}})
     monkeypatch.setattr(gateway_run, "_handoff_watch_scopes", lambda _r: [("satellite", satellite_home)])
-    try:
+    async with native.peer('discord') as wire, native.connected('discord', wire, monkeypatch) as (adapter, _state):
         with patch("tools.send_message_tool._send_to_platform", _standalone), \
              patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}):
-            gateway_run._drain_restart_safe_cron_deliveries({Platform.DISCORD: PrimaryDiscord()}, loop, runner)
-    finally:
-        loop.call_soon_threadsafe(loop.stop)
+            await asyncio.to_thread(gateway_run._drain_restart_safe_cron_deliveries,
+                                    {Platform.DISCORD: adapter}, asyncio.get_running_loop(), runner)
 
     token = set_hermes_home_override(str(satellite_home))
     try:
@@ -228,7 +223,9 @@ def test_primary_drain_delivers_credentialless_satellite_queue_row_through_prima
     finally:
         reset_hermes_home_override(token)
     assert row["status"] == "delivered", row
-    assert sent == ["C1"] and standalone == []
+    assert [(event['method'], event['path'], event['fields'].get('content')) for event in wire.events] == [
+        ('POST', '/channels/555/messages', 'hello')]
+    assert standalone == []
 
 
 def test_a_queued_worker_delivery_is_drained_before_the_next_housekeeping_tick(tmp_path, monkeypatch):
