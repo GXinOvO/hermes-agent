@@ -1002,11 +1002,9 @@ def _kill_process_group_posix(proc) -> None:
     PID-reuse guard (#43044): the group is only signalled while its leader's start
     time still matches the spawn-time baseline — a recycled PGID is never killed."""
     expected_start = getattr(proc, "_hermes_pgid_start", None)
-    leader_gone = False
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
-        leader_gone = True
         if (pgid := getattr(proc, "_hermes_pgid", None)) is None:
             raise
     if not _leader_is_ours(pgid, expected_start):
@@ -1028,13 +1026,6 @@ def _kill_process_group_posix(proc) -> None:
         descendants = psutil.Process(proc.pid).children(recursive=True)
     except Exception:
         descendants = []
-    if leader_gone:
-        if pgid == os.getpgrp():
-            _kill_known_pids(proc, descendants)
-        else:
-            _kill_known_pids(proc, (*_process_group_members(pgid), *descendants))
-        _sweep_escaped_descendants(descendants, pgid)
-        return
     if pgid == os.getpgrp():
         # The child shares OUR group (a spawner that skipped setsid — the Darwin gateway's
         # posix_spawn shim, #107029): killpg would signal the caller itself. Tear down by PID.
