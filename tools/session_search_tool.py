@@ -241,6 +241,17 @@ def _shape_message(m: dict[str, Any], anchor_id: Optional[int] = None,
     if isinstance(content, str) and "\x1b" in content:  # archived terminal output carries ANSI
         from tools.ansi_strip import strip_ansi
         content = strip_ansi(content)
+    if isinstance(content, str) and "<analysis" in content.lower():
+        # A past turn answered with a model-written handoff document instead of an answer. Handing
+        # that back verbatim makes it a worked example in THIS turn's context, and models copy what
+        # they see (affected sessions average ~1.75 recaps, climbing 1 -> 2 -> 3). Elide the
+        # document, keep the surrounding transcript real.
+        from agent.handoff_summary import redact_handoff_documents
+
+        content, elided = redact_handoff_documents(content)
+        if elided:
+            logging.debug("elided %d handoff document(s) from a replayed transcript", elided)
+
     entry = {"id": m.get("id"), "role": m.get("role"), "content": content, "timestamp": m.get("timestamp")}
     entry.update({k: m.get(k) for k in ("tool_name", "tool_calls", "tool_call_id") if m.get(k)})
     if anchor_id is not None and m.get("id") == anchor_id:
