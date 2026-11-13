@@ -114,6 +114,9 @@ class LongLivedProcessMixin:
             proc = self._long_lived().pop(name, None)
         if proc is None:
             return False
+        prepare = getattr(self, "_prepare_process_stop", None)
+        if prepare is not None:
+            prepare(proc)
         was_running = proc.poll() is None
         self._reap_long_lived(proc, scope)
         return was_running
@@ -160,6 +163,9 @@ class LongLivedProcessMixin:
         service (pid recorded in the sandbox at spawn) is stopped there first: the local client's
         death need not stop it."""
         self._stop_remote_service(proc, scope)
+        prepare = getattr(self, "_prepare_process_stop", None)
+        if prepare is not None:
+            prepare(proc)
         owned_pgid = getattr(proc, "_hermes_owned_pgid", None)
         if proc.poll() is None or owned_pgid is not None:
             self._kill_process(proc)  # type: ignore[attr-defined]  # signals the group even with the leader gone

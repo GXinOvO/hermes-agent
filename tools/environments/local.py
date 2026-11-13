@@ -1010,7 +1010,9 @@ def _kill_process_group_posix(proc) -> None:
         leader_gone = True
         if (pgid := getattr(proc, "_hermes_pgid", None)) is None:
             raise
-    if not _leader_is_ours(pgid, expected_start):
+    captured_members = getattr(proc, "_hermes_group_members", None)
+    group_known_before_reap = leader_gone and _IS_MACOS and captured_members is not None
+    if not group_known_before_reap and not _leader_is_ours(pgid, expected_start):
         # Leader exited and its PID/PGID may have been recycled onto an unrelated
         # process group; signalling the stale number is unsafe. Bail out — a rare
         # orphaned grandchild may leak, which is strictly preferable to killing a
@@ -1033,7 +1035,10 @@ def _kill_process_group_posix(proc) -> None:
         if pgid == os.getpgrp():
             _kill_known_pids(proc, descendants)
         else:
-            _kill_known_pids(proc, (*_process_group_members(pgid), *descendants))
+            members = getattr(proc, "_hermes_group_members", None)
+            if members is None:
+                members = _process_group_members(pgid)
+            _kill_known_pids(proc, (*members, *descendants))
         _sweep_escaped_descendants(descendants, pgid)
         return
     if pgid == os.getpgrp():
@@ -1248,6 +1253,19 @@ class LocalEnvironment(BaseEnvironment):
                 proc._hermes_pgid = os.getpgid(proc.pid)
             proc._hermes_owned_pgid = proc.pid
         return proc
+
+    def _prepare_process_stop(self, proc) -> None:
+        """Snapshot an owned POSIX group before polling can reap its leader."""
+        if _IS_WINDOWS:
+            return
+        pgid = getattr(proc, "_hermes_pgid", None)
+        if pgid is None:
+            with contextlib.suppress(ProcessLookupError):
+                pgid = os.getpgid(proc.pid)
+        if pgid is None or pgid == os.getpgrp():
+            return
+        with contextlib.suppress(Exception):
+            proc._hermes_group_members = _process_group_members(pgid)
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""

@@ -155,6 +155,34 @@ def test_local_macos_group_kill_uses_saved_group_when_leader_is_gone(monkeypatch
     assert killpg_calls == []
 
 
+def test_local_macos_group_kill_uses_saved_pgid_after_leader_pid_reuse(monkeypatch):
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67895
+
+        def kill(self):
+            killed.append(self.pid)
+
+    proc = _fake_proc()
+    monkeypatch.setattr(local, "_IS_MACOS", True, raising=False)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED + 500000)
+    killpg_calls = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+    env = object.__new__(local.LocalEnvironment)
+    env._prepare_process_stop(proc)
+
+    local._kill_process_group_posix(proc)
+
+    assert killed == [67895]
+    assert killpg_calls == []
+
+
 def test_local_guard_still_refuses_recycled_pgid(monkeypatch, killpg_calls):
     """A start time far outside the drift tolerance means the PID/PGID was recycled:
     never signal the stale number (#43044)."""
