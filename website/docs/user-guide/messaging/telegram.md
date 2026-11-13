@@ -96,6 +96,12 @@ Notes:
   A hard crash leaves the last-known status — the inherent limitation of a
   profile-text indicator.
 - Off by default, since it mutates the bot's global profile.
+- Hermes saves the bot's own short description (the one set in @BotFather) before
+  it first writes **Online**, and keeps that copy across restarts and crashes.
+  Turn `status_indicator` off and the next connect puts your text back, unless
+  you have set a new description in @BotFather since (yours is kept). Edit the
+  description while the gateway is down and the new text is what Hermes saves.
+  If Hermes cannot read and save your text at connect, it writes no status that run.
 
 ### Cold-boot pending queue (Optional)
 
@@ -405,6 +411,7 @@ Add the following to `~/.hermes/.env`:
 TELEGRAM_WEBHOOK_URL=https://my-app.fly.dev/telegram
 TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"  # required
 # TELEGRAM_WEBHOOK_PORT=8443        # optional, default 8443
+# TELEGRAM_WEBHOOK_HOST=::          # optional, bind host (e.g. IPv6-only)
 ```
 
 | Variable | Required | Description |
@@ -412,6 +419,7 @@ TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"  # required
 | `TELEGRAM_WEBHOOK_URL` | Yes | Public HTTPS URL where Telegram will send updates. The URL path is auto-extracted (e.g., `/telegram` from the example above). |
 | `TELEGRAM_WEBHOOK_SECRET` | **Yes** (when `TELEGRAM_WEBHOOK_URL` is set) | Secret token that Telegram echoes in every webhook request for verification. The gateway refuses to start without it — see [GHSA-3vpc-7q5r-276h](https://github.com/NousResearch/hermes-agent/security/advisories/GHSA-3vpc-7q5r-276h). Generate with `openssl rand -hex 32`. |
 | `TELEGRAM_WEBHOOK_PORT` | No | Local port the webhook server listens on (default: `8443`). |
+| `TELEGRAM_WEBHOOK_HOST` | No | Local bind host for the webhook server. Default: unset → dual-stack bind on all interfaces (IPv4+IPv6). Set this on IPv6-only deployments (e.g. Fly.io 6PN) or to pin the listener to a specific interface. Can also be set via `platforms.telegram.extra.webhook_host` in `config.yaml`. |
 
 When `TELEGRAM_WEBHOOK_URL` is set, the gateway starts an HTTP webhook server instead of polling. When unset, polling mode is used — no behavior change from previous versions.
 
@@ -495,6 +503,12 @@ TELEGRAM_CRON_THREAD_ID=<topic_thread_id>
 ## Shared Contacts and Locations
 
 A contact card or location pin you share with the bot reaches the agent as a short text block (name, phone number and vCard for a contact; coordinates and venue for a location), so the agent can act on it.
+
+A **live location** reaches the agent once, when you start sharing it. Telegram then refreshes the position every few seconds to a minute, for as long as the share runs. A refresh becomes a new message to the agent only after you have moved about 75 m from the last position it was told about, or after 15 minutes at the same spot. GPS jitter while you stand still never starts a turn. A static pin (or a venue) always reaches the agent, even when you send the same spot twice.
+
+## Stickers
+
+A static sticker reaches the agent as a short text note: its emoji, its pack name, and a one-to-two-sentence description written by your vision model (`auxiliary.vision`, which defaults to the main model). The description is cached per sticker (by Telegram's `file_unique_id`) in `sticker_cache.json` under the profile's Hermes home, so sending the same sticker again costs no vision call. If the vision call fails, the note falls back to the emoji alone. Animated and video stickers are not analyzed: the agent gets a note with their emoji only.
 
 ## Voice Messages
 
@@ -666,6 +680,18 @@ telegram.error.InvalidToken: Not Found
 
 If you see that, the cap-lift is working but the file-share isn't. Verify `ls -la /var/lib/telegram-bot-api/<TOKEN>/voice/` from the Hermes host as the user the gateway runs as, and confirm a single file is `cat`-able without a permission error.
 
+**Storage mounted at a different path.** When Hermes runs in another container or on another host and the server's data directory is mounted somewhere else (for example the compose file's `./tg-bot-api-data`), tell Hermes where it is:
+
+```yaml
+platforms:
+  telegram:
+    extra:
+      local_mode: true
+      local_bot_api_root: "/home/me/tg-bot-api-data"   # the host path of the server's /var/lib/telegram-bot-api
+```
+
+The server reports its own path (`/var/lib/telegram-bot-api/<TOKEN>/videos/file_7.MOV`, sometimes behind `base_file_url`). Hermes takes the part after the token directory and reads `<local_bot_api_root>/<TOKEN>/videos/file_7.MOV`, or `<local_bot_api_root>/videos/file_7.MOV` when you mounted the token directory itself. That is two file checks with no directory scan, and a path containing `..` is never followed. If neither file exists, the normal download runs as before.
+
 ### Step 6: Test it
 
 Send the bot a voice note or audio file that's bigger than 20 MB. Tail the gateway log:
@@ -815,6 +841,10 @@ Messages in Telegram topics `31` and `42` are always ignored before the mention 
 - Patterns use Python regular expressions
 - Matching is case-insensitive
 - Patterns are checked against both text messages and media captions
+- A captionless voice note has no text, so it can only wake the bot by reply or @mention. Set
+  `voice_mention_patterns: true` to transcribe such a group voice note first and match these patterns
+  against what was said. It is off by default because every unaddressed voice note in the group then
+  goes to your speech-to-text provider. The turn reuses that transcript (one STT call)
 - Invalid regex patterns are ignored with a warning in the gateway logs rather than crashing the bot
 - If you want a pattern to match only at the start of a message, anchor it with `^`
 
@@ -1189,6 +1219,8 @@ gateway:
 
 A rich-eligible message longer than the 32,768-character rich text limit is sent as several rich messages, split between blocks (a `<details>` section, table or code block is never cut unless it alone is over the limit, in which case a table repeats its header and a code block reopens in the next part). Any rejection from Telegram (unsupported endpoint on an older `python-telegram-bot`, parser error, oversized blocks/columns) **transparently falls back** to the MarkdownV2 path — your message is never lost. Transient/network errors are *not* silently re-sent (no duplicate final message).
 
+**Long replies arrive as a file.** A reply that would need more than 8 Telegram messages (about 32,000 characters of prose) is sent as one `reply-<id>.md` document holding the complete text, with a short caption, instead of a burst of messages that can trip Telegram's flood limits. While a long reply streams, Hermes stops opening new messages once it reaches the limit, uploads the finished reply as the file, and then deletes the partial messages it had already posted for it. If the upload fails, nothing is deleted and the rest of the reply arrives as ordinary messages, so no text is lost; a message Telegram will not let the bot delete (older than 48 hours, or missing permission) simply stays. `hermes send` and the `send_message` tool do the same for an over-long message. A reply over Telegram's 50 MB document limit is split across numbered files.
+
 **MarkdownV2 fallback.** When the rich path is unavailable for a message, Hermes converts markdown to MarkdownV2. Since MarkdownV2 has no native table syntax, pipe tables are normalized:
 
 - **Small tables** are flattened into **row-group bullets** — each row becomes a readable bulleted list under the column headings. Good for 2–4 columns and short cells.
@@ -1437,6 +1469,35 @@ The proxy applies to both the primary transport and all fallback IP transports. 
 :::note
 This covers the custom fallback transport layer that Hermes uses for Telegram connections. The standard `httpx` client used elsewhere already respects proxy env vars natively.
 :::
+
+### TLS handshake failures with OpenSSL 3.5
+
+If Telegram repeatedly reconnects with an empty `httpx.ConnectError` or an
+`SSL: UNEXPECTED_EOF_WHILE_READING`, while curl works through the same proxy,
+the network path may reject OpenSSL 3.5's larger post-quantum TLS ClientHello.
+This symptom alone is not proof: compare the default handshake with X25519
+before enabling the workaround.
+
+To use classic X25519 key exchange only for Telegram, add to `config.yaml`
+and restart the gateway:
+
+```yaml
+platforms:
+  telegram:
+    extra:
+      tls_classic_key_exchange: true
+```
+
+This covers both Bot API requests and long polling, including proxy and
+fallback-IP connections, the TLS handshake with an `https://` proxy itself,
+DNS-over-HTTPS fallback-IP discovery, and one-shot sends (cron,
+`send_message`). TLS 1.3,
+hostname checks, and certificate verification remain enabled; the platform
+trust store and `SSL_CERT_FILE` are still used. The tradeoff is opting out of
+post-quantum key exchange for Telegram. Other platforms and model-provider
+clients keep their existing TLS settings. The default is `false`; remove the
+setting or set it to `false` to restore OpenSSL's default groups. A value other
+than true/false is ignored with a warning in the gateway log. See also [the related OpenSSL 3.5 report](https://github.com/NousResearch/hermes-agent/issues/106384).
 
 ## Message Reactions
 

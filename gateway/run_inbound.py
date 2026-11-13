@@ -21,6 +21,7 @@ from pathlib import Path
 
 from agent.i18n import t
 from gateway.config import Platform
+from gateway.inbound_reply_context import reply_pointer
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType, clean_attachment_filename
 from gateway.run_busy import approval_input_words
@@ -28,6 +29,7 @@ from gateway.run_inbound_media import rehome_inbound_media
 from gateway.run_inbound_hooks import GatewayInboundHooksMixin
 from gateway.run_inbound_transcription import GatewayInboundTranscriptionMixin
 from gateway.run_plugin_injection import GatewayPluginInjectionMixin
+from gateway.run_turn_setup_guard import cancel_preagent_setup, pending_setup_busy_notice
 from gateway.run_inbound_unauthorized import (
     UnauthorizedOwnerNotifier, pairing_code_reply, pairing_profile_arg, pairing_rate_limited_reply,
     unauthorized_owner_hint,
@@ -231,15 +233,15 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             pairable_dm = source.chat_type == "dm" and not getattr(source, "is_bot", False)
             behavior = self._get_unauthorized_dm_behavior(source.platform, profile=source.profile) if pairable_dm else None
             if behavior == "pair":
-                logger.warning("Unauthorized user: %s (%s) on %s", source.user_id, source.user_name, source.platform.value)
+                logger.warning("Unauthorized user: %s on %s", source.user_id, source.platform.value)
                 await self._hm_offer_pairing_code(source)
             elif behavior == "decline":
-                logger.warning("Unauthorized user: %s (%s) on %s", source.user_id, source.user_name, source.platform.value)
+                logger.warning("Unauthorized user: %s on %s", source.user_id, source.platform.value)
                 await self._hm_send_unauthorized_decline(source)
             elif pairable_dm:
                 await self._hm_report_ignored_dm(source)
             else:
-                logger.warning("Unauthorized user: %s (%s) on %s", source.user_id, source.user_name, source.platform.value)
+                logger.warning("Unauthorized user: %s on %s", source.user_id, source.platform.value)
             return None
         # The busy path charged this event on arrival; a drained follow-up must not pay twice.
         if not getattr(event, "_bot_loop_admitted", False) and not (
@@ -668,6 +670,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             if _denied is not None:
                 return True, _denied
             if _cmd_def_inner.name in ("stop", "new"):
+                self._hm_drop_held_input(event)  # before the fence: a burst flushing later would pass it
                 await self._hm_stop_owner_turn(_quick_key)
             # Any recognized slash command dispatches per its declared busy_policy (dispatch /
             # interrupt_then_dispatch / reject). Unrecognized commands and plain text fall through.
@@ -682,7 +685,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         return False, None
 
     def _hm_drop_held_input(self, event: MessageEvent) -> None:
-        """An idle /stop, /new or /reset past the slash-access gate and command hooks: the text or media
+        """A /stop, /new or /reset past the slash-access gate (and idle, command hooks): the text or media
         burst the receiving adapter still holds is the old chat's, so it never becomes a turn after
         the command (#81370). A refused or hook-denied command leaves the caller's input alone."""
         if (adapter := self._intake_adapter_for(event.source)) is not None:
@@ -861,11 +864,12 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         running_agent = _ra_state.turn.agent if _ra_state else None
         if running_agent is _AGENT_PENDING_SENTINEL:  # agent still being set up
             if event.get_command() == "stop":  # force-clean the sentinel so the session is unlocked
+                cancel_preagent_setup(self, _quick_key)  # and end the setup still holding its claim
                 self._release_running_agent_state(_quick_key)
                 logger.info("HARD STOP (pending) for session %s — sentinel cleared", _quick_key)
                 return EphemeralReply(t("gateway.stop.force_stopped_pending"))
             self._hm_merge_pending_for_source(source, _quick_key, event, merge_text=True)  # picked up after start
-            return None
+            return pending_setup_busy_notice(self, _quick_key, source)
         if self._draining:
             queue_during_drain = self._queue_during_drain_enabled(effective_busy_input_mode)
             if queue_during_drain:
@@ -1352,7 +1356,14 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return True, None  # a /stop or /new came after its command, as it clears the slot
         # A failed admit stays the authority's answer (refusal notice or turn error), never a
         # pending legacy turn: that would run unadmitted, outside the FIFO's order.
+        if busy and getattr(event, "_gateway_pending_stt_clips", None):
+            # The FIFO turn restores a fresh event: it reuses the transcript and echo paid above.
+            from gateway.run_inbound_transcription import hand_prepared_voice_to_turn
+            await asyncio.to_thread(hand_prepared_voice_to_turn, event)
         note_busy_admitting(event)
+        notice = pending_setup_busy_notice(self, _quick_key, source) if busy else None
+        if notice is not None:  # sent now: the admission below waits until this follow-up has run
+            await self._send_busy_ack_reply(event, self._delivery_adapter_for(source), notice)
         return True, await admit_message(authority, event)
 
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
@@ -1581,30 +1592,23 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
 
     async def _echo_stt_transcripts(
         self, adapter, source: SessionSource, transcripts: list[str], *, metadata=None, log_context: str = "Transcript"
-    ) -> None:
-        """Send each transcript back as ``🎙️ "…"`` (best-effort; failures are logged, never raised)."""
+    ) -> int:
+        """Send each transcript back as ``🎙️ "…"`` (best-effort; failures are logged, never raised)
+        → how many sends the platform accepted."""
         from gateway.bot_peer_notices import automatic_notices_allowed
+        accepted = 0
         for tx in transcripts if automatic_notices_allowed(source) else ():
             try:
-                await adapter.send(source.chat_id, t("gateway.voice.transcript_echo_short", text=tx), metadata=metadata)
+                result = await adapter.send(
+                    source.chat_id, t("gateway.voice.transcript_echo_short", text=tx), metadata=metadata)
             except Exception as echo_exc:
                 logger.debug("%s echo failed (non-fatal): %s", log_context, echo_exc)
-
-    async def _enrich_inbound_voice(
-        self, event: MessageEvent, source: SessionSource, message_text: str, audio_paths: list[str]
-    ) -> str:
-        message_text, _successful_transcripts = await self._enrich_message_with_transcription(
-            message_text, audio_paths,
-        )
-        # Echo each successful transcript back immediately when configured so users can verify STT
-        # quality in real time. On transcription failure do NOT send a hardcoded notice: that
-        # bypassed the LLM and produced two replies; enrichment leaves one neutral marker instead.
-        if _successful_transcripts and self._should_echo_stt_transcripts():
-            _echo_adapter = self._delivery_adapter_for(source)
-            if _echo_adapter:
-                _echo_meta = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))
-                await self._echo_stt_transcripts(_echo_adapter, source, _successful_transcripts, metadata=_echo_meta)
-        return message_text
+                continue
+            if getattr(result, "success", False):
+                accepted += 1
+            else:
+                logger.debug("%s echo refused: %s", log_context, getattr(result, "error", None))
+        return accepted
 
     @staticmethod
     def _inbound_attachment_display_name(path: str, original_name: str = "") -> tuple[str, str]:
@@ -1698,8 +1702,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             # Adapters resolve the original message (or the user's native partial quote).
             # A preview here silently loses later list items and code; keep that context intact.
             reply_text = event.reply_to_text
-            _who = " your previous message" if getattr(event, "reply_to_is_own_message", False) else ""
-            message_text = f'[Replying to{_who}: "{reply_text}"]\n\n{message_text}'
+            own = bool(getattr(event, "reply_to_is_own_message", False))
+            replied_to = (source.platform, source.chat_id, event.reply_to_message_id)
+            message_text = f"{reply_pointer(str(reply_text), own_message=own, replied_to=replied_to)}\n\n{message_text}"
 
         # Discord: the triggering message id goes on the per-turn user message, never the cached
         # system prompt — it changes every turn and would bust the agent-cache signature. It is

@@ -26,7 +26,7 @@ from gateway.session_delivery_policy import current_claim
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome, describe_proxy_error, safe_proxy_url_for_log
 from gateway.platforms.event import MessageEvent
-from gateway.platforms.helpers import typing_metadata_for_turn
+from gateway.platforms.helpers import hash_for_log, typing_metadata_for_turn
 from gateway.response_filters import (
     display_kind_for_event, display_metadata_for_event, is_machinery_display_kind, persisted_user_metadata_for_event,
     reply_expected_metadata,
@@ -192,53 +192,30 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         logger.info(
-            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
-            _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", (event.text or "")[:80].replace("\n", " "),
-            getattr(event, "reply_to_message_id", None),
-            (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " "),
+            "inbound message: platform=%s user=%s chat=%s msg_len=%d reply_to_id=%s",
+            _platform_name, hash_for_log(source.user_id), hash_for_log(source.chat_id),
+            len(event.text or ""), getattr(event, "reply_to_message_id", None),
         )
 
-        resolved = await self._hmwa_resolve_session(event, source)
-        if resolved is None:
-            return
-        source, session_entry, session_key = resolved
-        prepared, _session_env_tokens = await self._hmwa_prepare_turn(
-            event, source, session_entry, session_key, _quick_key, run_generation,
-        )
-        if not isinstance(prepared, self._PreparedTurn):
-            return prepared
+        from gateway.run_turn_setup_guard import run_preagent_setup
+        setup, reply = await run_preagent_setup(self, event, source, _quick_key, run_generation)
+        if setup is None:
+            return reply
+        source, session_entry, session_key, prepared, _session_env_tokens, hook_ctx, channel = setup
+        if hook_ctx is None:  # a heartbeat whose owner moved during setup: nothing to run
+            self._clear_session_env(_session_env_tokens)
+            return None
         history, message_text = prepared.history, prepared.message_text
 
         try:
-            hook_ctx = {
-                "platform": source.platform.value if source.platform else "",
-                "user_id": source.user_id,
-                "chat_id": source.chat_id or "",
-                "thread_id": str(source.thread_id) if getattr(source, "thread_id", None) else "",
-                "chat_type": getattr(source, "chat_type", "") or "",
-                "session_id": session_entry.session_id,
-                "message": message_text[:500],
-            }
-            await self.hooks.emit("agent:start", hook_ctx)
-
             # Capture the launch session id so post-run compression publication is identity-guarded
             # (a /new may move session_entry.session_id while the old run is still unwinding).
-            from gateway.run_heartbeat_acceptance import heartbeat_owner_is_current
-            if not heartbeat_owner_is_current(self, event, session_key):
-                return
             _run_start_session_id = session_entry.session_id
             _turn_started_monotonic = time.monotonic()
             # Admission/typing is not execution. All routing, authorization and
             # turn preparation gates have passed when the agent runner is entered.
             event._heartbeat_execution_started = True
-            _turn_channel_prompt, _turn_source = self._pinned_channel_inputs(  # internal/synthetic reuse pins
-                session_key, event.channel_prompt, source,
-                internal=event.internal or getattr(event, "inherit_channel_pin", False))
-            if not event.internal:
-                # Persist the coherent context+channel pair before execution: a crash during the
-                # human turn may be followed by an internal startup-resume on the next process.
-                await self._persist_prompt_pins(session_key, _run_start_session_id)
+            _turn_channel_prompt, _turn_source = channel
             agent_result = await self._run_agent(
                 message=message_text, context_prompt=prepared.context_prompt, history=history, source=_turn_source,
                 session_id=_run_start_session_id, session_key=session_key,
@@ -440,7 +417,7 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             override = adapter.toolsets_for_source(source) if adapter is not None else None
         except Exception:
             override = None
-        if override and isinstance(override, list):
+        if isinstance(override, list):
             pts = dict(user_config.get("platform_toolsets") or {})
             pts[platform_key] = [str(x) for x in override]
             user_config = {**user_config, "platform_toolsets": pts}
@@ -625,13 +602,11 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
     def _proxy_stream_consumer(self, source: SessionSource, event_message_id, _thread_metadata, _run_still_current):
         """Platform stream consumer for the proxy path when streaming is enabled, else ``None``."""
         from gateway.run import _load_gateway_config, _platform_config_key
-        _scfg = getattr(getattr(self, "config", None), "streaming", None)
+        from gateway.run_config_loaders import streaming_config_for_source
+        _scfg = streaming_config_for_source(self, source)
         # #60671 — streaming TTS consumer is created on the outer event-loop thread before run_sync
         # launches.  run_sync only reads it via ``streaming_tts_consumer_holder[0]`` for delta callback
         # wiring.
-        if _scfg is None:
-            from gateway.config import StreamingConfig
-            _scfg = StreamingConfig()
         # Global master switch first: skips the config.yaml re-read on the default (off) path.
         if not _scfg.globally_enabled:
             return None

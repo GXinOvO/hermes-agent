@@ -1032,7 +1032,7 @@ class GatewayBusySessionMixin:
         if not self._is_user_authorized_for_source(event.source):
             logger.warning(
                 "Dropping message from unauthorized user in active session: "
-                "user=%s (%s), platform=%s, session=%s", event.source.user_id, event.source.user_name,
+                "user=%s, platform=%s, session=%s", event.source.user_id,
                 event.source.platform.value if event.source.platform else "unknown", session_key,
             )
             return True  # handled (silently dropped); do not fall through
@@ -1255,6 +1255,7 @@ class GatewayBusySessionMixin:
         return format_status_text()
 
     async def _busy_stop_command(self, event: MessageEvent, quick_key: str, source):
+        event.accept_interrupt()  # past admission and slash access: the adapter may cancel the turn
         # Hard-kill: a soft interrupt can't reach a truly hung executor thread.
         from gateway.run import _INTERRUPT_REASON_STOP
         await _busy_accepted()
@@ -1734,8 +1735,8 @@ class GatewayBusySessionMixin:
         # object.__new__ test runners lack the counter; fall back to a local one.
         counter = getattr(self, "_slash_confirm_counter", None)
         if counter is None:
-            import itertools as _itertools
-            counter = self._slash_confirm_counter = _itertools.count(1)
+            from gateway.platforms.helpers import prompt_id_counter
+            counter = self._slash_confirm_counter = prompt_id_counter()
         confirm_id = f"{next(counter)}"
 
         # Register FIRST so a fast button click cannot race the send_slash_confirm return. The
