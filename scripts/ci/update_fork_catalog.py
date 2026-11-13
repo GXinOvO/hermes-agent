@@ -212,9 +212,13 @@ def split_paths(root, base, head, paths):
 def reviewable(path):
     """Changed paths the catalog reviews: fork source, not generated output.
 
-    ``evals/*/results/`` holds run artifacts the eval harness commits; one such dump crossed the
-    single-path evidence limit and stalled the whole catalog update."""
-    return path != "FORK_FEATURES.md" and not (path.startswith("evals/") and "/results/" in path)
+    ``evals/*/results/`` holds run artifacts the eval harness commits and
+    ``plugins/*/desktop/plugin.js`` is the esbuild bundle of its ``src/`` (vendored third-party
+    code included); either alone can exceed the single-path evidence limit and stall the whole
+    catalog update."""
+    return (path != "FORK_FEATURES.md"
+            and not (path.startswith("evals/") and "/results/" in path)
+            and not (path.startswith("plugins/") and path.endswith("/desktop/plugin.js")))
 
 
 def evidence_for(root, source, base, head, paths):
