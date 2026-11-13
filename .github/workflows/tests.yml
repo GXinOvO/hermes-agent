@@ -70,7 +70,13 @@ jobs:
           sudo apt-get install -y bubblewrap apparmor-profiles ffmpeg
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          # The owned-process provider creates a second user namespace from inside its
+          # bwrap scope. Ubuntu's AppArmor userns restriction otherwise rejects that
+          # nested operation after the outer probe has passed.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/true
+          bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/unshare --user --map-root-user -- /usr/bin/true
+          bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/true
           ffmpeg -version
 
       - name: Set up locked Python and test dependencies
