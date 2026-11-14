@@ -201,12 +201,15 @@ def defer_completed_tail(job, execution_id, error, result_ready, fence):
     """A tail outage cannot replace a durable business result with a new failed run."""
     from cron import scheduler
     from cron.executions import give_up_execution
+    from cron.jobs_error_text import sanitize_persisted_error
     if not (result_ready and isinstance(error, Exception)
             and not fence.operator_cancelled() and not fence.lost()):
         return False
     with suppress(Exception):
         scheduler.logger.warning('Cron %s completed; tail recovery deferred: %s', job['id'], error)
-    give_up_execution(execution_id, reason=f'Completed result awaiting tail recovery: {error}')
+    reason = sanitize_persisted_error(
+        f'Completed result awaiting tail recovery: {error}') or 'Completed result awaiting tail recovery'
+    give_up_execution(execution_id, reason=reason)
     return True
 
 
@@ -214,10 +217,12 @@ def defer_unverified_run(job, execution_id, error, result_ready, fence):
     """Uncertain execution and known-result tail outages never become fresh failed fires."""
     from cron import scheduler
     from cron.executions import give_up_execution
+    from cron.jobs_error_text import sanitize_persisted_error
     from cron.scheduler_authority import CronExecutionUnknown, pause_for_unknown
     if isinstance(error, CronExecutionUnknown):
-        pause_for_unknown(job['id'], execution_id, str(error))
-        give_up_execution(execution_id, reason=str(error))
+        reason = sanitize_persisted_error(str(error)) or 'unverified admission'
+        pause_for_unknown(job['id'], execution_id, reason)
+        give_up_execution(execution_id, reason=reason)
         with suppress(Exception):
             scheduler.logger.error('Cron %s paused with unverified admission: %s', job['id'], error)
         return True
