@@ -116,6 +116,38 @@ def test_split_decision_survives_retry_without_repeating_incomplete_parent(tmp_p
     assert "| F01 | final |" in catalog.read_text()
 
 
+def test_single_path_model_edit_mismatch_retries_once(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    catalog, _ = repository(root)
+    monkeypatch.setenv("FORK_CATALOG_CACHE_DIR", str(tmp_path / "cache"))
+    first = {"edits": [{"old": "| F01 | old |", "new": "| removed |"}]}
+    second = {"edits": [{"old": "| F01 | old |", "new": "| F01 | final |"}]}
+    third = {"edits": []}
+    with patch.object(updater, "request_edits", side_effect=[first, second, third]) as request:
+        assert updater.update(root, "inert", "http://localhost/v1", "deepseek-v4.1-flash")
+    assert request.call_count == 3
+    assert "| F01 | final |" in catalog.read_text()
+
+
+def test_single_path_model_edit_mismatch_remains_fail_closed_after_one_retry(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    catalog, _ = repository(root)
+    before = catalog.read_bytes()
+    monkeypatch.setenv("FORK_CATALOG_CACHE_DIR", str(tmp_path / "cache"))
+    invalid = {"edits": [{"old": "| F01 | old |", "new": "| removed |"}]}
+    with patch.object(updater, "request_edits", side_effect=[invalid, invalid]) as request:
+        try:
+            updater.update(root, "inert", "http://localhost/v1", "deepseek-v4.1-flash")
+        except updater.ModelEditMismatch:
+            pass
+        else:
+            raise AssertionError("second invalid edit must remain fail-closed")
+    assert request.call_count == 2
+    assert catalog.read_bytes() == before
+
+
 def test_source_samples_keep_frozen_target_after_checkout_advances(tmp_path):
     catalog, git = repository(tmp_path)
     (tmp_path / "small.py").write_text("value = 'first'\n")
