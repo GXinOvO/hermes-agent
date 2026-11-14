@@ -25,7 +25,7 @@ from agent.ssl_verify import platform_ssl_context
 from gateway.platforms._shared import (
     decode_json_list_literal as _decode_json_list_literal,
     extra_or_secret as _extra_or_secret, get_scoped_secret as _get_scoped_secret,
-    platform_gate_env as _scoped_gate_env,
+    mark_live_gate_baseline, platform_gate_env as _scoped_gate_env,
 )
 
 
@@ -145,7 +145,7 @@ from agent.i18n import get_language, t
 from gateway.config import Platform, PlatformConfig
 from gateway.strict_transport import single_attempt_transport
 from gateway.platforms.base import (
-    BasePlatformAdapter, ExecApprovalPrompt, SendResult, classify_send_error, unauthorized_action_notice,
+    BasePlatformAdapter, ExecApprovalPrompt, SendResult, unauthorized_action_notice,
     cache_image_from_bytes_async, cache_audio_from_bytes_async, cache_video_from_bytes_async, resolve_proxy_url, safe_proxy_url_for_log, describe_proxy_error, SUPPORTED_VIDEO_TYPES,
     SUPPORTED_DOCUMENT_TYPES, SUPPORTED_IMAGE_DOCUMENT_TYPES, _TEXT_INJECT_EXTENSIONS, utf16_len, env_proxy_for_redaction,
 )
@@ -187,6 +187,7 @@ from plugins.platforms.telegram.telegram_ingress import TelegramContactMixin
 from plugins.platforms.telegram.telegram_replacement import TelegramReplacementMixin
 from plugins.platforms.telegram.telegram_polling_probe import TelegramPendingProbeMixin
 from plugins.platforms.telegram.telegram_intake import effective_update_message
+from plugins.platforms.telegram.telegram_live_gates import env_allowlist_decision, refresh_telegram_gates
 from plugins.platforms.telegram.telegram_media_group import (
     add_item_note, flush_media_group_event, inline_item_text, queue_media_group_event)
 from plugins.platforms.telegram.telegram_live_location import is_redundant_live_refresh
@@ -200,7 +201,8 @@ from plugins.platforms.telegram.telegram_media_fetch import (
     cache_replied_media, fetch_telegram_file, local_root, merged_typed_text, record_typed_text)
 from plugins.platforms.telegram.telegram_ids import normalize_telegram_chat_id, parse_send_target, parse_telegram_message_id
 from plugins.platforms.telegram.telegram_resolved_prompt import edit_keeping_prompt
-from plugins.platforms.telegram.telegram_clarify_binding import ClarifyPrompt, log_resolved, tap_matches_prompt
+from plugins.platforms.telegram.telegram_clarify_binding import ClarifyPrompt, tap_matches_prompt
+from plugins.platforms.telegram.telegram_clarify_multi import handle_multi_token, multi_prompt_extras, resolve_clarify_choice
 from plugins.platforms.telegram.telegram_topic_transfer import TopicTransferFn, apply_root_dm_topic_transfer
 from gateway.approval_actor import picker_refusal, update_prompt_refusal
 from plugins.platforms.telegram.callback_answer import TOAST_LIMIT as _TOAST_LIMIT, answer_callback, answer_or_note, refuse_tap
@@ -209,7 +211,7 @@ from plugins.platforms.telegram.telegram_network import (
     proxy_target_hosts, telegram_verify)
 from plugins.platforms.telegram.telegram_outbound import is_visually_empty, resolve_notifications_mode
 from plugins.platforms.telegram.telegram_send_path_recovery import TelegramSendPathRecoveryMixin, mark_send_path_recovered
-from plugins.platforms.telegram.telegram_send_errors import LOST, is_entity_parse_error, maybe_delivered_result as _maybe_delivered_result, send_error_kind, FLOOD, UNSENT, rich_failure_result
+from plugins.platforms.telegram.telegram_send_errors import LOST, classify_send_exception, explain_username_chat_not_found, is_entity_parse_error, maybe_delivered_result as _maybe_delivered_result, send_error_kind, FLOOD, UNSENT, rich_failure_result
 from plugins.platforms.telegram.telegram_split import REPLY_FILE_MAX_BYTES, reply_message_count, send_reply_document
 from plugins.platforms.telegram.telegram_typing_gate import claim_ai_action, typing_may_fire
 from plugins.platforms.telegram.telegram_voice_mention import admit_media, cache_inbound_voice
@@ -596,6 +598,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         self._approval_request_ids: dict[int, str] = {}  # message_id → tools.approval request id
         self._slash_confirm_state: dict[str, str] = {}  # confirm_id → session_key
         self._clarify_state: dict[str, ClarifyPrompt] = {}  # clarify_id → prompt bound to its sent message
+        self._clarify_multi: dict[str, set[int]] = {}  # clarify_id → checked indices (multi-select only)
         # "important" (default): only final responses, approvals and slash confirmations notify;
         # "all": every message notifies (display.platforms.telegram.notifications).
         self._notifications_mode: str = "important"
@@ -687,14 +690,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         auth_fn = getattr(runner, "_is_user_authorized", None)
         return auth_fn if callable(auth_fn) else None
 
-    @staticmethod
-    def _env_allowlist_decision(user_id: str) -> Optional[bool]:
-        """TELEGRAM_ALLOWED_USERS decision; None when no allowlist is configured."""
-        allowed_csv = _scoped_gate_env("TELEGRAM_ALLOWED_USERS").strip()
-        if not allowed_csv:
-            return None
-        allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
-        return "*" in allowed_ids or user_id in allowed_ids
+    _env_allowlist_decision = staticmethod(env_allowlist_decision)
 
     def _is_callback_user_authorized(
         self, user_id: str, *, chat_id: Optional[str] = None, chat_type: Optional[str] = None,
@@ -703,6 +699,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         normalized_user_id = str(user_id or "").strip()
         if not normalized_user_id:
             return False
+        refresh_telegram_gates(self)
         normalized_chat_type = self._normalize_chat_type(chat_type, is_forum=thread_id is not None)
         # Preferred: the auth callback GatewayRunner injects (set_authorization_check) → full
         # _is_user_authorized chain; also works for a multiplexed adapter whose _message_handler is a
@@ -813,6 +810,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
 
         Only rejects when it can make the same context-aware decision the runner would; unknown DMs pass through when
         there is no allowlist or pairing is the unauthorized-DM behavior."""
+        refresh_telegram_gates(self)
         source = self._source_from_message_for_auth(message)
         user_id = source.user_id
         # No identity → service message or channel post without sender_chat; defer to message gating.
@@ -2579,6 +2577,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
     def _source_for_platform_event_auth(self, update):
         """Route a supported update to its event-specific auth-source extractor (reactor / editor);
         raises ``ValueError`` for updates without one so the boundary fails closed."""
+        refresh_telegram_gates(self)
         if getattr(update, "message_reaction", None) is not None:
             return self._source_from_reaction_for_auth(update)
         edited = getattr(update, "edited_message", None)
@@ -2930,6 +2929,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         try:
             if not self._acquire_platform_lock('telegram-bot-token', self.config.token, 'Telegram bot token'):
                 return False
+            mark_live_gate_baseline(self)
             from plugins.platforms.telegram.update_admission import TelegramApplication, build_update_processor
             builder = Application.builder().token(self.config.token)
             builder.application_class(TelegramApplication, {"adapter": self})
@@ -3385,7 +3385,8 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         # One chat at a time (held only around the API calls, never across the reconnect wait above), so
         # two concurrent split replies to one chat cannot interleave their chunks (#114396).
         async with self._chat_send_lock(chat_id):
-            return await self._send_text_locked(chat_id, content, reply_to, metadata)
+            result = await self._send_text_locked(chat_id, content, reply_to, metadata)
+        return explain_username_chat_not_found(result, chat_id)  # live sends bypass standalone_send
 
     async def _send_text_locked(
         self, chat_id: str, content: str, reply_to: Optional[str], metadata: Optional[dict[str, Any]]) -> SendResult:
@@ -3423,22 +3424,8 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
                 return as_file  # a refused rich send re-split past the cap: one file instead (#152012)
             return await self._send_chunks(chat_id, chunks, delivered, reply_to, metadata, error_types)
         except Exception as e:
-            classified = self._classify_send_exception(e, error_types)
+            classified = classify_send_exception(self, e)
             return self._with_partial_send(classified, chunks[len(delivered):], delivered, tail_certain=classified.retryable)
-
-    def _classify_send_exception(self, e: Exception, error_types: tuple) -> SendResult:
-        """The failed ``SendResult`` for an exception escaping the chunk loop. ``retryable`` doubles as
-        "non-delivery is certain": a plain ``TimedOut`` may have reached Telegram, so it is neither re-sent
-        by ``_send_with_retry`` nor resumed from; a wrapped ConnectTimeout / httpx pool timeout never left."""
-        safe_error = _redact_telegram_error_text(e)
-        logger.error("[%s] Failed to send Telegram message: %s", self.name, safe_error)
-        err_str = str(e).lower()
-        error_kind = classify_send_error(e)
-        # Content exceeded 4096 chars: fail so the stream consumer enters fallback mode.
-        if "message_too_long" in err_str or "too long" in err_str:
-            logger.debug("[%s] send() content too long, falling back to new-message continuation", self.name)
-            return SendResult(success=False, error="message_too_long", error_kind="too_long")
-        return _maybe_delivered_result(e, safe_error, error_kind=error_kind)
 
     async def _send_chunks(
         self, chat_id: str, chunks: list[str], delivered: list[str], reply_to: Optional[str],
@@ -3504,7 +3491,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
             try:
                 return await self._send_chunks(chat_id, list(undelivered), delivered, reply_to, metadata, error_types)
             except Exception as e:
-                classified = self._classify_send_exception(e, error_types)
+                classified = classify_send_exception(self, e)
                 return self._with_partial_send(
                     classified, list(undelivered)[len(delivered) - prior:], delivered, tail_certain=classified.retryable)
 
@@ -3952,10 +3939,13 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
             if choices:
                 # Full option text in the body (mobile truncates button labels); buttons keep numeric labels.
                 text += "\n\n" + "\n".join(f"{i + 1}. {_html.escape(str(c))}" for i, c in enumerate(choices))
-                # Telegram caps callback_data at 64 bytes; keep "cl:<id>:<idx>" short.
-                rows = [[InlineKeyboardButton(str(idx + 1), callback_data=f"cl:{clarify_id}:{idx}")] for idx in range(len(choices))]
-                rows.append([InlineKeyboardButton(t("platform.telegram.prompt.other"), callback_data=f"cl:{clarify_id}:other")])
-                keyboard = InlineKeyboardMarkup(rows)
+                if multi := multi_prompt_extras(self, clarify_id, len(choices)):  # toggles + Send (#154195)
+                    text, keyboard = text + multi[0], multi[1]
+                else:
+                    # Telegram caps callback_data at 64 bytes; keep "cl:<id>:<idx>" short.
+                    rows = [[InlineKeyboardButton(str(idx + 1), callback_data=f"cl:{clarify_id}:{idx}")] for idx in range(len(choices))]
+                    rows.append([InlineKeyboardButton(t("platform.telegram.prompt.other"), callback_data=f"cl:{clarify_id}:other")])
+                    keyboard = InlineKeyboardMarkup(rows)
             return text, keyboard, lambda msg: self._clarify_state.__setitem__(clarify_id, ClarifyPrompt.from_sent(session_key, msg))
         return await self._send_prompt(
             "send_clarify", chat_id, metadata, build, parse_mode=ParseMode.HTML, thread_id=self._metadata_thread_id(metadata))
@@ -4515,7 +4505,10 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         if requester := clarify_refusal(clarify_id, getattr(query.from_user, "id", ""), extra=self.config.extra):
             return await answer_callback(query, refusal_text(requester)[:_TOAST_LIMIT], show_alert=True)
         user_display = getattr(query.from_user, "first_name", None) or t("platform.telegram.user_fallback")
+        if await handle_multi_token(self, query, clarify_id, choice_token, prompt, user_display):
+            return
         if choice_token == "other":
+            self._clarify_multi.pop(clarify_id, None)
             # Flip to text-capture (the next message resolves it); keep _clarify_state until then.
             flipped = False
             try:
@@ -4551,22 +4544,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         if resolved_text is None:
             # Race (timeout / session reset): echo the index so the agent sees an intentional response.
             resolved_text = f"choice {idx + 1}"
-        self._clarify_state.pop(clarify_id, None)
-        try:
-            from tools.clarify_gateway import resolve_gateway_clarify
-            resolved = resolve_gateway_clarify(clarify_id, resolved_text)
-        except Exception as exc:
-            logger.error("[%s] resolve_gateway_clarify failed: %s", self.name, exc)
-            resolved = False
-        if resolved:
-            await answer_callback(query, f"✓ {resolved_text[:60]}")
-            await self._edit_html_quiet(
-                query, f"❓ {_html.escape(query.message.text or '')}\n\n<b>{_html.escape(user_display)}:</b> {_html.escape(resolved_text)}")
-            log_resolved(query, clarify_id, prompt, resolved_text, user_display)
-        else:
-            # Entry evicted / gateway restarted between ask and tap.
-            await self._notify_clarify_expired(query, user_display)
-            logger.warning("Telegram clarify button: resolve_gateway_clarify returned False (id=%s)", clarify_id)
+        await resolve_clarify_choice(self, query, clarify_id, prompt, resolved_text, user_display)
 
     async def _handle_update_prompt_callback(self, query, data: str, cb: dict[str, Any]) -> None:
         """``update_prompt:<y|n>[:<id>]`` — forward the answer to the update process."""
@@ -5889,6 +5867,7 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
         # counted as incoming unread in the Hermes inbox (#52363). Otherwise a BotFather rename leaves the
         # stale handle in place and the exclusive-mention gate reads a message addressed to us as one
         # addressed to some other bot.
+        refresh_telegram_gates(self)  # commands reach this gate before the auth prefilter's refresh
         self._observe_bot_identity_from_message(message)
         if self._is_own_message(message):
             return False
