@@ -37,12 +37,34 @@ def handles(job, target):
 
 def prepare(state, calls, retained, job, content, failure):
     from cron.strict_delivery import _durable_media
-    new_thread = bool(state.mirror_this_target and not state.in_channel_surface and not state.thread_id)
+    from cron.scheduler_delivery import _fresh_thread_requested
+    new_thread = _fresh_thread_requested(
+        job, origin_target=state.origin_target, thread_id=state.thread_id,
+        mirror_this_target=state.mirror_this_target,
+        in_channel_surface=state.in_channel_surface, pconfig=state.pconfig)
     if new_thread:
         capability = getattr(module(state.platform_name), 'supports_new_thread', None)
         if capability is None or not capability(state.runtime_adapter, str(state.chat_id)):
             new_thread = False
-    frozen = freeze(state, calls, retained, new_thread=new_thread)
+    state_for_freeze = state
+    calls_for_freeze = calls
+    if new_thread:
+        values = dict(vars(state))
+        values['thread_id'] = None
+        state_for_freeze = SimpleNamespace(**values)
+        calls_for_freeze = []
+        for method, kwargs in calls:
+            copied = dict(kwargs)
+            metadata = copied.get('metadata')
+            if isinstance(metadata, dict):
+                metadata = dict(metadata)
+                metadata.pop('thread_id', None)
+                metadata.pop('direct_messages_topic_id', None)
+                copied['metadata'] = metadata
+            if 'reply_to' in copied:
+                copied['reply_to'] = None
+            calls_for_freeze.append((method, copied))
+    frozen = freeze(state_for_freeze, calls_for_freeze, retained, new_thread=new_thread)
     if frozen['plan']['binding']['media'] != _durable_media(job, content, failure)[1]:
         raise RuntimeError('cron frozen native media identity differs from durable result')
     return frozen

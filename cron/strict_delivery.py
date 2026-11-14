@@ -155,7 +155,7 @@ def prepare(job, content, for_failure, *, adapters, loop):
     name = job.get('name', job['id'])
     rendered = (f'Cronjob Response: {name}\n(job_id: {job.get("id", "")})\n-------------\n\n{content}\n\n'
         f'To stop or manage this job, send me a new message (e.g. "stop reminder {name}").'
-        if cfg.get('cron', {}).get('wrap_response', True) else content)
+        if delivery._should_wrap_cron_response(job, cfg) else content)
     media, text = BasePlatformAdapter.extract_media(rendered)
     text = delivery._redact_cron_payload(text, 'delivery content')
     retained = BasePlatformAdapter.filter_media_delivery_paths(media)
@@ -221,7 +221,10 @@ def prepare(job, content, for_failure, *, adapters, loop):
         if frozen is not None:
             plans.append((target, state, target_text, frozen))
             continue
-        if state.mirror_this_target and not state.in_channel_surface and not state.thread_id:
+        if delivery._fresh_thread_requested(
+                job, origin_target=state.origin_target, thread_id=state.thread_id,
+                mirror_this_target=state.mirror_this_target,
+                in_channel_surface=state.in_channel_surface, pconfig=state.pconfig):
             if platform != 'slack':
                 raise RuntimeError('strict cron thread creation unverified')
             from plugins.platforms.slack.strict_delivery import freeze_thread
