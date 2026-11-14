@@ -77,6 +77,36 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(updater.IncompleteModelResponse):
             updater.parse_response(response, "deepseek-v4.1-flash")
 
+    def test_request_allows_reasoning_response_budget_above_previous_cap(self):
+        response = {"model": "deepseek-v4.1-flash", "choices": [{"finish_reason": "stop", "message": {"content": '{"edits": []}'}}]}
+
+        class Reply:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, limit):
+                return json.dumps(response).encode()
+
+        class Opener:
+            def open(self, request, timeout):
+                self.request = request
+                self.timeout = timeout
+                return Reply()
+
+        opener = Opener()
+        with patch.object(updater.urllib.request, "build_opener", return_value=opener):
+            self.assertEqual(updater.request_edits("key", "http://localhost/v1", "deepseek-v4.1-flash", {"catalog": "x"}), {"edits": []})
+        payload = json.loads(opener.request.data)
+        self.assertEqual(payload["max_tokens"], updater.MAX_COMPLETION_TOKENS)
+        self.assertEqual(payload["max_tokens"], 20_000)
+        self.assertEqual(payload["model"], "deepseek-v4.1-flash")
+        self.assertEqual(payload["reasoning_effort"], "max")
+        self.assertIs(payload["stream"], False)
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
     def test_model_edit_mismatch_is_retryable(self):
         with self.assertRaises(updater.ModelEditMismatch):
             updater.apply_edits("# Catalog\n", {"edits": [{"old": "missing", "new": "wrong"}]})
