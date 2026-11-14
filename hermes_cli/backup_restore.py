@@ -378,6 +378,12 @@ def _restore_db_pages(src: Path, dst: Path) -> bool:
 
 
 def _restore_snapshot_entry(rel: str, src: Path, dst: Path) -> bool:
+    from pm.plugin_target_lock import p1_target_file_writer
+    with p1_target_file_writer(dst):
+        return _restore_snapshot_entry_target_locked(rel, src, dst)
+
+
+def _restore_snapshot_entry_target_locked(rel: str, src: Path, dst: Path) -> bool:
     """Publish one quick-snapshot file over ``dst``; False (logged) when refused or failed."""
     try:
         if dst.suffix == ".db":
@@ -483,6 +489,17 @@ def _default_new_file_mode() -> Optional[int]:
 
 
 def _extract_member_atomically(
+    zf: zipfile.ZipFile,
+    member: str,
+    target: Path,
+    new_file_mode: Optional[int] = None,
+) -> None:
+    from pm.plugin_target_lock import p1_target_file_writer
+    with p1_target_file_writer(target):
+        _extract_member_target_locked(zf, member, target, new_file_mode)
+
+
+def _extract_member_target_locked(
     zf: zipfile.ZipFile,
     member: str,
     target: Path,

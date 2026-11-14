@@ -4,7 +4,7 @@ from __future__ import annotations
 import atexit
 import base64
 from collections.abc import Callable
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 import hashlib
 import json
 import logging
@@ -58,7 +58,18 @@ def runtime_lock(project: Path, *, timeout: float | None = INSTALL_LOCK_TIMEOUT_
 
 
 def _recover_plugin_publication(project: Path, row: dict, journal: Path) -> None:
+    from pm.plugin_target_lock import target_writer_lock
+    target = Path(row["target"])
+    if (not target.resolve().is_relative_to(dependency_home_root().resolve())
+            or target.parent.name != "plugins"):
+        raise ValueError("plugin publication paths escape their home")
+    with target_writer_lock(target) if os.name == "posix" else nullcontext():
+        _recover_plugin_publication_locked(project, row, journal)
+
+
+def _recover_plugin_publication_locked(project: Path, row: dict, journal: Path) -> None:
     from hermes_cli.fs_utils import rmtree_force
+    from pm.store import tree_digest
 
     target, backup, metadata = (Path(row[key]) for key in ("target", "backup", "metadata"))
     home = dependency_home_root().resolve()
@@ -67,6 +78,13 @@ def _recover_plugin_publication(project: Path, row: dict, journal: Path) -> None
             or metadata != target.parent / ".install-metadata.json"):
         raise ValueError("plugin publication paths escape their home")
     committed = row.get("committed") or _digest(runtime_facts_path(project)) != row["facts_before"]
+    expected_before = row.get("target_digest_before")
+    expected_after = row.get("target_digest_after")
+    current_digest = tree_digest(target) if target.exists() else None
+    backup_ready = backup.is_dir() and row.get("target_existed", True)
+    if expected_after is not None and current_digest not in (expected_before, expected_after) and not (
+            current_digest is None and backup_ready):
+        raise RuntimeError("plugin target changed after publication; preserve it for manual recovery")
     if committed:
         if backup.exists():
             rmtree_force(backup)

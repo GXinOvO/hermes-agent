@@ -30,6 +30,7 @@ from gateway.control_dispatch import ControlRequestDispatcher
 logger = logging.getLogger(__name__)
 
 CONTROL_PROTOCOL_VERSION = 1
+CRON_INSTALL_GATE_VERSION = 7
 _SOCKET_FILENAME = "gateway.sock"
 _POINTER_FILENAME = "gateway.sock.path"
 _IS_WINDOWS = sys.platform == "win32"
@@ -186,6 +187,14 @@ def build_identify_payload() -> dict[str, Any]:
         **{k: record.get(k) for k in ("kind", "pid", "start_time", "hermes_home")},
         "profile": _profile_label_for_home(record.get("hermes_home") or ""),
         "supervisor": supervisor, "launch_supervisor": supervisor, **_get_code_identity_fields()}
+    from cron.install_capability import runtime_identity
+    payload["cron_install_gate"] = CRON_INSTALL_GATE_VERSION
+    try:
+        payload["cron_install_capability"] = runtime_identity(serving=True)
+    except Exception as exc:
+        logger.warning("Cron installation capability unavailable", exc_info=True)
+        payload["cron_install_capability"] = None
+        payload["cron_install_capability_error"] = str(exc)
     with contextlib.suppress(Exception):
         # served_profiles (multiplex mode) is stamped into runtime status by the runner.
         served = (read_runtime_status() or {}).get("served_profiles")

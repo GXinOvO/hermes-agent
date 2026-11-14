@@ -412,6 +412,8 @@ def _start_gateway_start_cron_and_housekeeping(runner):
     # External providers own one unscoped remote registry, so they can only serve a single home.
     cron_provider = scheduler_for_profile_mode(
         resolve_cron_scheduler(), multiplex_profiles=len(cron_profile_homes) > 1)
+    from cron import scheduler_provider
+    scheduler_provider._install_runtime_provider = cron_provider
     cron_start_kwargs: Dict[str, Any] = {"adapters": runner.adapters, "loop": asyncio.get_running_loop()}
 
     if isinstance(cron_provider, InProcessCronScheduler) and cron_profile_homes:

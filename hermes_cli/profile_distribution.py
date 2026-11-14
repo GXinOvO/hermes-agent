@@ -558,6 +558,12 @@ def _refuse_symlinked_targets(target: Path, entries) -> None:
 
 
 def _copy_dist_payload(staged: Path, target: Path, manifest: DistributionManifest, preserve_config: bool) -> None:
+    from pm.plugin_target_lock import target_writer_lock
+    with target_writer_lock(target / "plugins/cron-supervisor-report-budget") if os.name == "posix" else contextlib.nullcontext():
+        _copy_dist_payload_locked(staged, target, manifest, preserve_config)
+
+
+def _copy_dist_payload_locked(staged: Path, target: Path, manifest: DistributionManifest, preserve_config: bool) -> None:
     """Copy distribution-owned files (see ``_owned_entries``) from *staged* into *target*.
 
     User-owned paths are never touched. ``config.yaml`` is replaced only when

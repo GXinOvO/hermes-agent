@@ -39,6 +39,7 @@ from cron.jobs_model_pin import _main_model_pin
 from cron import jobs_time
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import extra_fire, store_health
+from cron.install_gate import install_gate
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
 
 logger = logging.getLogger(__name__)
@@ -292,6 +293,12 @@ def _release_flock(lock_fd) -> None:
 
 @contextlib.contextmanager
 def _jobs_lock():
+    with install_gate(_current_cron_store().cron_dir.parent), _jobs_lock_admitted():
+        yield
+
+
+@contextlib.contextmanager
+def _jobs_lock_admitted():
     """Serialize a load_jobs→modify→save_jobs critical section: in-process RLock (parallel tick
     threads) plus a cross-process flock on ``<cron dir>/.jobs.lock`` (gateway vs. CLI writes —
     otherwise a `cron pause` could be clobbered and keep firing). Nested calls in one thread
