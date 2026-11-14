@@ -94,6 +94,9 @@ async def prepare_strict_delivery(adapter, delivery, content=''):
                 raise RuntimeError('strict webhook destination missing')
             chat_id = home.chat_id
         thread_id = delivery['deliver_extra'].get('message_thread_id') or delivery['deliver_extra'].get('thread_id')
+        gate = adapter.gateway_runner._shared_bot_target_allowed
+        if not gate(Platform(kind), delivery.get('profile'), chat_id, thread_id):
+            raise RuntimeError('strict webhook destination not routed to profile')
         await prepare_strict_transport(target, 'send', chat_id=chat_id, content=content,
             metadata={'thread_id':thread_id} if thread_id else None)
 

@@ -48,7 +48,10 @@ async def test_background_webhook_delegates_only_to_verified_target_once(tmp_pat
         async with aiohttp.ClientSession() as session:
             target = (PeerAdapter if ack else LostAckPeer)(url, session)
             adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={'routes':{}}))
-            adapter.gateway_runner = SimpleNamespace(_authorization_adapter=lambda platform, profile:target)
+            adapter.gateway_runner = SimpleNamespace(
+                _authorization_adapter=lambda platform, profile:target,
+                _shared_bot_target_allowed=lambda *args: True,
+            )
             adapter._profile_scope = lambda profile:nullcontext()
             adapter._delivery_info['retained'] = {'deliver':'slack', 'deliver_extra':{'chat_id':'chat'}}
             with SessionDB(tmp_path / 'state.db') as db:
@@ -73,7 +76,10 @@ async def test_unverified_webhook_target_is_refused_before_background_claim(tmp_
         async def send(self, *args, **kwargs):
             sends.append('attempted')
             return SendResult(success=True)
-    adapter.gateway_runner = SimpleNamespace(_authorization_adapter=lambda platform, profile:UnknownTarget())
+    adapter.gateway_runner = SimpleNamespace(
+        _authorization_adapter=lambda platform, profile:UnknownTarget(),
+        _shared_bot_target_allowed=lambda *args: True,
+    )
     adapter._profile_scope = lambda profile:nullcontext()
     adapter._delivery_info['retained'] = {'deliver':'slack', 'deliver_extra':{'chat_id':'chat'}}
     with SessionDB(tmp_path / 'state.db') as db:
@@ -88,6 +94,28 @@ async def test_unverified_webhook_target_is_refused_before_background_claim(tmp_
 
 
 @pytest.mark.asyncio
+async def test_strict_webhook_preflight_refuses_unrouted_target_before_transport(monkeypatch):
+    from gateway.platforms import webhook_delivery
+
+    adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={'routes':{}}))
+    adapter.gateway_runner = SimpleNamespace(
+        _authorization_adapter=lambda platform, profile: object(),
+        _shared_bot_target_allowed=lambda *args: False,
+    )
+    adapter._profile_scope = lambda profile:nullcontext()
+    prepared = []
+
+    async def should_not_prepare(*args, **kwargs):
+        prepared.append((args, kwargs))
+
+    monkeypatch.setattr('gateway.strict_transport.prepare_strict_transport', should_not_prepare)
+    with pytest.raises(RuntimeError, match='not routed'):
+        await webhook_delivery.prepare_strict_delivery(
+            adapter, {'deliver':'slack', 'deliver_extra':{'chat_id':'chat'}}, 'sealed answer')
+    assert prepared == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('name', ['telegram', 'discord', 'slack'])
 async def test_webhook_preflights_exact_sdk_content_and_thread(name, tmp_path, monkeypatch):
     from gateway.strict_transport import strict_call, prepare_strict_transport
@@ -98,7 +126,10 @@ async def test_webhook_preflights_exact_sdk_content_and_thread(name, tmp_path, m
             import discord
             target._client.get_channel = lambda cid:discord.PartialMessageable(state=target._client._connection, id=cid)
         adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={'routes':{}}))
-        adapter.gateway_runner = SimpleNamespace(_authorization_adapter=lambda platform, profile:target)
+        adapter.gateway_runner = SimpleNamespace(
+            _authorization_adapter=lambda platform, profile:target,
+            _shared_bot_target_allowed=lambda *args: True,
+        )
         adapter._profile_scope = lambda profile:nullcontext()
         adapter._delivery_info['retained'] = {'deliver':name, 'deliver_extra':{'chat_id':chat, 'thread_id':'42'}}
         await prepare_strict_transport(adapter, 'send', chat_id='retained', content='sealed answer')
