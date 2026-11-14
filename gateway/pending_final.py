@@ -512,7 +512,11 @@ async def recover(runner):
                     for method, kwargs in calls:
                         if not await asyncio.to_thread(current, receipt, kind):
                             raise DeliveryUncertain('pending final claim invalidated')
-                        result = await strict_call(adapter, method, **kwargs)
+                        if value['binding']['policy'] == 'human_reply_v1':
+                            operation = adapter._send_with_retry if method == 'send' else getattr(adapter, method)
+                            result = await operation(**kwargs)
+                        else:
+                            result = await strict_call(adapter, method, **kwargs)
                         results.append(result)
                         if not getattr(result, 'success', False):
                             break
@@ -522,6 +526,10 @@ async def recover(runner):
                 except Exception as exc:
                     logger.exception('Sealed final transport raised after claim; delivery is unknown')
                     result = SendResult(success=False, error=str(exc))
+                if (kind == 'text' and value['binding']['policy'] == 'human_reply_v1'
+                        and results and not result.success):
+                    from gateway.delivery_ledger import record_human_final_failure
+                    await asyncio.to_thread(record_human_final_failure, claimed, str(result.error or ''), db=authority.db)
                 result = await finish_event(receipt, kind, result)
                 delivered += int(result.success)
                 if not result.success:

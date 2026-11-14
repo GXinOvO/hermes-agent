@@ -55,7 +55,7 @@ def test_deferred_resume_preserves_model_history_and_db_ownership(tmp_path, monk
 
     def acquire(db_path=None, **kwargs):
         assert db_path == home / "state.db"
-        return db
+        return db if profile else SessionDB(db_path)
 
     monkeypatch.setattr(db, "close", close)
     monkeypatch.setattr(db, "get_resume_conversations", read_display)

@@ -176,7 +176,7 @@ def _capture_routing_origin() -> dict[str, Any]:
         return {}
 
 
-def _persist_dispatch(record: dict[str, Any]) -> None:
+def _persist_dispatch(record: dict[str, Any]) -> Optional[dict[str, Any]]:
     if remote := worker_ledger():
         return remote.dispatch(record)
     now = time.time()
@@ -1050,7 +1050,11 @@ def _dispatch_admitted(
         _records[delegation_id] = record
         live_units = sum(1 for r in _records.values() if r.get("status") in _LIVE_STATES)
     try:
-        _persist_dispatch(record)
+        response = _persist_dispatch(record)
+        if isinstance(response, dict) and response.get("status") == "rejected":
+            with _records_lock:
+                _records.pop(delegation_id, None)
+            return response
     except BaseException:
         with _records_lock:
             _records.pop(delegation_id, None)
@@ -1284,9 +1288,9 @@ def _push_completion_event(record: dict[str, Any], result: dict[str, Any], statu
                      "result lost: %s", record.get("delegation_id"), exc)
         return
     evt, result, silent = completion_event(record, result, status)
+    evt["result_durability"] = "persisted"
     try:
         _persist_completion(evt, result, delivery="delivered" if silent else "pending")
-        evt["result_durability"] = "persisted"
     except Exception as exc:
         evt["result_durability"] = "failed"
         logger.error(f"Async delegation{label} %s: durable completion write failed; delivering in-memory "

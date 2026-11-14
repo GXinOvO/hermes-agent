@@ -340,7 +340,7 @@ def mark_unknown(obligation_id: str, error: str = '') -> None:
     _update_state(obligation_id, 'unknown', error=error)
 
 
-def record_human_final_failure(descriptor: dict, error: str) -> str:
+def record_human_final_failure(descriptor: dict, error: str, *, db) -> Optional[str]:
     """Explicit ordinary-human refusal hands retry ownership to the existing ledger.
 
     The sealed descriptor was already claimed before transport. Insert ``failed``
@@ -355,7 +355,7 @@ def record_human_final_failure(descriptor: dict, error: str) -> str:
         raise ValueError('ordinary retry requires a claimed final')
     oid = compute_obligation_id(binding['route'], 'human-final:' + binding['admission_id'], part['content'])
     now, (pid, started) = time.time(), _owner_stamp()
-    with _DB_LOCK, _transaction() as conn:
+    def insert(conn):
         conn.execute("""INSERT OR IGNORE INTO delivery_obligations
             (obligation_id,session_key,platform,chat_id,thread_id,content,state,attempts,
              created_at,updated_at,owner_pid,owner_started_at,adapter_profile,
@@ -366,7 +366,24 @@ def record_human_final_failure(descriptor: dict, error: str) -> str:
              json.dumps(binding,sort_keys=True)))
         conn.execute("UPDATE delivery_obligations SET last_error=? WHERE obligation_id=? AND state='failed'",
                      (str(error)[:500],oid))
-    return oid
+
+    def write(conn):
+        from pathlib import Path
+        from gateway.pending_final import _read
+        from gateway.pending_final_claim import snapshot, valid
+        value = _read(conn, binding['admission_id'])
+        if value is None or not valid(conn, db, value, 'text', expected=snapshot(descriptor)):
+            return None
+        if Path(db.db_path).resolve() == Path(_db_path()).resolve():
+            _initialize_schema(conn)
+            insert(conn)
+        else:
+            with _transaction() as destination:
+                insert(destination)
+        return oid
+
+    with _DB_LOCK:
+        return db._execute_write(write)
 
 
 def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: str, chat_id: str,

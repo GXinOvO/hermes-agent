@@ -306,8 +306,16 @@ async def test_a_scheduled_wake_on_the_chat_shows_no_reaction_or_typing(tmp_path
                      if e.origin is not None and e.origin.chat_id == 'D7')
         assert await admit_route_wake(runner, adapter, entry.origin, 'scheduled tick', 'loop') is True
         await async_wait_until(lambda: 'scheduled tick' in executed, timeout=20, what='the wake ran')
-        await async_wait_until(lambda: any(_is_reply('reply scheduled tick')(a) for a in _actions(outgoing)),
-                               timeout=20, what='the wake answered')
+        from gateway.pending_final import pending
+        from gateway.strict_transport import supports_strict_transport
+        await async_wait_until(lambda: any(v['parts'].get('text', {}).get('content') ==
+            'reply scheduled tick' for v in pending(_authority.db)), timeout=10,
+            what='the wake reply sealed for the unsupported relay')
+        saved = next(v for v in pending(_authority.db) if
+                     v['parts'].get('text', {}).get('content') == 'reply scheduled tick')
+        assert not supports_strict_transport(adapter)
+        assert saved['parts']['text']['state'] == 'pending'
+        assert not any(_is_reply('reply scheduled tick')(a) for a in _actions(outgoing))
         # A bracket would have reacted and refreshed typing when the wake started, before its reply.
         assert [a for a in _actions(outgoing) if a.get('op') == 'react'] == before_reacts
         assert len(_heartbeats(outgoing, 'D7')) == before_typing

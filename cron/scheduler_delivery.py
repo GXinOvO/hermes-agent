@@ -755,6 +755,21 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
         # Read BEFORE discovery: the previous owner may have exited after accepting.
         receipt = read_delivery_result(home, key)
         target = f"bot-chat:{profile_label}"
+        if receipt is None:
+            from cron.bot_chat_legacy import pending_status
+            pending = pending_status(key, job, content, home, for_failure=for_failure)
+            if pending is not None:
+                # A parked consumer owns the handoff, including its uncertain final outcome.
+                # It can publish a receipt between the first read and this status read.
+                receipt = read_delivery_result(home, key)
+                if receipt is None:
+                    status = pending if pending in {"queued", "claimed", "suppressed"} else "ambiguous"
+                    job.setdefault("_bot_chat_delivery_receipts", {})[target] = {
+                        "status": status, "delivery_id": key}
+                    if status == "suppressed":
+                        job["_notification_all_targets_suppressed"] = True
+                        return None
+                    return f"{target} {status} (receipt {key}): completion unverified; do not resend"
         if receipt is None and suppress_notification:
             # Suppression is a durable disposition, not a send: the failure notice is booked
             # against the job and never handed to the owner (the target profile hides
@@ -773,9 +788,16 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
                 return f"{target} queued (receipt {key}): target profile not running; admitted once it is"
             if owner is None:
                 return f"bot-chat delivery to profile '{profile_label}' unverified: no canonical Bot Chat"
-            # A failure notice rides as ``diagnostic`` so the target's reply stays muted.
-            receipt = deliver_to_live_owner(home, owner, message, delivery_id=key,
-                **({"notification_category": "diagnostic"} if for_failure else {}))
+            # The native producer's sealed result is consumed once; ordinary Bot input
+            # retains its separate provider-before-execution recovery policy.
+            from cron.sealed_bot_result import producer_reference
+            sealed = producer_reference(job, content, home, owner)
+            receipt_options: dict = {"notification_category": "diagnostic"} if for_failure else {}
+            if sealed is not None:
+                receipt_options["sealed_cron_result_v1"] = sealed
+            receipt = deliver_to_live_owner(home, owner, message, delivery_id=key, **receipt_options)
+        from cron.sealed_bot_result import verify_receipt
+        verify_receipt(job, receipt)
         if (receipt["message"] != message
                 or receipt.get("notification_category", "result") != ("diagnostic" if for_failure else "result")):
             raise ValueError("delivery id already belongs to a different payload")
@@ -1718,9 +1740,10 @@ def _deliver_result(
         delivery_status = get_status(external_execution)
         if delivery_status and delivery_status["status"] == "suppressed":
             job["_notification_all_targets_suppressed"] = True
-        from cron.jobs import get_job
-        refreshed = get_job(job["id"]) or {}
-        job["last_delivery_queued"] = refreshed.get("last_delivery_queued")
+        job["last_delivery_queued"] = {"canonical": {
+            "status": delivery_status["status"] if delivery_status else "pending",
+            "execution_id": external_execution,
+        }}
         return error
 
     from gateway.config import load_gateway_config

@@ -229,6 +229,7 @@ def _make_cli():
     cli = HermesCLI.__new__(HermesCLI)
     cli._background_task_counter = 0
     cli._background_tasks = {}
+    cli.session_id = "close-lifecycle-parent"
     cli._agent_running = False
     cli._app = None
     cli.max_turns = 5

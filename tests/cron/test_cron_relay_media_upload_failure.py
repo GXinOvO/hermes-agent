@@ -5,10 +5,11 @@ An egress proxy refused the attachment upload once (its own 403). The text
 arrived with a "couldn't send file" notice where the PDF should have been, and
 the run recorded ``last_status: ok``, so nobody noticed the missing report.
 
-Composed through the gateway's real cron delivery path: the delivery queue
-drain -> ``_deliver_result`` -> the live ``RelayAdapter`` -> a real
+Composed through the compatibility cron router: the delivery queue's injected
+consumer -> ``_deliver_result`` -> the live ``RelayAdapter`` -> a real
 ``WebSocketRelayTransport`` and ``RelayMediaClient``. Only the connector is
-fake, at its network boundary.
+fake, at its network boundary. The default strict consumer refuses relay routes
+before claiming and is covered separately by the strict transport tests.
 """
 
 from __future__ import annotations
@@ -74,14 +75,14 @@ def _gateway_config():
 
 
 def _drain(job, content, adapter, loop, execution_id):
-    from cron import scheduler
     from cron.delivery_queue import enqueue, get_status
 
     enqueue(execution_id, job, content)
     with patch("gateway.config.load_gateway_config", return_value=_gateway_config()), \
          patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
          patch("cron.scheduler_delivery._maybe_mirror_cron_delivery", lambda *a, **k: None):
-        assert scheduler.drain_delivery_queue({Platform.RELAY: adapter}, loop) == 1
+        from tests.cron.legacy_delivery_queue_support import drain_compatibility_router
+        assert drain_compatibility_router({Platform.RELAY: adapter}, loop) == 1
     return get_status(execution_id)
 
 

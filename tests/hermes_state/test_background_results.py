@@ -1,3 +1,4 @@
+import time
 from unittest.mock import patch
 
 import pytest
@@ -105,7 +106,7 @@ def test_retention_expires_identities_without_allow_replay(tmp_path):
     binding = {'parent_session_id':'parent', 'profile_id':str(tmp_path), 'event_type':'background.complete'}
     try:
         db.create_session('parent', source='cli')
-        now = 1793962078.0
+        now = time.time()
         with patch('hermes_state_background.time.time', return_value=now):
             begin(db, 'bg_old', binding)
         complete(db, 'bg_old', binding, {'task_id':'bg_old', 'text':'old'})

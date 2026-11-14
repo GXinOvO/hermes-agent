@@ -936,9 +936,7 @@ def test_compression_persists_child_handoff_immediately(tmp_path: Path) -> None:
     agent._flush_messages_to_session_db(compressed, None)
     assert len(db.get_messages(child_sid)) == len(compressed)
 
-def test_rotation_publish_failure_restores_proactive_prune_runway(
-    tmp_path: Path,
-) -> None:
+def test_rotation_publish_failure_restores_proactive_prune_runway(tmp_path: Path) -> None:
     db = SessionDB(db_path=tmp_path / "state.db")
     parent_sid = "PRUNE_RUNWAY_ROLLBACK_PARENT"
     db.create_session(
@@ -952,6 +950,8 @@ def test_rotation_publish_failure_restores_proactive_prune_runway(
         message["_db_persisted"] = True
     agent = _build_agent_with_db(db, parent_sid)
     agent.context_compressor._proactive_prune_rearm_tokens = 120_000
+    agent._ensure_db_session()
+    durable_config_before = json.loads(db.get_session(parent_sid)["model_config"])
 
     def _compress(*_args, **_kwargs):
         agent.context_compressor._proactive_prune_rearm_tokens = 0
@@ -975,10 +975,9 @@ def test_rotation_publish_failure_restores_proactive_prune_runway(
     assert agent.session_id == parent_sid
     assert agent.context_compressor._proactive_prune_rearm_tokens == 120_000
     assert db.get_messages_as_conversation(parent_sid) == durable_before
-    assert json.loads(db.get_session(parent_sid)["model_config"]) == {
-        "keep": "value",
-        "_proactive_prune_rearm_tokens": 120_000,
-    }
+    assert durable_config_before["keep"] == "value"
+    assert durable_config_before["_proactive_prune_rearm_tokens"] == 120_000
+    assert json.loads(db.get_session(parent_sid)["model_config"]) == durable_config_before
 
 def test_full_in_place_compression_atomically_clears_durable_prune_runway(
     tmp_path: Path,

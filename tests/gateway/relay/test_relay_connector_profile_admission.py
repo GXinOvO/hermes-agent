@@ -253,8 +253,21 @@ async def test_stamped_profile_completion_finds_its_relay_after_a_restart(tmp_pa
                    'session_id': 'proc_restart', 'started_at': 1.0}
             async with second._completion_event_scope(evt):
                 assert await second._inject_watch_notification('[process finished]', evt) is True
-            await async_wait_until(lambda: turns and _replies(outgoing, 'chat-work'), timeout=30,
-                                   what='the completion answered through the relay')
+            await async_wait_until(lambda: turns, timeout=30, what='the completion ran in the served profile')
+            from gateway.pending_final import pending
+            from gateway.strict_transport import supports_strict_transport
+            authority = second.session_authorities.for_home(homes[1][1])
+            expected = 'reply ' + turns[0][0]
+            await async_wait_until(lambda: any(v['parts'].get('text', {}).get('content') == expected
+                for v in pending(authority.db)), timeout=10,
+                what='the completion sealed for the unsupported relay')
+            saved = next(v for v in pending(authority.db) if
+                         v['parts'].get('text', {}).get('content') == expected)
+            assert not supports_strict_transport(_adapter)
+            assert saved['parts']['text']['state'] == 'pending'
+            assert saved['binding']['profile_home'] == str(homes[1][1].resolve())
+            assert saved['binding']['route'] == key
+            assert _replies(outgoing, 'chat-work') == []
             assert turns[0][1:] == (homes[1][1].resolve(), key)
     finally:
         for runner in runners:

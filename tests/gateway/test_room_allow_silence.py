@@ -44,6 +44,16 @@ def _configure(runner, tmp_path, *, setting=True, other_profile=False):
     return source
 
 
+def _quarantined_replies():
+    from gateway import delivery_ledger
+
+    assert delivery_ledger.sweep_recoverable(deliverable_platforms={"telegram"}) == []
+    with delivery_ledger._connect() as conn:
+        rows = conn.execute("SELECT content,state,attempts FROM delivery_obligations").fetchall()
+    assert all(state == "unknown" and attempts == 0 for _, state, attempts in rows)
+    return [content for content, _, _ in rows]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lane", ["normal", "queued", "recovery"])
 @pytest.mark.parametrize("setting,other_profile,reply_expected,internal,silent", [
@@ -92,7 +102,6 @@ async def test_room_config_controls_delivery(monkeypatch, tmp_path, lane, settin
         await runner._run_agent_deliver_first_response(ctx, None, result, result, None)
         assert runner._deliver_queued_first_response.called is not silent
     else:
-        from gateway.delivery_ledger import sweep_recoverable
         _, store = _db_runner(tmp_path)
         runner.session_store = store
         result["agent_persisted"] = False
@@ -104,7 +113,7 @@ async def test_room_config_controls_delivery(monkeypatch, tmp_path, lane, settin
             _close_store_db(store)
             recovered, store = _db_runner(tmp_path)
             assert await recovered._recover_unclean_sessions() == (0, 0 if silent else 1)
-            assert bool(sweep_recoverable(deliverable_platforms={"telegram"})) is not silent
+            assert bool(_quarantined_replies()) is not silent
             assert _entry_for(store, source).active_turn_token is None
         finally:
             _close_store_db(store)
@@ -135,7 +144,6 @@ async def test_opt_in_does_not_hide_unhealthy_or_empty_results(monkeypatch, tmp_
         await runner._run_agent_deliver_first_response(ctx, None, result, result, None)
         runner._deliver_queued_first_response.assert_awaited_once()
     else:
-        from gateway.delivery_ledger import sweep_recoverable
         recovered, store = _db_runner(tmp_path)
         recovered.config = runner.config
         entry = store.get_or_create_session(source)
@@ -150,7 +158,7 @@ async def test_opt_in_does_not_hide_unhealthy_or_empty_results(monkeypatch, tmp_
             resumed, ledgered = await recovered._recover_unclean_sessions()
             assert resumed + ledgered == 1
             if result["final_response"]:
-                assert sweep_recoverable(deliverable_platforms={"telegram"})
+                assert _quarantined_replies()
         finally:
             _close_store_db(store)
 
@@ -212,7 +220,6 @@ async def test_agent_persisted_final_survives_trailing_session_metadata(monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", ["missing", "token", "timestamp"])
 async def test_recovery_keeps_guard_without_exact_completed_decision(tmp_path, mismatch):
-    from gateway.delivery_ledger import sweep_recoverable
     runner, store = _db_runner(tmp_path)
     source = _source()
     entry = store.get_or_create_session(source)
@@ -228,7 +235,7 @@ async def test_recovery_keeps_guard_without_exact_completed_decision(tmp_path, m
                 "silent": True,
             })
         assert await runner._recover_unclean_sessions() == (0, 1)
-        assert sweep_recoverable(deliverable_platforms={"telegram"})
+        assert _quarantined_replies()
     finally:
         _close_store_db(store)
 

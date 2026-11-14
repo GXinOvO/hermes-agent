@@ -322,13 +322,17 @@ async def test_local_delivery_into_the_peer_minted_bot_chat_keeps_its_transient_
     texts = []
 
     async def execute(authority, ref, row):
-        texts.append(row['payload']['text'])
-        if len(texts) == 1:
-            authority.pending_results[row['admission_id']] = {'result': {
-                'final_response': '', 'messages': [], 'failed': True,
-                'error': 'Error code: 429 - rate limit exceeded'}, 'usage': {}}
-            return ''
-        return 'pong'
+        from gateway.session_delivery_policy import automation_delivery_scope, arm_tool_witness
+        event = SimpleNamespace(source=authority.sessions[ref.session_id].source)
+        async with automation_delivery_scope(authority, row, event):
+            arm_tool_witness(SimpleNamespace(tool_start_callback=None))
+            texts.append(row['payload']['text'])
+            if len(texts) == 1:
+                authority.pending_results[row['admission_id']] = {'result': {
+                    'final_response': '', 'messages': [], 'failed': True,
+                    'error': 'Error code: 429 - rate limit exceeded'}, 'usage': {}}
+                return ''
+            return 'pong'
 
     monkeypatch.setattr('gateway.session_finite.execute_finite_admission', execute)
     home = Path(headless.authority.db.db_path).parent.resolve()
@@ -361,11 +365,15 @@ async def test_a_receipt_without_recorded_operator_access_retries_as_before(head
     texts = []
 
     async def execute(authority, ref, row):
-        texts.append(row['payload']['text'])
-        authority.pending_results[row['admission_id']] = {'result': {
-            'final_response': '', 'messages': [], 'failed': True,
-            'error': 'Error code: 429 - rate limit exceeded'}, 'usage': {}}
-        return ''
+        from gateway.session_delivery_policy import automation_delivery_scope, arm_tool_witness
+        event = SimpleNamespace(source=authority.sessions[ref.session_id].source)
+        async with automation_delivery_scope(authority, row, event):
+            arm_tool_witness(SimpleNamespace(tool_start_callback=None))
+            texts.append(row['payload']['text'])
+            authority.pending_results[row['admission_id']] = {'result': {
+                'final_response': '', 'messages': [], 'failed': True,
+                'error': 'Error code: 429 - rate limit exceeded'}, 'usage': {}}
+            return ''
 
     real = session_bot_mailbox._write_receipt
 

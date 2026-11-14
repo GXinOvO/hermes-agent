@@ -30,7 +30,7 @@
 | F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
 | F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
 | F20 | Cron provider 请求审计 | 记录每次 Cron 请求的初始/实际路由、重试、推理参数、SDK 调用与响应身份，敏感值不入账；app-server 只观测子进程接口参数，子 Agent、ACP 与 MoA 下游未覆盖 | `cron/usage_audit.jsonl`；隔离验证，待部署后的自然运行读回 |
-| F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；用 `workflow_dispatch` 触发时贡献者邮箱检查按 `dev` 比对，不再扫全部历史而误报 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；本地 13 个用例通过，PR #46 的 Hosted Runner 与平台工作流已运行，完整 Python 基线仍有失败 |
+| F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
 
 ## 使用时需要记住的边界
 

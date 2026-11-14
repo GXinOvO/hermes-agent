@@ -123,7 +123,6 @@ def seal_result(authority, *, row, scope, raw_result, captured, stop_cause=None)
     if captured['result'].get('interrupted') and stop_cause:
         captured['result']['interrupt_message'] = stop_cause
     captured = _redacted(captured)
-    authority._require_admission_open()
     def write(conn):
         _epoch(conn, authority.epoch)
         current = _admission(conn, row['admission_id'])

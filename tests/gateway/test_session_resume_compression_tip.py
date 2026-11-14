@@ -9,6 +9,15 @@ import pytest
 from gateway.session_contract import SessionRef
 from gateway.session_events import SessionEvents
 from gateway.session_controls import AuthorityConnection
+from hermes_state import SessionDB
+
+
+@pytest.fixture
+def legacy_db(tmp_path):
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('legacy-cli-owner', source='cli')
+        db.create_session('legacy-cli-tip', source='cli', chat_id='legacy-cli-owner')
+        yield db
 
 
 def _attach_snapshot(owner_ref):
@@ -30,12 +39,13 @@ def _attach_snapshot(owner_ref):
 
 
 @pytest.mark.asyncio
-async def test_session_resume_still_remaps_legacy_cli_source(monkeypatch):
+async def test_session_resume_still_remaps_legacy_cli_source(monkeypatch, legacy_db):
     """Pre-authority cli/tui/gui rows keep the previous remap path."""
     owner_id = 'legacy-cli-owner'
     tip_id = 'legacy-cli-tip'
     owner_ref = SessionRef('fixture', owner_id)
     resolved = []
+    monkeypatch.setattr(legacy_db, 'get_compression_tip', lambda sid: tip_id)
 
     monkeypatch.setattr(
         'gateway.session_local_migration.resolve_local_target',
@@ -45,12 +55,7 @@ async def test_session_resume_still_remaps_legacy_cli_source(monkeypatch):
         profile_id='fixture',
         instance_id='one',
         events={},
-        db=SimpleNamespace(
-            get_session=lambda sid: {
-                'id': tip_id, 'source': 'cli', 'chat_id': owner_id,
-            } if sid == tip_id else None,
-            get_compression_tip=lambda sid: tip_id,
-        ),
+        db=legacy_db,
         sessions={owner_id: SimpleNamespace(source=SimpleNamespace(platform=None), route=f'agent:main:cli:dm:{owner_id}',
                                             event_stream=SessionEvents())},
         authorize=lambda *a, **k: None,
