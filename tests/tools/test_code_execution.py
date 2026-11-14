@@ -58,6 +58,8 @@ from tools.code_execution_tool import (
     _TOOL_DOC_LINES,
     _execute_remote,
     _format_interrupted_output,
+    _sandbox_tools_for,
+    _sandbox_failure_hint,
 )
 from tools.registry import registry
 
@@ -733,17 +735,73 @@ class TestExecuteCodeEdgeCases(unittest.TestCase):
 
 
     @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
-    def test_nonoverlapping_tools_do_not_expand_the_explicit_grant(self):
-        code = "from hermes_tools import terminal\n"
-        with patch("model_tools.handle_function_call") as dispatch:
+    def test_empty_enabled_tools_denies_all(self):
+        """An explicit empty grant generates no sandbox tool stubs."""
+        code = "from hermes_tools import terminal\nprint('should not reach')\n"
+        with patch("model_tools.handle_function_call",
+                   side_effect=_mock_handle_function_call) as dispatch:
             result = json.loads(execute_code(
-                code, task_id="test-nonoverlap",
-                enabled_tools=["vision_analyze", "browser_snapshot"],
-            ))
-        self.assertEqual(result["status"], "error")
-        self.assertIn("cannot import name 'terminal'", result["error"])
+                code, task_id="test-empty-deny-all", enabled_tools=[]))
+        self.assertEqual(result["status"], "error", msg=result)
+        self.assertIn("ImportError", result.get("error", "") + result.get("output", ""))
         self.assertEqual(result["tool_calls_made"], 0)
         dispatch.assert_not_called()
+
+    @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
+    def test_nonoverlapping_tools_deny_all(self):
+        """A non-empty grant with no sandbox overlap still denies all stubs."""
+        code = "from hermes_tools import terminal\nprint('fallback')\n"
+        with patch("model_tools.handle_function_call",
+                   side_effect=_mock_handle_function_call) as dispatch:
+            result = json.loads(execute_code(
+                code, task_id="test-nonoverlap",
+                enabled_tools=["vision_analyze", "browser_snapshot"]))
+        self.assertEqual(result["status"], "error", msg=result)
+        self.assertIn("ImportError", result.get("error", "") + result.get("output", ""))
+        self.assertEqual(result["tool_calls_made"], 0)
+        dispatch.assert_not_called()
+
+    @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
+    def test_none_enabled_tools_legacy_default(self):
+        """Omitted grants keep the documented legacy default."""
+        code = "from hermes_tools import terminal\nr = terminal('echo hi')\nprint(r.get('output', ''))\n"
+        with patch("model_tools.handle_function_call",
+                   side_effect=_mock_handle_function_call):
+            result = json.loads(execute_code(
+                code, task_id="test-none-default", enabled_tools=None))
+        self.assertEqual(result["status"], "success", msg=result)
+        self.assertIn("mock output for: echo hi", result["output"])
+
+
+class TestResolveSandboxTools(unittest.TestCase):
+    """Shared helper used by both the local UDS and remote file-RPC paths."""
+
+    def test_none_is_legacy_default(self):
+        self.assertEqual(_sandbox_tools_for(None), SANDBOX_ALLOWED_TOOLS)
+
+    def test_empty_list_is_deny_all(self):
+        self.assertEqual(_sandbox_tools_for([]), frozenset())
+
+    def test_nonoverlapping_is_deny_all(self):
+        self.assertEqual(_sandbox_tools_for(["vision_analyze", "browser_snapshot"]), frozenset())
+
+    def test_intersection_keeps_only_sandbox_tools(self):
+        self.assertEqual(_sandbox_tools_for(["terminal", "vision_analyze"]), frozenset(["terminal"]))
+
+
+class TestSandboxFailureHints(unittest.TestCase):
+    _IMPORT_ERROR = "ImportError: cannot import name 'terminal' from 'hermes_tools'"
+
+    def test_empty_grant_does_not_advertise_sandbox_tools(self):
+        hint = _sandbox_failure_hint(self._IMPORT_ERROR, enabled_tools=[])
+        assert hint is not None
+        self.assertIn("Importable tools here: none.", hint)
+
+    def test_partial_grant_advertises_only_the_intersection(self):
+        hint = _sandbox_failure_hint(self._IMPORT_ERROR, enabled_tools=["terminal", "vision_analyze"])
+        assert hint is not None
+        self.assertIn("Importable tools here: terminal.", hint)
+        self.assertNotIn("write_file", hint)
 
 
 # ---------------------------------------------------------------------------

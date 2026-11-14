@@ -158,8 +158,9 @@ def _missing_hermes_tools_import_hint(m, enabled_tools) -> str:
                 "hermes_tools may be first on sys.path. Check hermes_tools.__file__ "
                 "and retry with reset=true.")
     available = sorted(_sandbox_tools_for(enabled_tools))
+    available_text = ", ".join(available) or "none"
     return (f"'{missing}' is not available inside the execute_code sandbox. "
-            f"Importable tools here: {', '.join(available)}. For anything "
+            f"Importable tools here: {available_text}. For anything "
             "else, use the normal tool call instead of execute_code.")
 
 
@@ -606,7 +607,10 @@ def _finish_remote_kernel_result(kernel_result: dict[str, Any], *,
 
 
 def _sandbox_tools_for(enabled_tools: Optional[list[str]]) -> frozenset:
-    """Explicit grants stay exact; only an omitted grant uses legacy defaults."""
+    """Tri-state sandbox tool resolution. None → legacy default (every sandbox tool); an
+    explicit list (possibly empty) → exact intersection with SANDBOX_ALLOWED_TOOLS, so an
+    empty grant denies all rather than broadening to the default
+    (SECURITY-CLASS-faf9d60580300e16 / #84271)."""
     if enabled_tools is None:
         return SANDBOX_ALLOWED_TOOLS
     return frozenset(SANDBOX_ALLOWED_TOOLS & set(enabled_tools))

@@ -63,8 +63,11 @@ def _fire_pre_api_request_hook(
     api_call_count: Any, api_request_id: Any, api_start_time: Any, effective_task_id: Any,
     turn_id: Any, audit_retry_count: Any = None,
 ) -> None:
+    from agent.auxiliary_hooks import begin_loop_aux_attempt
     from agent.conversation_loop import _system_prompt_for_hooks
 
+    if begin_loop_aux_attempt(agent, api_kwargs, api_request_id):
+        return  # a plugin session fork: auxiliary work, never a turn request
     try:
         from agent.provider_request_audit import route_snapshot
         callback = getattr(agent, "event_callback", None)
