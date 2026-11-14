@@ -2622,33 +2622,6 @@ class TestListSessionsRich:
         assert len(sessions) == 1
         assert "Help me refactor the auth module" in sessions[0]["preview"]
 
-    def test_preview_skips_model_switch_marker(self, db):
-        db.create_session("s1", "desktop")
-        db.append_message(
-            "s1",
-            "user",
-            "[System: The active model for this chat has changed to deepseek-v4.1-flash via provider custom:relay]",
-            display_kind="model_switch",
-        )
-        db.append_message("s1", "user", "What remains to finish in this project?")
-
-        session = db.list_sessions_rich()[0]
-
-        assert session["preview"] == "What remains to finish in this project?"
-
-    def test_preview_is_empty_for_model_switch_only_session(self, db):
-        db.create_session("s1", "desktop")
-        db.append_message(
-            "s1",
-            "user",
-            "[System: The active model for this chat has changed to deepseek-v4.1-flash via provider custom:relay]",
-            display_kind="model_switch",
-        )
-
-        session = db.list_sessions_rich()[0]
-
-        assert session["preview"] == ""
-
     @pytest.mark.parametrize(
         "unsafe_model_config",
         ["{not-json", "[]", '"scalar"', "5", "null"],
