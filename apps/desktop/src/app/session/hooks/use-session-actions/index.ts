@@ -72,6 +72,7 @@ import {
   $yoloActive,
   idsShareLineage,
   type NewChatWorkspaceTarget,
+  ownerLookupSessionRows,
   resolveComposerSessionKey,
   restoreComposerModelSelection,
   rotateFreshDraftKey,
@@ -1308,7 +1309,7 @@ export function useSessionActions({
         () => isCurrentResume() && !resumedSameSelectedSession && !takeWarmCache()
       )
 
-      const listedStored = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const listedStored = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId))
 
       if (ownerRoute || listedStored?.profile) {
         provisional.paint(transcriptRestScope(ownerRoute, listedStored, ambientConnectionId))
@@ -1379,8 +1380,7 @@ export function useSessionActions({
         const cachedRuntimeId = warmHit.runtimeId
         const cachedState = warmHit.state
 
-        const stored =
-          $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ?? storedForProfile
+        const stored = findListedSession(storedSessionId)?.session ?? storedForProfile
 
         let cachedViewState =
           !cachedState.model && stored?.model != null
@@ -1952,8 +1952,7 @@ export function useSessionActions({
       const runtimeStartedAt = Date.now()
       setSessionStartedAt(runtimeStartedAt)
 
-      const stored =
-        $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ?? storedForProfile
+      const stored = findListedSession(storedSessionId)?.session ?? storedForProfile
 
       applyStoredSessionPreviewRuntimeInfo(stored, storedSessionId, { sameSession: resumedSameSelectedSession })
 
