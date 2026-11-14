@@ -3,18 +3,18 @@ import hashlib
 import fcntl
 import subprocess
 import sys
-import importlib.util
 import json
 import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+import types
 from contextlib import closing
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[3] / 'apply_p1.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'fixtures/p1_install/apply_p1.py.fixture'
 JOB = '341bad758066'
 
 
@@ -23,9 +23,10 @@ def sha(data):
 
 
 def load():
-    spec = importlib.util.spec_from_file_location('apply_p1_subject', SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = types.ModuleType('apply_p1_subject')
+    module.__file__ = str(SCRIPT)
+    exec(compile(SCRIPT.read_bytes(), str(SCRIPT), 'exec'), module.__dict__)
+    module.__dict__["CANDIDATE"] = SCRIPT.with_name('r3-plugin.py.fixture')
     return module
 
 

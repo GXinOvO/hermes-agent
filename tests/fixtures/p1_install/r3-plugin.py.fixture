@@ -1,0 +1,515 @@
+"""Bounded output hook for the read-only Cron supervisor."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import stat
+import tempfile
+import unicodedata
+from contextlib import closing
+from pathlib import Path
+
+from cron.execution_identity import current_cron_execution
+from hermes_constants import get_hermes_home, get_hermes_home_override
+
+_SILENT_MARKERS = frozenset({
+    "[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "[静默]", "静默", "[沉默]", "沉默",
+})
+
+
+def _is_edge_punctuation(ch: str) -> bool:
+    """Same rule as the native matcher: brackets stay structural, other punctuation is stripped."""
+    return ch not in "[]" and unicodedata.category(ch).startswith("P")
+
+
+def _strip_edge_punctuation(text: str) -> str:
+    start, end = 0, len(text)
+    while start < end and _is_edge_punctuation(text[start]):
+        start += 1
+    while end > start and _is_edge_punctuation(text[end - 1]):
+        end -= 1
+    return text[start:end].strip()
+
+
+def _fallback_is_silence(text: str) -> bool:
+    """Conservative native-free check: a marker alone on the first or last line."""
+    stripped = text.strip() if isinstance(text, str) else ""
+    if not stripped:
+        return False
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if stripped.upper().startswith("[SILENT]"):
+        return True
+    for line in (lines[0], lines[-1]):
+        for form in (line, _strip_edge_punctuation(line)):
+            if " ".join(form.upper().split()) in _SILENT_MARKERS:
+                return True
+    return False
+
+
+try:
+    from gateway.response_filters import is_autonomous_silence_response as _is_silence
+except Exception:  # pragma: no cover - only when that module moves or is unavailable
+    _is_silence = _fallback_is_silence
+
+LIMIT = 700
+FOOTER = "CRON_SUPERVISOR_V1 status=read_only"
+FAILURE = "[CRON_FAILURE]"
+JOB_ID = "341bad758066"
+ARCHIVE_DIRNAME = "report-archive"
+
+
+class _Coverage(tuple):
+    def __new__(cls, groups, total, report_omitted, snapshot_omitted, monitor_objects, monitor_uncovered,
+                *, raw=None, partial=False):
+        result = super().__new__(cls, (groups, total, report_omitted, snapshot_omitted))
+        result.monitor_objects = monitor_objects
+        result.monitor_uncovered = monitor_uncovered
+        result.raw = raw
+        result.partial = partial
+        return result
+
+
+class _SnapshotBindingError(ValueError):
+    pass
+
+
+def _home() -> Path:
+    return get_hermes_home().expanduser().resolve()
+
+
+def _is_target_home(home: Path) -> bool:
+    return home.parent.name == "profiles" and home.name == "cron-supervisor"
+
+
+def _default_execution_matches(home: Path, execution_id: str) -> bool:
+    """Accept a fallback profile label only with a scoped, matching execution row."""
+    if get_hermes_home_override() is None:
+        return False
+    database = home / "cron" / "executions.db"
+    try:
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            row = connection.execute(
+                "SELECT job_id, status FROM executions WHERE id=?", (execution_id,)).fetchone()
+    except (OSError, sqlite3.Error, ValueError):
+        return False
+    return row is not None and str(row[0]) == JOB_ID and str(row[1]) in {"claimed", "running"}
+
+
+def _safe_execution_id(value: str) -> str:
+    if not value or any(ch not in "0123456789abcdef" for ch in value.lower()):
+        raise ValueError("invalid cron execution identity")
+    return value
+
+
+def _archive_data(data: bytes, execution_id: str, suffix: str) -> str:
+    archive_dir = _home() / "cron" / ARCHIVE_DIRNAME / JOB_ID
+    archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = archive_dir / f"{_safe_execution_id(execution_id)}{suffix}"
+    digest = hashlib.sha256(data).hexdigest()
+    fd, temp_name = tempfile.mkstemp(prefix=f".{execution_id}.", dir=archive_dir)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, 0o600)
+        try:
+            os.link(temp_name, path, follow_symlinks=False)
+        except FileExistsError:
+            existing_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(existing_fd, "rb") as existing:
+                if not stat.S_ISREG(os.fstat(existing.fileno()).st_mode) or existing.read() != data:
+                    raise ValueError("report archive identity changed")
+        else:
+            directory_fd = os.open(archive_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return f"{path} sha256={digest}"
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def _archive_original(text: str, execution_id: str) -> str:
+    return _archive_data(text.encode("utf-8"), execution_id, ".txt")
+
+
+def _record_fallback(execution_id: str, error: BaseException) -> None:
+    """Record why coverage could not be verified; never raise, never touch the report."""
+    try:
+        path = _home() / "runtime" / "report-budget-fallback.log"
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(f"{_safe_execution_id(execution_id)} "
+                         f"{type(error).__name__}: {error}\n")
+    except Exception:
+        pass
+
+
+def _coverage_snapshot(execution_id: str, *, archive: bool = True):
+    cron = _home() / "cron"
+    jobs = json.loads((cron / "jobs.json").read_text(encoding="utf-8"))["jobs"]
+    matched = [job for job in jobs if job.get("id") == JOB_ID]
+    if len(matched) != 1:
+        raise ValueError("ambiguous monitor job")
+    state = matched[0].get("monitor_state") or {}
+    observation = (state.get("observations") or {}).get(execution_id) or state.get("observation") or {}
+    if observation.get("execution_id") != execution_id:
+        raise _SnapshotBindingError("monitor observation is not this execution")
+    try:
+        data = (cron / "output" / JOB_ID / "monitor_last_output.txt").read_bytes()
+    except OSError as error:
+        raise _SnapshotBindingError("monitor snapshot unavailable") from error
+    if hashlib.sha256(data).hexdigest() != observation.get("output_hash"):
+        raise _SnapshotBindingError("monitor snapshot hash mismatch")
+    snapshot = json.loads(data)
+    if snapshot.get("schema_version") != 1:
+        raise ValueError("unknown monitor schema")
+    rows = snapshot["anomalies"]
+    summary = snapshot["summary"]
+    total = summary.get("anomaly_total", summary.get("total_anomalies"))
+    shown = summary.get("anomaly_displayed", summary.get("anomalies"))
+    if (not isinstance(rows, list) or
+            any(type(value) is not int or value < 0 for value in (total, shown)) or
+            shown != len(rows) or total < shown):
+        raise ValueError("inconsistent anomaly coverage counts")
+    omitted = total - shown
+    if "omitted_anomalies" in summary and (
+            type(summary["omitted_anomalies"]) is not int or summary["omitted_anomalies"] != omitted):
+        raise ValueError("inconsistent anomaly coverage counts")
+    report_omitted = summary.get("report_omitted_anomalies")
+    snapshot_omitted = summary.get("snapshot_omitted_anomalies")
+    if report_omitted is None and snapshot_omitted is None:
+        report_omitted = snapshot_omitted = 0 if omitted == 0 else "未知"
+    else:
+        if report_omitted is None:
+            report_omitted = omitted - snapshot_omitted if type(snapshot_omitted) is int else None
+        if snapshot_omitted is None:
+            snapshot_omitted = omitted - report_omitted if type(report_omitted) is int else None
+        if (any(type(value) is not int or value < 0 for value in (report_omitted, snapshot_omitted))
+                or report_omitted + snapshot_omitted != omitted):
+            raise ValueError("inconsistent anomaly coverage counts")
+    groups = {}
+    seen = set()
+    for row in rows:
+        profile, job, category = (row.get(k) for k in ("profile", "job_id", "category"))
+        event_id = row.get("event_id") or row.get("fingerprint")
+        if (not all(isinstance(x, str) and re.fullmatch(r"[\w.*-]{1,120}", x)
+                    for x in (profile, job, category))
+                or not isinstance(event_id, str) or not event_id or len(event_id) > 512):
+            raise ValueError("invalid anomaly identity")
+        key = (profile, job, category, event_id)
+        if key in seen:
+            raise ValueError("duplicate anomaly")
+        seen.add(key)
+        groups.setdefault((profile, job), []).append(row)
+    object_total = summary.get("object_total")
+    object_shown = summary.get("object_index_displayed")
+    object_omitted = summary.get("object_index_omitted")
+    uncovered = summary.get("uncovered_anomalies")
+    for value in (object_total, object_shown, object_omitted, uncovered):
+        if value is not None and value != "unknown" and (type(value) is not int or value < 0):
+            raise ValueError("invalid monitor object coverage")
+    if type(object_shown) is int and object_shown != len(groups):
+        raise ValueError("inconsistent monitor object coverage")
+    if type(object_total) is int and type(object_shown) is int and object_total < object_shown:
+        raise ValueError("inconsistent monitor object coverage")
+    if all(type(value) is int for value in (object_total, object_shown, object_omitted)):
+        if object_total != object_shown + object_omitted:
+            raise ValueError("inconsistent monitor object coverage")
+    if type(uncovered) is int and type(report_omitted) is int and uncovered > report_omitted:
+        raise ValueError("inconsistent monitor object coverage")
+    monitor_objects = (f"{object_omitted}/{object_total if type(object_total) is int else '未知'}"
+                       if type(object_omitted) is int else "未知")
+    monitor_uncovered = str(uncovered) if type(uncovered) is int else "未知"
+    if archive:
+        _archive_data(data, execution_id, ".snapshot.json")
+    partial = (snapshot.get("output_status") == "partial" or
+               (snapshot.get("output_status") is None and omitted > 0))
+    return _Coverage(groups, total, report_omitted, snapshot_omitted, monitor_objects, monitor_uncovered,
+                     raw=data, partial=partial)
+
+
+def _render(text: str, reference: str, coverage=None, *, archive_label: str = "原文：") -> str:
+    lines = text.splitlines()
+    failure = bool(lines and lines[0].rstrip() == FAILURE)
+    body = lines[1:] if failure else lines[:]
+    while body and not body[-1].strip():
+        body.pop()
+    if body and body[-1].strip() == FOOTER:
+        body.pop()
+
+    if coverage is None:
+        def render(count: int) -> str:
+            notice = (f"原文保留前{count}/{len(body)}行；"
+                      f"本次快照未核验，遗漏异常数未知；完整{archive_label}{reference}")
+            return "\n".join(([FAILURE] if failure else []) + body[:count] + [notice, FOOTER])
+
+        result = render(0)
+        if len(result) > LIMIT:
+            raise ValueError("archive reference exceeds output limit")
+        for count in range(1, len(body) + 1):
+            candidate = render(count)
+            if len(candidate) > LIMIT:
+                break
+            result = candidate
+        return result
+
+    groups, total, report_omitted, snapshot_omitted = coverage
+    monitor_objects = getattr(coverage, "monitor_objects", "未知")
+    monitor_uncovered = getattr(coverage, "monitor_uncovered", "未知")
+    entries = []
+    for (profile, job), rows in groups.items():
+        categories = {}
+        for row in rows:
+            category = row["category"]
+            categories[category] = categories.get(category, 0) + 1
+        labels = ",".join(f"{category}({count})" for category, count in categories.items())
+        entries.append((f"{profile}/{job}: {labels}", len(rows)))
+    indexed_total = sum(count for _, count in entries)
+
+    def render_index(selected, count):
+        indexed = sum(size for _, size in selected)
+        object_omitted = f"{len(entries) - len(selected)}/{len(entries)}"
+        combined = f"、合计另略{total - indexed_total}" if "未知" in (report_omitted, snapshot_omitted) else ""
+        notice = (f"总异常{total}；快照已展示{indexed_total}、监控输出另略{report_omitted}、快照另略{snapshot_omitted}{combined}；"
+                  f"监控对象索引未列{monitor_objects}、监控异常未覆盖{monitor_uncovered}；"
+                  f"已展示对象索引未列{object_omitted}、已展示行索引未列{indexed_total - indexed}/{indexed_total}；"
+                  f"报告未覆盖未知；来源可能不完整，索引仅列身份与类别；"
+                  f"原文保留前{count}/{len(body)}行；"
+                  f"{archive_label}{reference}；同名.snapshot.json为本次快照。")
+        index = ["异常对象索引："] + [label for label, _ in selected]
+        return "\n".join(([FAILURE] if failure else []) + body[:count] + index + [notice, FOOTER])
+
+    selected = []
+    body_count = 0
+    result = render_index(selected, body_count)
+    if len(result) > LIMIT:
+        raise ValueError("archive reference exceeds output limit")
+    for count in range(1, len(body) + 1):
+        if count > 1 and len("\n".join(body[:count])) > 300:
+            break
+        if body[count - 1].strip() and body[count - 1] in body[:count - 1]:
+            break
+        candidate = render_index(selected, count)
+        if len(candidate) > LIMIT:
+            break
+        body_count = count
+        result = candidate
+    for entry in entries:
+        candidate = render_index(selected + [entry], body_count)
+        if len(candidate) <= LIMIT:
+            selected.append(entry)
+            result = candidate
+    for count in range(body_count + 1, len(body) + 1):
+        candidate = render_index(selected, count)
+        if len(candidate) > LIMIT:
+            break
+        result = candidate
+    return result
+
+
+def _bounded_failure(error: Exception, reference: str | None = None) -> str:
+    archive = f"原文已归档：{reference}" if reference else "原文归档状态未知"
+    result = f"{FAILURE}\n监督报告处理失败，{archive}；错误类型：{type(error).__name__}。\n{FOOTER}"
+    if len(result) <= LIMIT:
+        return result
+    return f"{FAILURE}\n监督报告处理失败；{FOOTER}"
+
+
+def _failure_report(error: Exception, reference: str | None = None) -> str:
+    return _bounded_failure(error, reference)
+
+
+def _compact_overflow_line(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit == 1:
+        return text[:1]
+    anchors = []
+    for pattern in (r"HTTP\s+\d{3}", r"\bincident\b", r"\b[0-9a-f]{12,64}\b"):
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            if match.group() not in anchors:
+                anchors.append(match.group())
+    selected = []
+    for anchor in anchors:
+        candidate = "；".join(selected + [anchor])
+        if len(candidate) <= limit:
+            selected.append(anchor)
+    anchor_text = "；".join(selected)
+    if anchor_text:
+        remaining = limit - len(anchor_text) - 1
+        if remaining > 1:
+            left = remaining // 2
+            right = remaining - left
+            candidate = text[:left] + "…" + anchor_text + ("…" + text[-right:] if right else "")
+            if len(candidate) <= limit:
+                return candidate
+        return anchor_text[:limit]
+    return text[:limit - 1] + "…"
+
+
+def _render_short_overflow(text: str, line: re.Match | None, coverage, reference: str) -> str:
+    body = [item for item in text.splitlines() if item.strip() and item.strip() not in {FAILURE, FOOTER}]
+    actions = [item for item in body if item.startswith("下一步：")]
+    approvals = [item for item in body if "审批" in item and any(
+        word in item for word in ("阻断", "拒绝", "超时", "未执行"))]
+    event = next((item for item in body if re.search(
+        r"HTTP\s+\d{3}|\bincident\b|\b[0-9a-f]{12,64}\b", item, flags=re.IGNORECASE)), None)
+    conclusion = next((item for item in body if item not in actions and item not in approvals), None)
+    if coverage is None:
+        old = line.group().split("。", 1)[0] if line else ""
+        old = old.replace("，", "；").replace(",", ";")
+        detail = (f"原报告称（本次快照未核验）：{old}；遗漏异常数未知。" if old
+                  else "本次快照未核验，遗漏异常数未知。")
+    else:
+        groups, total, report_omitted, snapshot_omitted = coverage
+        rows = sum(map(len, groups.values()))
+        detail = (f"总异常{total}；快照已展示{rows}、监控输出另略{report_omitted}、快照另略{snapshot_omitted}；"
+                  f"监控对象索引未列{coverage.monitor_objects}、监控异常未覆盖{coverage.monitor_uncovered}；"
+                  f"已展示索引未列{len(groups)}/{len(groups)}（{rows}/{rows}行）；"
+                  f"报告未覆盖未知；来源可能不完整。")
+    path, digest = reference.rsplit(" sha256=", 1)
+    relative = Path(path).relative_to(_home())
+    archive_ref = f"cron-supervisor profile根/{relative} sha256={digest}"
+
+    def render(lines):
+        omitted = max(0, len(body) - len(lines))
+        omission = f"；其余报告行省略{omitted}" if omitted else ""
+        notice = f"摘录{len(lines)}/{len(body)}行{omission}；原文已归档：{archive_ref}"
+        return "\n".join([FAILURE, *lines, detail, notice, FOOTER])
+
+    mandatory = []
+    for item in (conclusion, event, actions[0] if actions else None, approvals[0] if approvals else None):
+        if item and item not in mandatory:
+            mandatory.append(item)
+    if not mandatory:
+        mandatory = body[:1]
+    if len(render(mandatory)) > LIMIT:
+        compacted = []
+        for item in mandatory:
+            compacted.append(_compact_overflow_line(item, 96))
+        mandatory = compacted
+        while len(render(mandatory)) > LIMIT and mandatory:
+            index = max(range(len(mandatory)), key=lambda position: len(mandatory[position]))
+            excess = len(render(mandatory)) - LIMIT
+            allowed = max(1, len(mandatory[index]) - excess - 1)
+            shorter = _compact_overflow_line(mandatory[index], allowed)
+            if shorter == mandatory[index]:
+                if len(mandatory) > 1:
+                    mandatory.pop(index)
+                else:
+                    mandatory[index] = _compact_overflow_line(mandatory[index], max(1, allowed - 1))
+                    if mandatory[index] == shorter:
+                        mandatory.clear()
+                        break
+            else:
+                mandatory[index] = shorter
+    selected = list(mandatory)
+    for item in body:
+        if item in selected or not (item.startswith("下一步：") or "审批" in item):
+            continue
+        candidate = selected + [item]
+        if len(render(candidate)) <= LIMIT:
+            selected.append(item)
+    result = render(selected)
+    if len(result) <= LIMIT:
+        return result
+    return _bounded_failure(ValueError("bounded report overflow"), reference)
+
+
+def _correct_short_coverage(text: str, line: re.Match | None, coverage, reference: str) -> str:
+    if not text.rstrip().endswith(FOOTER):
+        raise ValueError("report footer missing")
+    old = line.group() if line else ""
+    suffix = "。" + old.split("。", 1)[1] if "。" in old else ""
+    if any(marker in suffix for marker in ("无遗漏", "没有遗漏", "均已完整", "全部列出")):
+        suffix = ""
+    if coverage is None:
+        claimed = re.sub(r"(?<=\d)(?=[，,；;。]|$)", "（未核验）", old.split("。", 1)[0])
+        detail = (f"原报告称（本次快照未核验）：{claimed}；遗漏异常数未知"
+                  if line else "覆盖：本次快照未核验，遗漏异常数未知")
+    else:
+        groups, total, report_omitted, snapshot_omitted = coverage
+        rows = sum(len(group) for group in groups.values())
+        detail = (f"覆盖：总异常{total}，快照已展示{rows}，监控输出另略{report_omitted}，"
+                  f"快照另略{snapshot_omitted}；监控对象索引未列{coverage.monitor_objects}，"
+                  f"监控异常未覆盖{coverage.monitor_uncovered}；最终报告对象索引未列未知，"
+                  f"报告未覆盖未知")
+    if line:
+        result = text[:line.start()] + detail + suffix + text[line.end():]
+    else:
+        footer = text.rfind(FOOTER)
+        if footer < 0:
+            raise ValueError("coverage correction requires report footer")
+        result = text[:footer] + detail + "。\n\n" + text[footer:]
+    if len(result) > LIMIT:
+        return _render_short_overflow(text, line, coverage, reference)
+    return result
+
+
+def transform(response_text: str, platform: str, **kwargs):
+    identity = current_cron_execution()
+    if not identity or identity.job_id != JOB_ID or platform != "cron":
+        return None
+    home = get_hermes_home().expanduser().resolve()
+    if not _is_target_home(home):
+        return None
+    if identity.profile not in {"cron-supervisor", "default"}:
+        return None
+    if not isinstance(response_text, str):
+        return None
+    short = len(response_text) <= LIMIT
+    line = (re.search(r"(?m)^(?:覆盖|采集覆盖|快照异常)[^\n]*对象索引未列[^\n]*"
+                      r"(?:快照异常未覆盖|报告未覆盖异常)[^\n]*$", response_text)
+            if short and "异常对象索引：" not in response_text else None)
+    lines = response_text.splitlines()
+    failure = bool(lines and lines[0].rstrip() == FAILURE)
+    reference = None
+    try:
+        if not failure and _is_silence(response_text):
+            return None
+        if identity.profile == "default" and not _default_execution_matches(home, identity.execution_id):
+            if get_hermes_home_override() is None:
+                return None
+            return (f"{FAILURE}\n监督报告身份未核验，未写入报告归档；请检查本次执行。\n"
+                    f"{FOOTER}")
+        if short:
+            try:
+                coverage = _coverage_snapshot(identity.execution_id, archive=False)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+                if not line and not isinstance(error, _SnapshotBindingError):
+                    snapshot_path = _home() / "cron" / "output" / JOB_ID / "monitor_last_output.txt"
+                    if not snapshot_path.is_file():
+                        return None
+                _record_fallback(identity.execution_id, error)
+                coverage = None
+            if not line and coverage is not None and not coverage.partial:
+                return None
+            reference = _archive_original(response_text, identity.execution_id)
+            if coverage is not None:
+                _archive_data(coverage.raw, identity.execution_id, ".snapshot.json")
+            return _correct_short_coverage(response_text, line, coverage, reference)
+        reference = _archive_original(response_text, identity.execution_id)
+        try:
+            coverage = _coverage_snapshot(identity.execution_id)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+            _record_fallback(identity.execution_id, error)
+            coverage = None
+        return _render(response_text, reference, coverage)
+    except Exception as error:
+        _record_fallback(identity.execution_id, error)
+        return _failure_report(error, reference)
+
+
+def register(ctx):
+    ctx.register_hook("transform_llm_output", transform, hold_stream=True)

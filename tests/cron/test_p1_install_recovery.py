@@ -1,22 +1,23 @@
-import importlib.util
 import json
 import os
 from pathlib import Path
 import select
 import subprocess
 import sys
+import types
 
 import pytest
 
 pytestmark = pytest.mark.platforms("posix")
 REPO = Path(__file__).resolve().parents[2]
-INSTALLER = REPO.parent / "apply_p1.py"
+INSTALLER = REPO / "tests/fixtures/p1_install/apply_p1.py.fixture"
 
 
 def load_installer():
-    spec = importlib.util.spec_from_file_location("p1_installer", INSTALLER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = types.ModuleType("p1_installer")
+    module.__file__ = str(INSTALLER)
+    exec(compile(INSTALLER.read_bytes(), str(INSTALLER), "exec"), module.__dict__)
+    module.__dict__["CANDIDATE"] = INSTALLER.with_name("r3-plugin.py.fixture")
     return module
 
 
@@ -240,10 +241,10 @@ def test_killed_actual_installer_can_restore_then_admit_a_new_claim(tmp_path, mo
     candidate.write_bytes(new)
     sha = lambda data: hashlib.sha256(data).hexdigest()
     program = '''
-import importlib.util,signal,sys
+import signal,sys,types
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('installer',sys.argv[1])
-m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.JOB=sys.argv[5]
+m=types.ModuleType('installer');m.__file__=sys.argv[1]
+exec(compile(Path(sys.argv[1]).read_bytes(),sys.argv[1],'exec'),m.__dict__);m.JOB=sys.argv[5]
 def paused(_):
     print('published',flush=True)
     signal.pause()
@@ -262,7 +263,7 @@ m.apply(base=Path(sys.argv[2]),candidate=Path(sys.argv[3]),receipt_dir=Path(sys.
         assert InProcessCronScheduler().claim_fire(job['id'], manual=True) is None
         assert len(executions.list_executions(job_id=job['id'])) == 1
         module = load_installer()
-        module.JOB = job['id']
+        module.__dict__["JOB"] = job['id']
         calls = []
         def restored(_):
             calls.append(target.read_bytes())
@@ -302,7 +303,7 @@ def test_delayed_reconcile_ignores_install_lead_time_gate(tmp_path, monkeypatch)
         'backup': str(backup), 'control_home': str(home), 'token': 'delayed'}))
 
     module = load_installer()
-    module.JOB = job['id']
+    module.__dict__["JOB"] = job['id']
     result = module.reconcile(home, reloader=lambda _: {'reloaded': True})
     assert result['status'] == 'reconciled'
     assert target.read_bytes() == old

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-import tempfile
+
 from types import SimpleNamespace
 import uuid
 
@@ -15,12 +15,14 @@ import pytest
 from tests.cron.test_p1_install_recovery import load_installer
 
 pytestmark = pytest.mark.platforms("posix")
-ROOT = Path(__file__).resolve().parents[3]
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures/p1_install"
 
 
 @pytest.mark.parametrize("before_file,after_file", [
-    ("old-plugin.py", "r3-plugin.py"), ("r3-plugin.py", "r2-plugin.py")])
-def test_real_old_r3_hook_activation_and_interrupted_recovery(monkeypatch, before_file, after_file):
+    ("old-plugin.py.fixture", "r3-plugin.py.fixture"),
+    ("r3-plugin.py.fixture", "r2-plugin.py.fixture")])
+def test_real_old_r3_hook_activation_and_interrupted_recovery(monkeypatch, tmp_path, before_file, after_file):
     async def scenario(root):
         from hermes_cli import plugins
         from gateway import run_plugin_rewire
@@ -35,7 +37,7 @@ def test_real_old_r3_hook_activation_and_interrupted_recovery(monkeypatch, befor
         (cron / "admissions").mkdir(parents=True)
         (home / "config.yaml").write_text("plugins:\n  enabled: [cron-supervisor-report-budget]\n  disabled: []\n")
         target.with_name("plugin.yaml").write_text("name: cron-supervisor-report-budget\nversion: 0.1.0\n")
-        old, new = (ROOT / before_file).read_bytes(), (ROOT / after_file).read_bytes()
+        old, new = (FIXTURES / before_file).read_bytes(), (FIXTURES / after_file).read_bytes()
         sha = lambda data: hashlib.sha256(data).hexdigest()
         target.write_bytes(old)
         monkeypatch.setenv("HOME", str(root))
@@ -80,11 +82,11 @@ def test_real_old_r3_hook_activation_and_interrupted_recovery(monkeypatch, befor
                     else reload_handler(kwargs.get("params")))
         monkeypatch.setattr(control_socket, "query_gateway_control", query)
         installer = load_installer()
-        arguments = dict(base=home, candidate=ROOT / after_file, receipt_dir=root / "receipts",
+        arguments = dict(base=home, candidate=FIXTURES / after_file, receipt_dir=root / "receipts",
                          old=sha(old), new=sha(new))
         try:
             before_outputs = invoke()
-            assert len(before_outputs) == (0 if before_file == "old-plugin.py" else 1)
+            assert len(before_outputs) == (0 if before_file == "old-plugin.py.fixture" else 1)
             result = await asyncio.to_thread(installer.apply, **arguments)
             assert result["status"] == "applied"
             assert result["activation"]["loaded_sources"]["cron-supervisor-report-budget"] == sha(new)
@@ -118,8 +120,7 @@ def test_real_old_r3_hook_activation_and_interrupted_recovery(monkeypatch, befor
             _CURRENT.reset(token)
             plugins._reset_plugin_managers_for_tests()
 
-    with tempfile.TemporaryDirectory(prefix="s-", dir=ROOT / "tmp") as directory:
-        asyncio.run(scenario(Path(directory)))
+    asyncio.run(scenario(tmp_path))
 
 
 def test_normal_reload_keeps_home_only_compatibility_and_marker_gate(monkeypatch, tmp_path):

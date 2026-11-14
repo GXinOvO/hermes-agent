@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""Guarded install/rollback for the cron-supervisor report-budget plugin.
+
+Refuses while any admission is pending, the job is not idle, or the next
+execution is too close, so a failed activation cannot strand a fire.
+"""
+import fcntl
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+import tempfile
+import time
+import uuid
+from contextlib import ExitStack, closing
+from datetime import datetime
+from pathlib import Path
+
+BASE = Path(__file__).with_name('fixture-base')
+CANDIDATE = Path(__file__).with_name('r3-plugin.py')
+RECEIPT_DIR = Path(__file__).with_name('receipts')
+TARGET = BASE / 'plugins/cron-supervisor-report-budget/__init__.py'
+TRIGGER = BASE / 'scripts/cron-supervisor-monitor-trigger.py'
+JOB = '341bad758066'
+OLD = '6ada995cc834d84085de09045070dd8277edb7ea1283fb84cadba3a09d235b72'
+NEW = '53322ccd001f447497c6f73aff562573528c614a8292e3862ba624054e2c7772'
+MIN_LEAD_SECONDS = 600
+CRON_INSTALL_GATE_VERSION = 7
+
+
+class ActivationUnconfirmed(RuntimeError):
+    pass
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _owner_fingerprint(answer):
+    return {key: answer.get(key) for key in (
+        'hermes_home', 'pid', 'start_time', 'code_sha',
+        'cron_install_gate', 'cron_install_capability')}
+
+
+def _owner_matches(expected, actual):
+    return _owner_fingerprint(expected) == _owner_fingerprint(actual)
+
+
+def gateway_owner(base, *, return_record=False):
+    from gateway.control_socket import query_gateway_control
+    for home in dict.fromkeys((base, base.parent.parent)):
+        answer = query_gateway_control(home, 'identify')
+        if not isinstance(answer, dict) or answer.get('cron_install_gate') != CRON_INSTALL_GATE_VERSION:
+            continue
+        try:
+            from cron.install_capability import runtime_identity
+            expected_capability = runtime_identity(home=base)
+        except Exception:
+            continue
+        if answer.get('cron_install_capability') != expected_capability:
+            continue
+        if Path(answer.get('hermes_home', '')).resolve() != Path(home).resolve():
+            continue
+        if not isinstance(answer.get('pid'), int) or answer['pid'] <= 0:
+            continue
+        if not isinstance(answer.get('start_time'), (int, float)) or answer['start_time'] <= 0:
+            continue
+        from gateway.status import get_process_start_time
+        if get_process_start_time(answer['pid']) != int(answer['start_time']):
+            continue
+        if not isinstance(answer.get('code_sha'), str) or not answer['code_sha']:
+            continue
+        served = answer.get('served_profiles', [])
+        served_homes = {
+            str(Path(item.get('home')).resolve()) for item in served
+            if isinstance(item, dict) and isinstance(item.get('home'), str)
+        }
+        served_names = {str(item) for item in served if isinstance(item, str)}
+        if Path(answer['hermes_home']).resolve() != Path(base).resolve() and not (served_homes or served_names):
+            continue
+        if served_homes and str(base.resolve()) not in served_homes:
+            continue
+        if served_names and base.name not in served_names:
+            continue
+        return (home, answer) if return_record else home
+    raise RuntimeError('serving gateway identity is unavailable')
+
+
+def publish(path, data, mode, expected=None):
+    path = Path(path)
+    if path.name == '__init__.py' and path.parent.parent.name == 'plugins':
+        from pm.plugin_target_lock import target_writer_lock
+        with target_writer_lock(path.parent):
+            return _publish_locked(path, data, mode, expected=expected)
+    return _publish_locked(path, data, mode, expected=expected)
+
+
+def _publish_locked(path, data, mode, expected=None):
+    if expected is not None:
+        current, _ = read_regular(path)
+        if digest(current) != expected:
+            raise RuntimeError('target changed concurrently before publish')
+    fd, temporary = tempfile.mkstemp(prefix='.report-budget-install-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            handle.flush()
+            os.fchmod(handle.fileno(), mode)
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def read_regular(path):
+    path = Path(path)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError('recovery source is not a regular file') from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('recovery source is not a regular file')
+        return os.read(fd, info.st_size), stat.S_IMODE(info.st_mode)
+    finally:
+        os.close(fd)
+
+
+def reload_plugin(base, expected=None, control_home=None):
+    from gateway.control_socket import query_gateway_control
+    from cron.install_capability import owner_digest
+    marker = json.loads((base / 'cron/.install-pending.json').read_text(encoding='utf-8-sig'))
+    serving_home = Path(control_home) if control_home is not None else Path(marker['control_home'])
+    if marker.get('owner'):
+        current_home, current_owner = gateway_owner(base, return_record=True)
+        if current_home != serving_home or not _owner_matches(marker['owner'], current_owner):
+            raise ActivationUnconfirmed('serving gateway owner changed before reload')
+    answer = query_gateway_control(serving_home, 'reload-plugins', params={
+        'home': str(base), 'install_token': marker['token'], 'owner_sha256': owner_digest(marker.get('owner'))})
+    if (not isinstance(answer, dict) or not answer.get('reloaded')
+            or Path(answer.get('home', '')).resolve() != base.resolve()):
+        raise ActivationUnconfirmed(f'gateway reload unconfirmed: {answer}')
+    matches = [a for a in answer.get('activations', [])
+               if a.get('key') == 'cron-supervisor-report-budget']
+    if (len(matches) != 1 or 'transform_llm_output' not in
+            matches[0].get('activated_now', {}).get('gateway_transforms', [])
+            or matches[0].get('missing_dependencies')):
+        raise ActivationUnconfirmed(f'gateway hook activation unconfirmed: {answer}')
+    if expected and answer.get('loaded_sources', {}).get('cron-supervisor-report-budget') != expected:
+        raise ActivationUnconfirmed('gateway loaded source identity unconfirmed')
+    if marker.get('owner') and answer.get('owner') != marker['owner']:
+        raise ActivationUnconfirmed('gateway reload owner identity unconfirmed')
+    return answer
+
+
+def guarded_install(base, action, control_home=None, identity=None):
+    from cron.install_gate import install_gate
+    with install_gate(base, exclusive=True):
+        marker = base / 'cron/.install-pending.json'
+        publish(marker, json.dumps({'state': 'installing', 'owner_pid': os.getpid(),
+                                   'token': uuid.uuid4().hex,
+                                   'control_home': str(control_home or base),
+                                   'job_id': JOB,
+                                   **(identity or {})}).encode(), 0o600)
+        result = action()
+        marker.unlink()
+        directory = os.open(marker.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return result
+
+
+def reconcile(base, reloader=None):
+    from pm.plugin_target_lock import target_writer_lock
+    base = Path(base)
+    with target_writer_lock(base / 'plugins/cron-supervisor-report-budget'):
+        return _reconcile_locked(base, reloader)
+
+
+def _reconcile_locked(base, reloader=None):
+    from cron.install_gate import install_gate
+    base = Path(base)
+    cron = base / 'cron'
+    control_home, owner_record = gateway_owner(base, return_record=True) if reloader is None else (None, None)
+    with install_gate(base, exclusive=True, allow_marker=True):
+        marker = cron / '.install-pending.json'
+        with (cron / '.plugins-reload.lock').open('a+b') as reload_lock:
+            fcntl.flock(reload_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            record = json.loads(marker.read_text(encoding='utf-8-sig'))
+            if record.get('job_id', JOB) != JOB:
+                raise ValueError('interrupted installation job differs')
+            target = base / 'plugins/cron-supervisor-report-budget/__init__.py'
+            if record['target'] != str(target) or target.is_symlink():
+                raise ValueError('interrupted installation target differs')
+            current = digest(target.read_bytes())
+            if current not in (record['old'], record['new']):
+                raise ValueError('target changed concurrently; recovery not attempted')
+            backup = Path(record['backup'])
+            backup_bytes, _ = read_regular(backup)
+            if digest(backup_bytes) != record['old']:
+                raise ValueError('recovery backup differs')
+            if record.get('control_home') and control_home is not None:
+                if Path(record['control_home']).resolve() != Path(control_home).resolve():
+                    raise ValueError('serving gateway owner changed')
+            if owner_record is not None:
+                recorded_owner = record.get('owner')
+                if recorded_owner is None or recorded_owner != _owner_fingerprint(owner_record):
+                    raise ValueError('serving gateway owner proof missing or changed')
+            problems, *_ = preflight(base, backup, backup.parent, old=record['old'], new=record['new'], min_lead=None,
+                                     recovery=True, backup_path=backup, backup_bytes=backup_bytes)
+            if problems:
+                raise ValueError('; '.join(problems))
+            if digest(target.read_bytes()) != current:
+                raise RuntimeError('recovery target changed concurrently')
+            if current != record['old']:
+                publish(target, backup_bytes, stat.S_IMODE(target.stat().st_mode), expected=current)
+                if digest(target.read_bytes()) != record['old']:
+                    raise RuntimeError('recovery byte verification failed')
+            if digest(target.read_bytes()) != record['old']:
+                raise RuntimeError('recovery target changed concurrently')
+            if owner_record is not None:
+                current_home, current_owner = gateway_owner(base, return_record=True)
+                if current_home != control_home or not _owner_matches(owner_record, current_owner):
+                    raise ValueError('serving gateway owner changed')
+            fcntl.flock(reload_lock, fcntl.LOCK_UN)
+        activation = (reloader or (lambda home: reload_plugin(home, record['old'])))(base)
+        if digest(target.read_bytes()) != record['old']:
+            raise RuntimeError('recovery byte verification failed')
+        marker.unlink()
+        directory = os.open(cron, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return {'status': 'reconciled', 'sha256': record['old'], 'activation': activation}
+
+
+def preflight(base=None, candidate=None, receipt_dir=None, old=None, new=None,
+              min_lead=MIN_LEAD_SECONDS, recovery=False, backup_path=None, backup_bytes=None):
+    base = Path(base or BASE)
+    candidate = Path(candidate or CANDIDATE)
+    receipt_dir = Path(receipt_dir or RECEIPT_DIR)
+    old = old or OLD
+    new = new or NEW
+    target = base / 'plugins' / 'cron-supervisor-report-budget' / '__init__.py'
+    cron = base / 'cron'
+    problems = []
+    if target.is_symlink() or not target.is_file():
+        problems.append('target is not a regular file')
+    elif not recovery and digest(target.read_bytes()) != old:
+        problems.append('production plugin bytes changed')
+    if candidate.is_symlink() or not candidate.is_file():
+        problems.append('candidate missing')
+    elif not recovery and digest(candidate.read_bytes()) != new:
+        problems.append('candidate bytes changed')
+    pending = sorted(p.name for p in (cron / 'admissions').glob('*.json')) if (cron / 'admissions').is_dir() else []
+    if pending:
+        problems.append(f'{len(pending)} pending admission(s) block install')
+    jobs_path = cron / 'jobs.json'
+    job = None
+    if jobs_path.is_file():
+        matched = [j for j in json.loads(jobs_path.read_text(encoding='utf-8-sig')).get('jobs', [])
+                   if j.get('id') == JOB]
+        if len(matched) != 1:
+            problems.append('job inventory is not unique')
+        else:
+            job = matched[0]
+            if job.get('enabled') is not True or job.get('state') != 'scheduled' or job.get('fire_claim'):
+                problems.append('job is not safely idle')
+            if not job.get('next_run_at'):
+                problems.append('next execution time unavailable')
+            else:
+                lead = datetime.fromisoformat(job['next_run_at']).timestamp() - time.time()
+                if min_lead is not None and lead < min_lead:
+                    problems.append(f'next execution in {lead:.0f}s is too close')
+    else:
+        problems.append('jobs.json missing')
+    database = cron / 'executions.db'
+    if database.is_file():
+        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=3)) as conn:
+            conn.execute('PRAGMA query_only=ON')
+            active = conn.execute(
+                "SELECT id,status FROM executions WHERE job_id=? AND status IN "
+                "('claimed','running','unknown')", (JOB,)).fetchall()
+        if active:
+            problems.append(f'{len(active)} nonterminal execution(s) block install')
+    else:
+        problems.append('executions.db missing')
+    backup = Path(backup_path) if backup_path is not None else receipt_dir / f'production-before-{old[:12]}.py'
+    if backup_bytes is not None:
+        if digest(backup_bytes) != old:
+            problems.append('stored backup differs from recorded production bytes')
+    elif backup.exists() and (backup.is_symlink() or digest(backup.read_bytes()) != old):
+        problems.append('stored backup differs from recorded production bytes')
+    return problems, target, backup, job
+
+
+def apply(base=None, candidate=None, receipt_dir=None, old=None, new=None,
+          min_lead=MIN_LEAD_SECONDS, reloader=None):
+    from pm.plugin_target_lock import target_writer_lock
+    base = Path(base or BASE)
+    with target_writer_lock(base / 'plugins/cron-supervisor-report-budget'):
+        return _apply_target_locked(base, candidate, receipt_dir, old, new, min_lead, reloader)
+
+
+def _apply_target_locked(base, candidate, receipt_dir, old, new, min_lead, reloader):
+    base = Path(base or BASE)
+    control_home, owner_record = gateway_owner(base, return_record=True) if reloader is None else (None, None)
+    cron = base / 'cron'
+    key = f'{cron.resolve()}::{JOB}'
+    lock_paths = [cron / '.tick.lock',
+                  cron / f'.fire-{uuid.uuid5(uuid.NAMESPACE_URL, key).hex}.lock',
+                  cron / '.jobs.lock']
+    with ExitStack() as stack:
+        from cron.install_gate import install_gate
+        stack.enter_context(install_gate(base, exclusive=True))
+        for path in lock_paths:
+            handle = stack.enter_context(path.open('r+'))
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stack.callback(fcntl.flock, handle, fcntl.LOCK_UN)
+        return _apply_locked(base, candidate, receipt_dir, old, new, min_lead, reloader,
+                             control_home, owner_record)
+
+
+def _apply_locked(base, candidate, receipt_dir, old, new, min_lead, reloader, control_home, owner_record):
+    candidate = Path(candidate or CANDIDATE)
+    receipt_dir = Path(receipt_dir or RECEIPT_DIR)
+    old = old or OLD
+    new = new or NEW
+    problems, target, backup, job = preflight(base, candidate, receipt_dir, old, new, min_lead)
+    if problems:
+        raise ValueError('; '.join(problems))
+    original = target.read_bytes()
+    if digest(original) != old:
+        raise ValueError('production plugin bytes changed')
+    candidate_bytes = candidate.read_bytes()
+    if digest(candidate_bytes) != new:
+        raise ValueError('candidate bytes changed')
+    mode = stat.S_IMODE(target.stat().st_mode)
+    receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not backup.exists():
+        with backup.open('xb') as handle:
+            handle.write(original)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if digest(backup.read_bytes()) != old:
+            raise RuntimeError('backup verification failed')
+    return guarded_install(base, lambda: _activate_snapshot(
+        base, target, backup, job, original, candidate_bytes, old, new, mode, reloader,
+        control_home, owner_record), control_home,
+        {'old': old, 'new': new, 'target': str(target), 'backup': str(backup),
+         **({'owner': _owner_fingerprint(owner_record)} if owner_record else {})})
+
+
+def _activate_snapshot(base, target, backup, job, original, candidate_bytes, old, new, mode,
+                       reloader, control_home, owner_record):
+    attempting_publish = False
+    reload_attempted = False
+    try:
+        attempting_publish = True
+        publish(target, candidate_bytes, mode, expected=old)
+        if digest(target.read_bytes()) != new:
+            raise RuntimeError('post-write identity mismatch')
+        reload_attempted = True
+        if reloader is None and owner_record is not None:
+            current_home, current_owner = gateway_owner(base, return_record=True)
+            if current_home != control_home or not _owner_matches(owner_record, current_owner):
+                raise ActivationUnconfirmed('serving gateway owner changed before reload')
+        activation = reloader(base) if reloader else reload_plugin(base, new, control_home)
+        return {'status': 'applied', 'sha256': new, 'backup': str(backup),
+                'next_run_at': (job or {}).get('next_run_at'), 'activation': activation}
+    except BaseException as original_error:
+        if isinstance(original_error, ActivationUnconfirmed):
+            raise
+        if attempting_publish and target.is_file():
+            current = digest(target.read_bytes())
+            if current == new:
+                publish(target, original, mode, expected=new)
+                if digest(target.read_bytes()) != old:
+                    raise RuntimeError('rollback byte verification failed') from original_error
+                if reload_attempted:
+                    try:
+                        reloader(base) if reloader else reload_plugin(base, old, control_home)
+                    except Exception as rollback_error:
+                        raise RuntimeError(f'rollback bytes restored but gateway activation unverified: {rollback_error}') from original_error
+            elif current != old:
+                raise RuntimeError('target changed concurrently; rollback not attempted') from original_error
+        raise
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--verify-only':
+        issues, where, stored, job = preflight()
+        print(json.dumps({'status': 'blocked' if issues else 'ready', 'problems': issues,
+                          'target': str(where), 'backup': str(stored),
+                          'next_run_at': (job or {}).get('next_run_at')}, ensure_ascii=False))
+        raise SystemExit(1 if issues else 0)
+    try:
+        print(json.dumps(apply(), ensure_ascii=False))
+    except Exception as error:
+        print(json.dumps({'status': 'blocked_or_rolled_back',
+                          'reason': f'{type(error).__name__}: {error}'}, ensure_ascii=False))
+        raise SystemExit(2)
