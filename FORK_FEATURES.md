@@ -278,9 +278,9 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 
 验证（本机隔离 venv，非 CI）：委派与续跑 80 个文件 **562 通过、1 跳过**；交付账本／待发最终回复 64 个文件 **851 通过**；其中 5 个 `strict_enterprise_*`／`whatsapp_boundary` 文件 **146 失败**，与 fork `dev` 基线逐文件计数完全一致，原因是本地 venv 缺 `alibabacloud_dingtalk` 等企业 SDK，非本次合并引入；`scripts/check --base dev` 17 项通过。未跑全仓库测试，未运行真实网关或企业平台交付，未更新运行安装。
 
-### 上游同步（当前合并：71e07ef273）
+### 上游同步（当前合并：26cd2e6d83）
 
-本轮将官方 `NousResearch/hermes-agent/main` 的 `71e07ef273d11639d004dcd66ab0b5ea75b7d661` 合入 `dev`，保留 fork 的结果恢复、严格传输、会话 marker 和 checkpoint 校验。冲突文件为 `cron/scheduler.py`、`cron/scheduler_delivery.py`、`gateway/session_ingress.py`、`plugins/platforms/slack/adapter.py`、`tools/process_registry_checkpoint.py`。
+本轮将官方 `NousResearch/hermes-agent/main` 的 `26cd2e6d83494c22a8b5e961f20e293285c48d0a` 合入 `dev`（首次冲突基线 `71e07ef273d11639d004dcd66ab0b5ea75b7d661`），保留 fork 的结果恢复、严格传输、会话 marker 和 checkpoint 校验。冲突文件为 `cron/scheduler.py`、`cron/scheduler_delivery.py`、`gateway/session_ingress.py`、`plugins/platforms/slack/adapter.py`、`tools/process_registry_checkpoint.py`。
 
 - Cron 未验证执行继续进入 fork 的统一恢复入口；上游的 `CronExecutionUnknown` 暂停语义和持久化错误脱敏接入 `scheduler_results.py`，完成结果不会被尾部故障重新执行，错误 reason 不把原始敏感文本写入 durable ledger。
 - Cron topic 来源默认继续投递到原 topic；只有 `cron_fresh_thread_per_run: true` 且目标正是 job origin topic 时才创建新 thread，严格预检的 `open_thread=False` 仍阻止副作用。
