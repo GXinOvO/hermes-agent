@@ -27,7 +27,11 @@ async def test_a_reminder_the_app_set_on_the_old_conversation_fires_after_a_resu
     never refused for a local receipt A never had, so a recurring reminder keeps firing."""
     from gateway.session_cron import deliver_to_local_chat
     from gateway.session_mutations import retire_live_sessions
+    from gateway.strict_transport import single_attempt_transport
+    from unittest.mock import AsyncMock
     _runner, adapter, authority, source, sent, ran, _gates, lane, ref_a = await _moved_on(monkeypatch)
+    single_attempt_transport(adapter.send)
+    monkeypatch.setattr(type(adapter), '_prepare_strict_transport', AsyncMock(return_value=None))
     a, home = ref_a.session_id, Path(authority.db.db_path).parent
 
     await _chat(adapter, source, sent, '/resume First chat')

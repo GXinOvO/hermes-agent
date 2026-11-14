@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -46,6 +47,55 @@ def remote_project(tmp_path, monkeypatch):
             tt._active_environments.pop(key, None)
         env.cleanup()
         assert env.proc.poll() is not None
+
+
+@pytest.mark.platforms('linux')
+@pytest.mark.parametrize(('target', 'exc'), [
+    ('/proc/self/mountinfo', 'FileNotFoundError'),
+    ('/proc/sys/kernel/random/boot_id', 'PermissionError'),
+])
+def test_linux_probe_refuses_unavailable_mount_identity(tmp_path, target, exc):
+    from tools.file_backend_probe import _PROBE
+
+    script = (
+        "import builtins,sys\n"
+        "original = builtins.open\n"
+        "def guarded(path, *args, **kwargs):\n"
+        f"    if str(path) == {target!r}: raise {exc}(path)\n"
+        "    return original(path, *args, **kwargs)\n"
+        "builtins.open = guarded\n"
+        f"sys.argv = ['probe', {str(tmp_path)!r}, 'metadata']\n"
+        f"exec({_PROBE!r})\n"
+    )
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', script],
+                            capture_output=True, text=True, timeout=20, check=False)
+    assert result.returncode != 0, result.stdout
+    assert target in result.stderr
+
+
+@pytest.mark.platforms('linux')
+@pytest.mark.parametrize('missing', ['/proc/self/mountinfo', '/proc/sys/kernel/random/boot_id'])
+def test_unavailable_mount_identity_refuses_existing_and_new_writes(remote_project, monkeypatch, missing):
+    project, env, task = remote_project
+    target = project / 'mount-identity.txt'
+    target.write_text('original\n')
+    assert 'content' in json.loads(ft.read_file_tool('/workspace/mount-identity.txt', task_id=task))
+    probe = env.execute_file_probe
+    calls = []
+
+    def without_identity(command, **kwargs):
+        if missing in command:
+            calls.append(missing)
+            command = command.replace(missing, '/proc/hermes-test-missing-mount-identity')
+        return probe(command, **kwargs)
+
+    monkeypatch.setattr(env, 'execute_file_probe', without_identity)
+    for name in ('mount-identity.txt', 'new-mount-identity.txt'):
+        result = json.loads(ft.write_file_tool('/workspace/' + name, 'must not be written\n', task_id=task))
+        assert result.get('error') and not result.get('verified'), result
+    assert calls
+    assert target.read_text() == 'original\n'
+    assert not (project / 'new-mount-identity.txt').exists()
 
 
 def test_failed_remote_probe_cannot_overwrite_unread(remote_project):

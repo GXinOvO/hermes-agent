@@ -424,6 +424,20 @@ def test_runtime_with_zero_plugins_loaded_still_delegates_on_the_bundled_default
             _registry.restore_registration("default", current, previous)
 
 
+@pytest.mark.parametrize("safe_worker,safe_env", [(True, ""), (False, "1")])
+def test_safe_worker_refuses_delegation_before_provider_resolution(monkeypatch, safe_worker, safe_env):
+    from agent import delegation_registry
+    from agent.delegation_provider import DelegationRouteError
+
+    monkeypatch.setattr("agent.safe_worker_policy.safe_worker_enabled", lambda: safe_worker)
+    monkeypatch.setenv("HERMES_SAFE_MODE", safe_env)
+    resolved = []
+    monkeypatch.setattr(delegation_registry, "_usable", lambda name: resolved.append(name))
+    with pytest.raises(DelegationRouteError, match="safe mode"):
+        delegation_registry.get_active_provider({})
+    assert resolved == []
+
+
 def test_first_use_default_never_outlives_a_later_disable(tmp_path, monkeypatch, recorded):
     """The first-use load of the bundled default is not a second, permanent registration: once
     ``delegation/default`` is disabled, the next delegation refuses even in the runtime that loaded it."""

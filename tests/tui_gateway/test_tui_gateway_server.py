@@ -10687,7 +10687,7 @@ def test_config_set_model_records_per_session_override_not_env(monkeypatch):
         server._sessions.clear()
 
 
-def test_config_set_model_switches_agent_without_touching_env(monkeypatch):
+def test_config_set_model_switches_agent_without_touching_env(monkeypatch, tmp_path):
     """A /model switch mutates the target session's agent in place and records
     a per-session override; it does NOT write HERMES_MODEL / HERMES_TUI_PROVIDER
     etc. into the shared process environment.
@@ -10710,31 +10710,11 @@ def test_config_set_model_switches_agent_without_touching_env(monkeypatch):
         def _build_system_prompt(self, _system_message=None):
             return f"Model: {self.model}\nProvider: {self.provider}"
 
-    class SessionDB:
-        def __init__(self):
-            self.model_config = None
-            self.system_prompt = None
-            self.messages = []
-
-        def get_session(self, _session_id):
-            return {"model_config": self.model_config}
-
-        def update_session_meta(self, _session_id, model_config_json, _model=None):
-            self.model_config = model_config_json
-
-        def update_system_prompt(self, _session_id, system_prompt):
-            self.system_prompt = system_prompt
-
-        def append_message(self, session_id, role, content=None, **_kwargs):
-            self.messages.append(
-                {"session_id": session_id, "role": role, "content": content}
-            )
-
-        def deactivate_messages_by_display_kind(self, _session_id, _display_kind):
-            return 0
+    from hermes_state import SessionDB
 
     agent = Agent()
-    db = SessionDB()
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session(agent.session_id, source="tui")
     agent._session_db = db
     session = _session(agent=agent)
     server._sessions["sid"] = session
@@ -10781,13 +10761,15 @@ def test_config_set_model_switches_agent_without_touching_env(monkeypatch):
         # Without this, the next turn restored the old system prompt from the DB:
         # API calls went to the new model, but "what model are you?" still read
         # "Model: old/model" from the stored prompt.
-        assert db.system_prompt == (
+        saved_prompt = db.get_session(agent.session_id)["system_prompt"]
+        assert saved_prompt == (
             "Model: anthropic/claude-sonnet-4.6\nProvider: anthropic"
         )
-        assert agent._cached_system_prompt == db.system_prompt
+        assert agent._cached_system_prompt == saved_prompt
         assert session["history"][-1]["role"] == "user"
         assert "changed to anthropic/claude-sonnet-4.6" in session["history"][-1]["content"]
-        assert db.messages[-1] == {
+        saved_message = db.get_messages(agent.session_id)[-1]
+        assert {key: saved_message[key] for key in ("session_id", "role", "content")} == {
             # The agent's own db handle belongs to the agent's live session id, not the gateway's
             # session_key — the same `getattr(agent, "session_id", None) or session_key` the sibling
             # system-prompt persist uses one screen up (#123545: these two must not diverge).
@@ -10801,6 +10783,7 @@ def test_config_set_model_switches_agent_without_touching_env(monkeypatch):
         assert "HERMES_INFERENCE_MODEL" not in os.environ
     finally:
         server._sessions.clear()
+        db.close()
 
 
 def test_config_set_model_once_keeps_env_and_records_restore(monkeypatch):

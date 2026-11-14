@@ -27,6 +27,7 @@ def _agent():
     a._thinking_prefill_retries = 2
     a._fallback_chain = None
     a._empty_content_retries = 0
+    a._interrupt_requested = False
     a._emit_diagnostic_status = MagicMock()
     a._buffer_diagnostic_status = MagicMock()
     a._flush_status_buffer = MagicMock()

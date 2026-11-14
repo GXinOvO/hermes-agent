@@ -7,10 +7,33 @@ from gateway.strict_transport import strict_call, supports_strict_transport
 from tests.gateway import test_strict_http_peers as peers
 
 
+@pytest.fixture
+def automation_input(tmp_path):
+    from gateway.config import Platform
+    from gateway.platforms.event import MessageEvent
+    from gateway.session import SessionSource
+    from hermes_state import SessionDB
+    from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('sid', source='whatsapp')
+        epoch = begin_runtime_epoch(db, instance_id='owner')
+        route = 'agent:main:whatsapp:dm:15550000001'
+        source = SessionSource(platform=Platform.WHATSAPP, chat_id='15550000001', chat_type='dm')
+        payload = {'text': 'work', 'native_text_v1': {'route': route, 'source': source.to_dict(),
+                   'automation': {'owner': 'sid', 'identity': 'saved-result', 'result_recovery_v1': 'consume_only'}}}
+        admit_session_input(db, epoch=epoch, principal_id='automation:' + route, session_id='sid',
+                            request_id='saved-result', payload=payload)
+        row = claim_session_input(db, epoch=epoch, session_id='sid')
+        event = MessageEvent(text='work', source=source, internal=True, message_id='saved-result')
+        yield db, row, event, route
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('method', ['send', 'send_image_file', 'send_document', 'send_voice', 'send_video'])
-async def test_unverified_bridge_refused_before_http(method, tmp_path):
+async def test_unverified_bridge_refused_before_http(method, tmp_path, automation_input):
     from gateway.final_delivery import send_text
+    from gateway.session_delivery_policy import automation_delivery_scope, claim_for_event
     from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
@@ -21,10 +44,13 @@ async def test_unverified_bridge_refused_before_http(method, tmp_path):
         with pytest.raises(RuntimeError, match='strict_transport_unverified'):
             await strict_call(adapter, method)
         if method == 'send':
+            db, row, event, route = automation_input
             claim = AsyncMock()
-            with patch('gateway.final_delivery._claim', claim):
-                result = await send_text(adapter, SimpleNamespace(source=SimpleNamespace(chat_id='15550000001')),
-                                         'route', 'answer', reply_to=None, metadata=None)
+            async with automation_delivery_scope(SimpleNamespace(db=db), row, event):
+                runtime_claim = claim_for_event(event)
+                assert runtime_claim is not None and runtime_claim.admission == row['admission_id']
+                with patch('gateway.final_delivery._claim', claim):
+                    result = await send_text(adapter, event, route, 'answer', reply_to=None, metadata=None)
             assert not result.success and 'pending' in result.error
             claim.assert_not_awaited()
         assert peer.records == []

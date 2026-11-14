@@ -106,6 +106,17 @@ class TestGitTrampolineSelfHeal:
         assert result == git_cmd
         run.assert_not_called()
 
+    def test_locate_real_git_finds_ucrt64(self, tmp_path, monkeypatch):
+        from hermes_cli import update_cmd_git
+
+        real_git = tmp_path / "Git" / "ucrt64" / "libexec" / "git-core" / "git.exe"
+        real_git.parent.mkdir(parents=True)
+        real_git.touch()
+        monkeypatch.setattr(update_cmd_git, "Path", lambda _: tmp_path)
+        monkeypatch.setattr(update_cmd_git, "_portable_git_candidates", list)
+        monkeypatch.setattr(update_cmd_git, "_probe_fork_bomb", lambda _: False)
+        assert update_cmd_git._locate_real_git() == real_git
+
     def test_portable_git_candidates_check_shared_root_first(self, tmp_path, monkeypatch):
         # Profile-scoped layout: HERMES_HOME = <root>/profiles/foo, but the
         # PortableGit tree lives under the SHARED root (monerostar review on

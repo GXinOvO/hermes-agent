@@ -341,6 +341,12 @@ class PluginHost:
                                    "headers": [list(h) for h in headers], "body": encode(body)},
                           timeout=timeout)
 
+    def prepare_asgi(self, plugin_name: str, dashboard_dir: str, api_file: str) -> None:
+        """Load and cache a dashboard router before a request's short response budget begins."""
+        self.ensure_started()
+        self._call("prepare_asgi", {"plugin": plugin_name, "dashboard_dir": dashboard_dir,
+                                     "api_file": api_file}, timeout=_START_TIMEOUT_SECS)
+
     def _unload(self, plugin_key: str) -> None:
         self._contexts.pop(plugin_key, None)
         self._loads.pop(plugin_key, None)

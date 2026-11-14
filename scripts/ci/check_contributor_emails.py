@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when a commit since the merge base with origin/main has an unmapped author email.
+"""Fail when a commit since the merge base with the PR base has an unmapped author email.
 
 Run by the ``Check for unmapped contributor emails`` step of
 ``.github/workflows/repo-guards.yml``. An email is mapped if it has a file in
@@ -14,6 +14,7 @@ Exit codes: 0 = every email mapped (or no new commits), 1 = at least one unmappe
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import subprocess
 import sys
@@ -56,16 +57,37 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def new_author_emails() -> list[str] | int:
-    """Sorted unique author emails (``sort -u``) since the merge base with origin/main.
-
-    Returns git's exit code instead when there is no merge base: the step's ``bash -e`` stopped
-    there, before any review status.
-    """
-    merge_base = _git("merge-base", "origin/main", "HEAD")
+    """Return authors on the PR side of the checked-out base, or a Git error code."""
+    base = os.environ.get("_HERMES_PR_BASE_SHA") or "origin/main"
+    head = os.environ.get("_HERMES_PR_HEAD_SHA")
+    if head:
+        resolved = _git("rev-parse", "--verify", f"{head}^{{commit}}")
+        if resolved.returncode:
+            return resolved.returncode
+        head = resolved.stdout.strip()
+        parents = _git("rev-list", "--parents", "-n", "1", "HEAD")
+        if parents.returncode:
+            return parents.returncode
+        commits = parents.stdout.split()
+        if not commits:
+            return 1
+        if commits[0] != head:
+            if len(commits) != 3 or commits[2] != head:
+                print("::error::PR checkout does not match the event head.", file=sys.stderr)
+                return 1
+            ancestry = _git("merge-base", "--is-ancestor", base, commits[1])
+            if ancestry.returncode:
+                return ancestry.returncode
+            base = commits[1]
+    else:
+        head = "HEAD"
+    merge_base = _git("merge-base", base, head)
     if merge_base.returncode:
         return merge_base.returncode
-    log = _git("log", f"{merge_base.stdout.strip()}..HEAD", "--format=%ae", "--no-merges").stdout
-    emails = sorted(set(log.splitlines()))
+    log = _git("log", f"{base}..{head}", "--format=%ae", "--no-merges")
+    if log.returncode:
+        return log.returncode
+    emails = sorted(set(log.stdout.splitlines()))
     return emails if "".join(emails) else []
 
 

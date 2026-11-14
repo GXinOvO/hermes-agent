@@ -198,7 +198,7 @@ class SessionLifecycleMixin:
     def _set_turn_marker_locked(self, session_key: str, entry: SessionEntry, token, started_at) -> None:
         """Persist the active-turn pair BEFORE publishing it in memory, so a failed write can
         neither leak an unowned token nor drop a live one. Lock held."""
-        candidate = entry.to_dict()
+        candidate = entry.to_routing_dict()
         candidate["active_turn_token"] = token
         candidate["active_turn_started_at"] = _iso(started_at)
         touched = _now() if started_at is not None else None

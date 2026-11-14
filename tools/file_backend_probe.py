@@ -32,15 +32,28 @@ if not os.path.isabs(p): raise ValueError('unbound backend path')
 canonical=os.path.realpath(p)
 def unescape(value):
  return re.sub(r'\\\\([0-7]{3})',lambda m:chr(int(m.group(1),8)),value)
-with open('/proc/self/mountinfo') as f: mounts=[line.split() for line in f]
-mounts=[m for m in mounts if canonical==unescape(m[4]) or canonical.startswith(unescape(m[4]).rstrip('/')+'/')]
-m=max(mounts,key=lambda m:len(unescape(m[4])))
-separator=m.index('-')
-fstype,source=m[separator+1:separator+3]
-with open('/proc/sys/kernel/random/boot_id') as f: host=f.read().strip()
-identity_source=[fstype,source] if fstype in ('nfs','nfs4','cifs') else [host,m[2],fstype,source]
-storage_id=hashlib.sha256(json.dumps(identity_source,separators=(',',':')).encode()).hexdigest()
-storage_path=os.path.normpath(unescape(m[3]).rstrip('/')+'/'+os.path.relpath(canonical,unescape(m[4])))
+def _storage(canonical):
+ try:
+  with open('/proc/self/mountinfo') as f: mounts=[line.split() for line in f]
+  mounts=[m for m in mounts if canonical==unescape(m[4]) or canonical.startswith(unescape(m[4]).rstrip('/')+'/')]
+  m=max(mounts,key=lambda m:len(unescape(m[4])))
+  separator=m.index('-')
+  fstype,source=m[separator+1:separator+3]
+  with open('/proc/sys/kernel/random/boot_id') as f: host=f.read().strip()
+  identity_source=[fstype,source] if fstype in ('nfs','nfs4','cifs') else [host,m[2],fstype,source]
+  return (hashlib.sha256(json.dumps(identity_source,separators=(',',':')).encode()).hexdigest(),
+          os.path.normpath(unescape(m[3]).rstrip('/')+'/'+os.path.relpath(canonical,unescape(m[4]))))
+ except (OSError,ValueError):
+  if sys.platform.startswith('linux'): raise
+  # No /proc (macOS/BSD): identify the storage by the device number of the nearest existing
+  # ancestor on this host, so two paths on one filesystem still agree and another mount,
+  # host or filesystem does not.
+  import platform
+  ancestor=canonical
+  while not os.path.exists(ancestor) and os.path.dirname(ancestor)!=ancestor: ancestor=os.path.dirname(ancestor)
+  identity_source=[platform.system(),platform.node(),os.stat(ancestor).st_dev]
+  return hashlib.sha256(json.dumps(identity_source,separators=(',',':')).encode()).hexdigest(), canonical
+storage_id,storage_path=_storage(canonical)
 python=os.path.realpath(sys.executable)
 s=os.stat(python)
 with open(python,'rb') as f: interpreter=hashlib.sha256(f.read()).hexdigest()

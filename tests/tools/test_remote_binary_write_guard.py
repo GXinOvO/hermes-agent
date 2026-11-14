@@ -56,6 +56,7 @@ class VercelSandboxEnvironment:
     def __init__(self, view_dir: Path, target_dir: Path, inner: LocalEnvironment):
         self.cwd = str(view_dir)
         self._inner = inner
+        self._session_id = uuid.uuid4().hex
         self.failure_mode = None  # None | "raise" | "error"
         self._home_answer = str(target_dir)
         src, dst = str(view_dir), str(target_dir)
@@ -69,6 +70,9 @@ class VercelSandboxEnvironment:
         for src, dst in self._sub_pairs:
             text = text.replace(src, dst)
         return text
+
+    def execute_file_probe(self, command: str, *, stdin_data=None) -> dict:
+        return self._inner.execute_file_probe(self._sub(command), stdin_data=stdin_data)
 
     def execute(self, command: str, cwd: str = "", **kwargs) -> dict:
         if self.failure_mode == "raise":
@@ -175,6 +179,27 @@ class TestRemoteExistingBinaryRefused:
         assert not created.get("error"), f"creating a NEW remote {ext} must be allowed: {created}"
         assert (remote_target.target / f"new{ext}").read_text() == "plain text replacement"
         assert not (remote_target.view / f"new{ext}").exists()
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "error"])
+def test_file_state_probe_failure_refuses_writes(remote_target, monkeypatch, failure_mode):
+    target = remote_target.target / "probe-existing.txt"
+    target.write_text("original", encoding="utf-8")
+    calls = []
+
+    def failed_probe(command, *, stdin_data=None):
+        calls.append(command)
+        if failure_mode == "raise":
+            raise RuntimeError("file-state transport down")
+        return {"output": "file-state transport unreachable", "returncode": 1}
+
+    monkeypatch.setattr(remote_target.env, "execute_file_probe", failed_probe)
+    for name in ("probe-existing.txt", "probe-new.txt"):
+        result = _write_file(remote_target.view / name, remote_target.task_id)
+        assert "error" in result, result
+    assert len(calls) >= 2
+    assert target.read_text(encoding="utf-8") == "original"
+    assert not (remote_target.target / "probe-new.txt").exists()
 
 
 def test_remote_probe_failure_fails_closed(remote_target):

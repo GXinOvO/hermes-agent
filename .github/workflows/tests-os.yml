@@ -11,7 +11,7 @@ name: OS-specific tests
 # reproducing any of the OS behaviour that branch exists for. This workflow
 # is where those markers actually execute:
 #
-#   macos    → ``-m platforms``    on blacksmith-12vcpu-macos-latest
+#   macos    → ``-m platforms``    on GitHub-hosted macos-15-intel
 #   windows  → ``-m platforms``    on blacksmith-32vcpu-windows-2025 and windows-latest-32-arm-core
 #
 # (tests/conftest.py's ``pytest_collection_modifyitems`` hook skips
@@ -85,29 +85,46 @@ jobs:
           # Two slices: on the old free standard runner (3 cores, 3 workers) one lane ran
           # ~7.5 min and became the slowest required job once the Linux suite split.
           - name: macOS-only tests (1/2)
-            runner: blacksmith-12vcpu-macos-latest
+            runner: macos-15-intel
             marker: macos
             slice: 1/2
           - name: macOS-only tests (2/2)
-            runner: blacksmith-12vcpu-macos-latest
+            runner: macos-15-intel
             marker: macos
             slice: 2/2
-          - name: Windows-only tests
-            runner: blacksmith-32vcpu-windows-2025
+          - name: Windows-only tests (1/4)
+            runner: windows-2025
             marker: windows
+            timeout: 90
+            slice: 1/4
+          - name: Windows-only tests (2/4)
+            runner: windows-2025
+            marker: windows
+            timeout: 90
+            slice: 2/4
+          - name: Windows-only tests (3/4)
+            runner: windows-2025
+            marker: windows
+            timeout: 90
+            slice: 3/4
+          - name: Windows-only tests (4/4)
+            runner: windows-2025
+            marker: windows
+            timeout: 90
+            slice: 4/4
           - name: Windows-only tests (arm64, 1/2)
-            runner: windows-latest-32-arm-core
+            runner: windows-11-arm
             marker: windows
-            timeout: 60
+            timeout: 90
             slice: 1/2
           - name: Windows-only tests (arm64, 2/2)
-            runner: windows-latest-32-arm-core
+            runner: windows-11-arm
             marker: windows
-            timeout: 60
+            timeout: 90
             slice: 2/2
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.commit }}
 
@@ -211,7 +228,11 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '16' || '16') || '' }}
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '3' || '' }}
+          # The macOS lane has a real source-update/build fixture whose isolated
+          # file can exceed the Linux-sized cap under a cold hosted runner.
+          # Keep the per-file kill bounded while leaving the job timeout intact.
+          HERMES_TEST_FILE_TIMEOUT: ${{ matrix.marker == 'macos' && '600' || '300' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.
@@ -253,14 +274,11 @@ jobs:
     # xfails (per-file KNOWN tables), so a fix turns this job red until the entry goes.
     name: Windows E2E (real processes)
     if: inputs.e2e
-    # 32-core like os-tests' Windows row: seven files run in parallel and each spawns
-    # process trees; on the 4-vCPU image the suite step took 153-171 s (job 4.7-5.6 min),
-    # here 124 s (job 3.1 min), with headroom against scheduling-starved timeouts.
-    runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 25
+    runs-on: windows-2025
+    timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.commit }}
 
@@ -279,7 +297,7 @@ jobs:
             -m "platforms and integration" -v --tb=short -rA
         env:
           HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
-          HERMES_TEST_WORKERS: '6'
+          HERMES_TEST_WORKERS: '3'
           HERMES_TEST_FILE_TIMEOUT: '900'
           HERMES_TEST_FILE_RETRIES: '0'
           OPENROUTER_API_KEY: ''

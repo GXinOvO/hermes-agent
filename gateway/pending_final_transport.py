@@ -39,8 +39,11 @@ async def prepare(adapter, value, source):
             calls = attachment_calls(adapter, extracted)
         prepared = []
         for index, (method, kwargs) in enumerate(calls):
-            prepared.append(await prepare_call(adapter, method, chat_id=source.chat_id,
-                metadata=value['metadata'], **identity(value, kind, index), **kwargs))
+            if value['binding']['policy'] == STRICT:
+                prepared.append(await prepare_call(adapter, method, chat_id=source.chat_id,
+                    metadata=value['metadata'], **identity(value, kind, index), **kwargs))
+            else:
+                prepared.append((method, dict(chat_id=source.chat_id, metadata=value['metadata'], **kwargs)))
         plans.append((kind, part, prepared))
     return plans
 

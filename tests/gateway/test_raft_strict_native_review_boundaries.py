@@ -156,7 +156,17 @@ async def test_pending_real_concurrent_cas_allows_one_post(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_generic_prepare_discards_plan_and_default_final_refuses(tmp_path, monkeypatch):
+async def test_claim_bound_prepare_call_requires_identity(tmp_path, monkeypatch):
+    async with transport.peer() as wire:
+        adapter, _db, _admission = await settled(tmp_path, monkeypatch, wire.url)
+        with pytest.raises(ValueError, match='claim_identity_required'):
+            from gateway.strict_transport import prepare_call
+            await prepare_call(adapter, 'send', chat_id='#loopback', content='unbound')
+        assert wire.events == []
+
+
+@pytest.mark.asyncio
+async def test_generic_probe_stays_planless_but_recovery_mints_claim_bound_plan(tmp_path, monkeypatch):
     async with transport.peer() as wire:
         adapter, db, admission = await settled(tmp_path, monkeypatch, wire.url)
         try:
@@ -165,12 +175,14 @@ async def test_generic_prepare_discards_plan_and_default_final_refuses(tmp_path,
             assert result is None
             with db._read_ctx() as conn:
                 value = pf._read(conn, admission)
-            with pytest.raises(RuntimeError, match='execution identity'):
-                await pf.prepare_delivery(adapter, value, SessionSource.from_dict(value['binding']['source']))
-            with db._read_ctx() as conn:
-                value = pf._read(conn, admission)
-            assert value['parts']['text']['state'] == 'pending'
-            assert value['parts']['text']['attempts'] == 0
+            plans = await pf.prepare_delivery(adapter, value, SessionSource.from_dict(value['binding']['source']))
+            assert len(plans) == 1
+            kind, _part, calls = plans[0]
+            assert kind == 'text' and len(calls) == 1
+            method, kwargs = calls[0]
+            assert method == 'send'
+            assert kwargs['execution_id'] and kwargs['claim_id']
+            assert kwargs['prepared_plan'] is not None
             assert wire.events == []
         finally:
             db.close()

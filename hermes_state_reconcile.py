@@ -251,7 +251,7 @@ def _apply_additive_schema(path: Path, budget: _Budget | None = None) -> None:
         except BaseException as exc:
             with contextlib.suppress(sqlite3.Error):
                 conn.execute('ROLLBACK')
-            if budget.expired and isinstance(exc, sqlite3.OperationalError):
+            if (budget.expired or budget.remaining() <= 0) and isinstance(exc, sqlite3.OperationalError):
                 raise BrowseBudgetExceeded('browse schema catch-up exceeded its time budget') from exc
             raise
 

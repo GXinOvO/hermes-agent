@@ -129,6 +129,11 @@ def backend_status(name: str) -> tuple[Optional[DelegationProvider], str]:
 def get_active_provider(config: Mapping[str, Any]) -> DelegationProvider:
     """The provider ``config`` (the ``delegation`` section) selects; ``default`` when unset. Raises
     :class:`DelegationRouteError` naming the backend and the fix when it is not registered or unavailable."""
+    from agent.safe_worker_policy import safe_worker_enabled
+    from utils import env_var_enabled
+
+    if safe_worker_enabled() or env_var_enabled("HERMES_SAFE_MODE"):
+        raise DelegationRouteError("Delegation is unavailable in safe mode. No subagent was started.")
     provider, reason = backend_status(configured_backend(config))
     if reason or provider is None:
         raise DelegationRouteError(f"{reason} No subagent was started.")

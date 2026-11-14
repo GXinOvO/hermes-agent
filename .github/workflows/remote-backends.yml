@@ -29,25 +29,32 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' && inputs.commit == '' }}
 
 env:
-  # One small image for both the sshd host and the docker backend's sandbox, pinned
-  # by digest so a tag move cannot change what the lane tests.
-  HERMES_TEST_IMAGE_REF: debian:trixie-20261020-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+  # The original digest remains available for the no-Python fail-closed test.
+  # The normal backend image adds Python for the file-state probe.
+  HERMES_TEST_BASE_IMAGE: debian:trixie-20261020-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+  HERMES_TEST_IMAGE_REF: hermes-test-backend:ci
 
 jobs:
   real-backends:
     name: SSH + Docker backends (real sshd, real daemon)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.commit }}
 
       - name: Pull the test image
         uses: ./.github/actions/retry
         with:
-          command: docker pull -q "$HERMES_TEST_IMAGE_REF"
+          command: docker pull -q "$HERMES_TEST_BASE_IMAGE"
+
+      - name: Prepare the file-probe test image
+        run: |
+          printf 'FROM %s\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*\n' \
+            "$HERMES_TEST_BASE_IMAGE" | docker build -q -t "$HERMES_TEST_IMAGE_REF" -
+          docker run --rm "$HERMES_TEST_IMAGE_REF" /usr/bin/python3 -c 'import contextlib, hashlib, json, secrets'
 
       - name: Start a throwaway sshd
         # Exports HERMES_TEST_SSH_{HOST,USER,PORT,KEY} through $GITHUB_ENV.
@@ -61,6 +68,11 @@ jobs:
           extras: '[]'
           test-environment: 'true'
           prune-python-cache: true
+
+      - name: Verify file probes fail closed without Python
+        env:
+          HERMES_TEST_DOCKER_IMAGE: ${{ env.HERMES_TEST_BASE_IMAGE }}
+        run: scripts/run_tests.sh --fail-on-skip tests/tools/test_docker_backend_no_python.py
 
       - name: Run the real-backend tests
         env:

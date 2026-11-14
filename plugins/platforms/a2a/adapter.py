@@ -972,7 +972,13 @@ class A2AAdapter(BasePlatformAdapter):
         """Fulfil the oldest pending reply Future for this context (``chat_id`` = A2A context id).
         Only sends carrying ``metadata['notify']`` (the base adapter's final-reply marker) satisfy
         the caller; progress/status/preview sends must not."""
-        if strict_transport():
+        durable = strict_transport()
+        with self._pending_lock:
+            waiting = reply_to in self._pending
+        if not durable and not waiting and reply_to and (metadata or {}).get('notify'):
+            task = await asyncio.to_thread(self.tasks.get, reply_to)
+            durable = task is not None and 'input_hash' in task
+        if durable:
             from .durable_tasks import publish
             try:
                 task, receipt = await asyncio.to_thread(publish, self._task_home, chat_id, content,

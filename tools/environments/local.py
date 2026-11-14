@@ -36,6 +36,7 @@ from hermes_cli._startup_fast import project_root_str
 
 
 _IS_WINDOWS = platform.system() == "Windows"
+_IS_MACOS = platform.system() == "Darwin"
 
 logger = logging.getLogger(__name__)
 
@@ -998,6 +999,26 @@ def _sweep_escaped_descendants(descendants: list, pgid: int) -> None:
             continue
 
 
+def _process_group_members(pgid: int) -> list:
+    """Snapshot members by PGID when the group leader is already gone."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+    try:
+        processes = psutil.process_iter(["pid"])
+    except psutil.Error:
+        return []
+    members = []
+    for process in processes:
+        try:
+            if os.getpgid(process.pid) == pgid:
+                members.append(process)
+        except (OSError, psutil.Error):
+            continue
+    return members
+
+
 def _leader_is_ours(pgid, expected_start) -> bool:
     """The setsid group leader's PID == its PGID.  Confirm it is still the process we
     spawned before signalling the whole group, so a recycled PID/PGID can never take
@@ -1036,12 +1057,16 @@ def _kill_process_group_posix(proc) -> None:
     PID-reuse guard (#43044): the group is only signalled while its leader's start
     time still matches the spawn-time baseline — a recycled PGID is never killed."""
     expected_start = getattr(proc, "_hermes_pgid_start", None)
+    leader_gone = False
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
+        leader_gone = True
         if (pgid := getattr(proc, "_hermes_pgid", None)) is None:
             raise
-    if not _leader_is_ours(pgid, expected_start):
+    captured_members = getattr(proc, "_hermes_group_members", None)
+    group_known_before_reap = leader_gone and _IS_MACOS and captured_members is not None
+    if not group_known_before_reap and not _leader_is_ours(pgid, expected_start):
         # Leader exited and its PID/PGID may have been recycled onto an unrelated
         # process group; signalling the stale number is unsafe. Bail out — a rare
         # orphaned grandchild may leak, which is strictly preferable to killing a
@@ -1060,6 +1085,14 @@ def _kill_process_group_posix(proc) -> None:
         descendants = psutil.Process(proc.pid).children(recursive=True)
     except Exception:
         descendants = []
+    if leader_gone and _IS_MACOS:
+        if pgid == os.getpgrp():
+            _kill_known_pids(proc, descendants)
+        else:
+            members = captured_members if captured_members is not None else _process_group_members(pgid)
+            _kill_known_pids(proc, (*members, *descendants))
+        _sweep_escaped_descendants(descendants, pgid)
+        return
     if pgid == os.getpgrp():
         # The child shares OUR group (a spawner that skipped setsid — the Darwin gateway's
         # posix_spawn shim, #107029): killpg would signal the caller itself. Tear down by PID.
@@ -1077,14 +1110,17 @@ def _kill_process_group_posix(proc) -> None:
                 with contextlib.suppress(subprocess.TimeoutExpired, OSError):
                     proc.wait(timeout=0.2)
         except ProcessLookupError:
-            pass
+            _kill_known_pids(proc, descendants)
+            members = captured_members if captured_members is not None else _process_group_members(pgid)
+            _kill_known_pids(proc, members)
         except PermissionError:
             # macOS answers killpg with EPERM (not ESRCH) once the group's only members are
             # unreaped zombies — rg exiting between the caller's poll() and the TERM after the
             # drain hit its limit (#116855). Nothing group-wide is signalable, and the error
             # must not escape: the caller still owns the output it drained. Signal the known
             # PIDs instead so a live child (a group we may not signal) cannot outlive us.
-            _kill_known_pids(proc, descendants)
+            members = captured_members if captured_members is not None else _process_group_members(pgid)
+            _kill_known_pids(proc, (*members, *descendants))
     _sweep_escaped_descendants(descendants, pgid)
 
 
@@ -1271,6 +1307,19 @@ class LocalEnvironment(BaseEnvironment):
             # no pgid on macOS, and the stop could then never reach the descendants it left behind.
             proc._hermes_pgid = proc._hermes_owned_pgid = proc.pid
         return proc
+
+    def _prepare_process_stop(self, proc) -> None:
+        """Snapshot an owned POSIX group before polling can reap its leader."""
+        if _IS_WINDOWS:
+            return
+        pgid = getattr(proc, "_hermes_pgid", None)
+        if pgid is None:
+            with contextlib.suppress(ProcessLookupError):
+                pgid = os.getpgid(proc.pid)
+        if pgid is None or pgid == os.getpgrp():
+            return
+        with contextlib.suppress(Exception):
+            proc._hermes_group_members = _process_group_members(pgid)
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""

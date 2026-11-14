@@ -256,6 +256,17 @@ async def forward_secondary_plugin_request(request, name: str) -> Optional[Respo
                                  query, headers, body, timeout=timeout, authenticated=authenticated)
 
     try:
+        from hermes_cli.plugin_host import _START_TIMEOUT_SECS
+        from hermes_cli.plugins import get_plugin_manager
+        host = get_plugin_manager()._plugin_host()
+        start = asyncio.get_running_loop().run_in_executor(_hosted_executor(home), host.ensure_started)
+        await asyncio.wait_for(start, _START_TIMEOUT_SECS)
+        request_impl = getattr(host.asgi_request, "__func__", host.asgi_request)
+        if getattr(request_impl, "__module__", None) == "hermes_cli.plugin_host":
+            prepare = asyncio.get_running_loop().run_in_executor(
+                _hosted_executor(home), host.prepare_asgi, name, str(plugin["_dir"]), str(plugin["_api_file"])
+            )
+            await asyncio.wait_for(prepare, _START_TIMEOUT_SECS)
         return await run_hosted_request(home, name, call)
     except Exception as exc:  # health: allow BLE001 -- the host runs third-party code; any failure is this request's 502
         _log.warning("Plugin %s: its profile's plugin host could not serve %s: %s", name, path, exc)

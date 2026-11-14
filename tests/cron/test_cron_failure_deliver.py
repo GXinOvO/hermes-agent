@@ -70,8 +70,7 @@ def run_env(monkeypatch, tmp_path):
     if entry is None:
         hp.discover_plugins()
         entry = reg.platform_registry.get("slack")
-    if entry is None:
-        pytest.skip("slack platform entry not registered")
+    assert entry is not None, "slack platform entry not registered"
     monkeypatch.setattr(entry, "standalone_sender_fn", fake_sender)
     monkeypatch.setattr(hp, "discover_plugins", lambda *a, **k: None)
 
@@ -84,7 +83,10 @@ def run_env(monkeypatch, tmp_path):
         pending = delivery_queue.get_status("exec-t")
         assert pending is not None and pending["status"] == "pending"
         assert bool(pending["for_failure"]) is for_failure
-        assert s.drain_delivery_queue(adapters={}, loop=None) == 1
+        # Exercise the compatibility router that owns this fixture's standalone
+        # sender. Production strict transport has separate no-fallback tests.
+        from tests.cron.legacy_delivery_queue_support import drain_compatibility_router
+        assert drain_compatibility_router(adapters={}, loop=None) == 1
         result = delivery_queue.get_status("exec-t")
         assert result is not None
         assert result["status"] == ("delivered" if transport["success"] else "failed")

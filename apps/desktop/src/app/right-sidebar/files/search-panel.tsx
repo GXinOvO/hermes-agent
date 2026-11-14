@@ -468,12 +468,12 @@ export function FileSearchPanel({ onClose, onOpenFile, root }: FileSearchPanelPr
                     'hover:bg-(--ui-row-hover-background) hover:text-(--ui-text-primary)',
                     index === selected && 'bg-(--ui-row-active-background) text-(--ui-text-primary)'
                   )}
+                  data-file-search-hit={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   key={key}
                   onClick={() => {
                     setSelected(index)
                     openHit(hit)
                   }}
-                  title={hit.line ? `${hit.rel}:${hit.line}` : hit.rel}
                   type="button"
                 >
                   {hit.line ? <span className="shrink-0 text-(--ui-text-quaternary)">{hit.line}</span> : null}

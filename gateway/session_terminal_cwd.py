@@ -64,7 +64,8 @@ def restore_turn_cwd(runner, session_key: str | None, policy) -> object | None:
         clear_session_cwd(session_key)
     _record_owner[owner] = token
     if get_session_cwd(session_key) is None:
-        saved = entry.metadata.get(_METADATA_KEY)
+        getter = getattr(runner.session_store, "get_persisted_terminal_cwd", None)
+        saved = getter(session_key) if callable(getter) else entry.metadata.get(_METADATA_KEY)
         if isinstance(saved, str) and os.path.isabs(saved) and os.path.isdir(saved):
             record_session_cwd(session_key, saved)
     return token
@@ -78,11 +79,17 @@ def persist_turn_cwd(runner, session_key: str | None, token: object | None) -> N
         return
     from tools.terminal_tool import get_session_cwd
     cwd = get_session_cwd(session_key)
-    if not cwd or entry.metadata.get(_METADATA_KEY) == cwd:
+    getter = getattr(runner.session_store, "get_persisted_terminal_cwd", None)
+    saved = getter(session_key) if callable(getter) else entry.metadata.get(_METADATA_KEY)
+    if not cwd or saved == cwd:
         return
     try:
-        runner.session_store._update_entry(  # the conversation check and the write under one lock
-            session_key, lambda e: e.created_at == token and not e.metadata.update({_METADATA_KEY: cwd}))
+        persist = getattr(runner.session_store, "persist_terminal_cwd", None)
+        if callable(persist):
+            persist(session_key, cwd, expected_created_at=token)
+        else:
+            runner.session_store._update_entry(
+                session_key, lambda e: e.created_at == token and not e.metadata.update({_METADATA_KEY: cwd}))
     except Exception as exc:  # health: allow BLE001 -- runs in the turn's finally: a failed save must not fail the finished turn
         logger.warning("Could not save the terminal cwd of %s: %s", session_key, exc)
 
@@ -91,9 +98,15 @@ def forget_turn_cwd(runner, session_key: str) -> None:
     """Drop the chat's saved cwd along with its record (a workspace move): the next turn must start in
     the new binding's directory, not restore the old one."""
     entry = _routing_entry(runner, session_key)
-    if entry is None or entry.metadata.get(_METADATA_KEY) is None:
+    getter = getattr(runner.session_store, "get_persisted_terminal_cwd", None)
+    saved = getter(session_key) if callable(getter) else (entry.metadata.get(_METADATA_KEY) if entry else None)
+    if entry is None or saved is None:
         return
     try:  # the in-memory entry drops it before the save, so this process never restores it
-        runner.session_store.set_session_metadata(session_key, _METADATA_KEY, None)
+        clear = getattr(runner.session_store, "clear_persisted_terminal_cwd", None)
+        if callable(clear):
+            clear(session_key)
+        else:
+            runner.session_store.set_session_metadata(session_key, _METADATA_KEY, None)
     except Exception as exc:  # health: allow BLE001 -- runs after the policy commit: a failed save must not strand its publication
         logger.warning("Could not clear the saved terminal cwd of %s: %s", session_key, exc)

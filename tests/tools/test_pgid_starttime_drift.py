@@ -66,6 +66,123 @@ def test_local_group_kill_survives_start_time_drift(monkeypatch, killpg_calls):
     assert (67890, signal.SIGTERM) in killpg_calls
 
 
+def test_local_group_kill_falls_back_to_members_when_killpg_is_denied(monkeypatch):
+    """A macOS group can reject killpg after its leader exited; owned members still get killed."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67891
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 67890)
+    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: (_ for _ in ()).throw(PermissionError()))
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED)
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67891]
+
+
+def test_local_group_kill_falls_back_to_members_when_group_is_gone(monkeypatch):
+    """A reaped leader can make killpg report ESRCH while its child remains in the group."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67892
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 67890)
+    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED)
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67892]
+
+
+def test_local_group_kill_uses_saved_group_when_leader_is_gone(monkeypatch):
+    """A reaped leader still leaves its saved PGID available for member cleanup."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67893
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(os, "getpgid", lambda _pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: None)
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67893]
+
+
+def test_local_macos_group_kill_uses_saved_group_when_leader_is_gone(monkeypatch):
+    """Darwin must clean a reaped leader's saved group by member PID, not killpg."""
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67894
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(local, "_IS_MACOS", True, raising=False)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr(local, "_wait_for_group_exit", lambda *_args: False)
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: None)
+    killpg_calls = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+
+    local._kill_process_group_posix(_fake_proc())
+
+    assert killed == [67894]
+    assert killpg_calls == []
+
+
+def test_local_macos_group_kill_uses_saved_pgid_after_leader_pid_reuse(monkeypatch):
+    from tools.environments import local
+
+    killed = []
+
+    class Member:
+        pid = 67895
+
+        def kill(self):
+            killed.append(self.pid)
+
+    proc = _fake_proc()
+    monkeypatch.setattr(local, "_IS_MACOS", True, raising=False)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(local, "_process_group_members", lambda _pgid: [Member()])
+    monkeypatch.setattr("gateway.status.get_process_start_time", lambda _pid: RECORDED + 500000)
+    killpg_calls = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+    env = object.__new__(local.LocalEnvironment)
+    env._prepare_process_stop(proc)
+
+    local._kill_process_group_posix(proc)
+
+    assert killed == [67895]
+    assert killpg_calls == []
+
+
 def test_local_guard_still_refuses_recycled_pgid(monkeypatch, killpg_calls):
     """A start time far outside the drift tolerance means the PID/PGID was recycled:
     never signal the stale number (#43044)."""

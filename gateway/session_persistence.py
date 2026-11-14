@@ -533,7 +533,7 @@ class SessionPersistenceMixin:
 
     def _entries_as_dicts(self) -> dict[str, Any]:
         """Serializable snapshot of ``_entries``. Lock held."""
-        return {key: entry.to_dict() for key, entry in self._entries.items()}
+        return {key: entry.to_routing_dict() for key, entry in self._entries.items()}
 
     def _save(self) -> None:
         """Persist the routing index while the caller holds ``_lock``."""
@@ -649,7 +649,7 @@ class SessionPersistenceMixin:
             entry = self._entries.get(session_key)
             if entry is None:
                 return
-            serialized = dict(entry_data) if entry_data is not None else entry.to_dict()
+            serialized = dict(entry_data) if entry_data is not None else entry.to_routing_dict()
             # The O(n) full snapshot is deferred to the fallback branch.
             entry_json, revision = json.dumps(serialized), self._next_routing_generation_locked()
         saver = self._routing_db_method("save_gateway_routing_entry")

@@ -34,7 +34,7 @@ from tools.file_tools_paths import (
     _expand_tilde, _hosted_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_entry_for_task,
     _resolve_path_for_task)
 from tools.file_tools_write_guards import (
-    _READ_DEDUP_STATUS_MESSAGE, _check_approval_required_write, _check_binary_document_write,
+    _INTERNAL_DISPLAY_CONTENT_ERROR, _READ_DEDUP_STATUS_MESSAGE, _check_approval_required_write, _check_binary_document_write,
     _check_cross_profile_path, _check_protected_instruction_write, _check_sensitive_path,
     _is_internal_file_tool_content, _stale_overwrite_blocker, _stale_write_refusal)
 from tools.file_tools_read_tracking import (
@@ -943,9 +943,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
            or _check_approval_required_write([path], task_id)
            or (None if cross_profile else _check_cross_profile_path(path, task_id)))
     if not err and _is_internal_file_tool_content(content):
-        err = ("Refusing to write internal read_file display text as file content. "
-               "Strip read_file line-number prefixes or reconstruct the intended "
-               "file contents before writing.")
+        err = _INTERNAL_DISPLAY_CONTENT_ERROR
     if err:
         return tool_error(err)
     try:

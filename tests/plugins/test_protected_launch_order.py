@@ -40,6 +40,44 @@ def test_worker_launches_from_trusted_accessible_cwd(monkeypatch, protected, exp
     assert request['id'] not in worker.jobs
 
 
+def test_protected_init_import_does_not_load_authority_scope(monkeypatch):
+    from importlib import util
+    real_spec = util.spec_from_file_location
+    def spec_for(name, location):
+        assert location != '/authority/code/scope_init.py'
+        return real_spec(name, location)
+    monkeypatch.setattr(util, 'spec_from_file_location', spec_for)
+    module = load_helper('protected_init')
+    monkeypatch.setattr(module.os, 'getpid', lambda: 2)
+    with pytest.raises(RuntimeError, match='protected init requires an owned PID namespace'):
+        module.main()
+
+
+def test_protected_scope_loads_before_authority_is_hidden(monkeypatch):
+    from importlib import util
+    from importlib.abc import Loader
+    from types import SimpleNamespace
+    events = []
+    real_spec = util.spec_from_file_location
+    class ScopeLoader(Loader):
+        def create_module(self, spec):
+            return None
+        def exec_module(self, module):
+            events.append('load')
+            module.__dict__.update(BASE_ENV={}, main=lambda: events.append('main'))
+    def spec_for(name, location):
+        if location == '/authority/code/scope_init.py':
+            return util.spec_from_loader(name, ScopeLoader())
+        return real_spec(name, location)
+    monkeypatch.setattr(util, 'spec_from_file_location', spec_for)
+    module = load_helper('protected_init')
+    assert events == []
+    monkeypatch.setattr(module.os, 'getpid', lambda: 1)
+    monkeypatch.setattr(module.subprocess, 'run', lambda *args, **kwargs: events.append('mount') or SimpleNamespace(returncode=0))
+    module.main()
+    assert events == ['load', 'mount', 'mount', 'main']
+
+
 def protected_helper(monkeypatch):
     from importlib import util
     from types import SimpleNamespace

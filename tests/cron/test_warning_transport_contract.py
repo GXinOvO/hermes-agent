@@ -1,4 +1,8 @@
-"""Real cron router/queue with local transport doubles; no external network."""
+"""Compatibility cron router/queue with local transport doubles; no external network.
+
+The default strict consumer is tested separately below: unsupported relay sends
+stay pending while muted diagnostics can terminalize without a transport claim.
+"""
 import asyncio
 import threading
 from types import SimpleNamespace
@@ -72,7 +76,8 @@ def test_warning_policy_at_real_transport_boundary(tmp_path, monkeypatch, loop_t
     delivery_queue.enqueue("run", job, payload, for_failure=for_failure)
 
     def drain():
-        assert scheduler.drain_delivery_queue(adapters, loop_thread) == 1
+        from tests.cron.legacy_delivery_queue_support import drain_compatibility_router
+        assert drain_compatibility_router(adapters, loop_thread) == 1
 
     if lane == "standalone-async":
         async def inside_loop():
@@ -90,3 +95,31 @@ def test_warning_policy_at_real_transport_boundary(tmp_path, monkeypatch, loop_t
     delivery_queue.enqueue("run", job, payload, for_failure=not for_failure)
     assert scheduler.drain_delivery_queue(adapters, loop_thread) == 0
     assert delivery_queue.get_status("run")["status"] == expected
+
+
+@pytest.mark.parametrize("setting,for_failure", [(None, True), (False, True), (True, True), (True, False)])
+def test_strict_warning_policy_does_not_enable_relay_delivery(tmp_path, monkeypatch, loop_thread, setting, for_failure):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(delivery_queue, "DELIVERY_DB", tmp_path / "strict-delivery.db")
+    cfg = {"cron": {"wrap_response": False}}
+    if setting is not None:
+        cfg["display"] = {"suppress_warning_notifications": setting}
+    monkeypatch.setattr(scheduler, "load_config", lambda: cfg)
+    config = GatewayConfig(platforms={Platform.RELAY: PlatformConfig(enabled=True)})
+    monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
+    sent = []
+
+    async def send(*args, **kwargs):
+        sent.append((args, kwargs))
+        raise AssertionError("unsupported strict relay must not submit")
+
+    adapter = SimpleNamespace(send_for_platform=send, fronts_platform=lambda p: p == Platform.DISCORD)
+    job = {"id": "strict-fixture", "execution_id": "strict-run", "deliver": "discord:fixture"}
+    delivery_queue.enqueue("strict-run", job, "retained warning", for_failure=for_failure)
+    muted = setting is True and for_failure
+    adapters = {Platform.RELAY: adapter}
+    assert scheduler.drain_delivery_queue(adapters, loop_thread) == int(muted)
+    row = delivery_queue.get_status("strict-run")
+    assert row is not None and row["status"] == ("suppressed" if muted else "pending")
+    assert sent == []
+    assert scheduler.drain_delivery_queue(adapters, loop_thread) == 0

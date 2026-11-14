@@ -130,6 +130,9 @@ class FileStateRegistry:
     def _stamp(self, task_id: str, resolved: str, mtime: float, now: float, partial: bool, display: str) -> None:
         """Caller holds ``_state_lock``."""
         agent_reads = self._reads[task_id]
+        previous = agent_reads.get(resolved)
+        if previous is not None and previous[0] == float(mtime):
+            partial = previous[2] and bool(partial)
         agent_reads[resolved] = (float(mtime), now, bool(partial))
         self._read_names[task_id][resolved] = display
         _evict_oldest(agent_reads, _MAX_PATHS_PER_AGENT)

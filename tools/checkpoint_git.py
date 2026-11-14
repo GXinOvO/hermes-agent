@@ -28,7 +28,7 @@ def _terminate_git_process(process: subprocess.Popen, pgid: int | None) -> None:
             # Preserve the identity-aware descendant sweep, including helpers
             # outside the process group, while ancestry is still observable.
             signal_tree(process.pid, sig=signal.SIGTERM)
-        elif pgid is not None:
+        if pgid is not None:
             # communicate() may already have reaped the launcher. Its PGID
             # remains reserved while any of its members (the writer) survives.
             os.killpg(pgid, signal.SIGTERM)  # windows-footgun: ok — POSIX-only (nt returned above)

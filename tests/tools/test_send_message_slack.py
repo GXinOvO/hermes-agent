@@ -114,11 +114,16 @@ def test_standalone_send_stops_on_non_token_error(monkeypatch, _standalone_send)
     assert len(fake_session.calls) == 1
 
 
-def test_slack_dm_resolution_error_never_echoes_the_proxy_password(monkeypatch):
-    """aiohttp's InvalidURL text is the raw proxy URL; the surfaced tool error must not carry it."""
-    import asyncio
-
+@pytest.mark.parametrize("connector_error", [None, ValueError])
+def test_slack_dm_resolution_error_never_echoes_the_proxy_password(monkeypatch, connector_error):
+    from gateway.platforms import base
     from tools.send_message_senders import _resolve_slack_user_target
+
+    def connector(proxy_url):
+        if connector_error:
+            raise connector_error(proxy_url)
+
+    monkeypatch.setattr(base, "_aiohttp_socks_connector", connector)
 
     for key in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy",
                 "NO_PROXY", "no_proxy", "SLACK_PROXY"):
@@ -126,6 +131,8 @@ def test_slack_dm_resolution_error_never_echoes_the_proxy_password(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://bob:S3cretPW@127.0.0.1:notaport")
     chat_id, error = asyncio.run(_resolve_slack_user_target("xoxb-test", "user:U123"))
     assert chat_id is None
+    assert error is not None
     assert error["error"].startswith("Slack DM resolution failed: ")
     assert "S3cretPW" not in error["error"]
-    assert "InvalidURL" in error["error"]
+    expected_type = connector_error.__name__ if connector_error else "InvalidURL"
+    assert error["error"] == f"Slack DM resolution failed: {expected_type} via <unparseable URL redacted>"

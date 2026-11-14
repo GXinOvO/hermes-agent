@@ -26,6 +26,10 @@ from hermes_state_keys import profile_from_session_key_namespace
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_CWD_METADATA_KEY = "terminal_cwd"
+_TERMINAL_CWD_FALLBACK_NAME = ".terminal_cwd.json"
+_TERMINAL_CWD_META_PREFIX = "gateway.terminal_cwd.v1:"
+
 
 # -- PII redaction helpers --------------------------------------------------------------------
 
@@ -597,6 +601,15 @@ class SessionEntry:
             result["origin"] = self.origin.to_dict()
         return result
 
+    def to_routing_dict(self) -> dict[str, Any]:
+        """Serialize routing state without profile-private terminal state."""
+        result = self.to_dict()
+        result["metadata"] = {
+            key: value for key, value in result.get("metadata", {}).items()
+            if key != _TERMINAL_CWD_METADATA_KEY
+        }
+        return result
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SessionEntry":
         origin = data.get("origin")
@@ -1155,8 +1168,133 @@ class SessionStore(
         self._record_gateway_session_peer(
             peer_sid, session_key, peer_origin, display_name=peer_name, transport_profile=peer_transport)
 
+    def get_persisted_terminal_cwd(self, session_key: str) -> Optional[str]:
+        """The chat's saved cwd, read from the profile that owns *session_key*."""
+        with self._lock:
+            entry = self._entry_locked(session_key)
+            if entry is None:
+                return None
+            value = self._read_terminal_cwd_durable(session_key)
+            legacy = entry.metadata.pop(_TERMINAL_CWD_METADATA_KEY, None)
+            if isinstance(legacy, str) and legacy and not value:
+                value = legacy
+                self._write_terminal_cwd_durable(session_key, legacy)
+            if legacy is not None:  # an index written before this change still carries it
+                self._save()
+            return value
+
+    def _terminal_cwd_fallback_path(self, session_key: str, *, create: bool) -> Optional[Path]:
+        """Sidecar holding ``terminal_cwd`` while the owning profile's state.db is unavailable."""
+        sessions_dir = Path(self.sessions_dir)
+        if self._named_profile_for_key(session_key) is not None:
+            home = self._profile_home_for_key(session_key)
+            if home is None:
+                return None  # never write a named profile's private path into the shared index
+            sessions_dir = home / "sessions"
+        try:
+            if create:
+                sessions_dir.mkdir(parents=True, exist_ok=True)
+            elif not sessions_dir.is_dir():
+                return None
+        except OSError:
+            return None
+        return sessions_dir / _TERMINAL_CWD_FALLBACK_NAME
+
+    def _read_terminal_cwd_fallback(self, session_key: str) -> Optional[str]:
+        path = self._terminal_cwd_fallback_path(session_key, create=False)
+        if path is None or not path.is_file():
+            return None
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                data = json.load(handle)
+            value = data.get(self._terminal_cwd_state_key(session_key)) if isinstance(data, dict) else None
+            return value if isinstance(value, str) and value else None
+        except (OSError, ValueError, TypeError):
+            logger.warning("gateway.session: terminal cwd fallback read failed: %s", path)
+            return None
+
+    def _write_terminal_cwd_fallback(self, session_key: str, cwd: Optional[str]) -> bool:
+        path = self._terminal_cwd_fallback_path(session_key, create=True)
+        if path is None:
+            return False
+        state_key = self._terminal_cwd_state_key(session_key)
+        lock = self._lazy("_terminal_cwd_fallback_lock", threading.Lock)
+        with lock:
+            try:
+                data: dict[str, str] = {}
+                if path.is_file():
+                    with path.open("r", encoding="utf-8-sig") as handle:
+                        loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        data = {str(key): value for key, value in loaded.items() if isinstance(value, str)}
+                if cwd:
+                    data[state_key] = cwd
+                else:
+                    data.pop(state_key, None)
+                from utils import atomic_json_write
+                atomic_json_write(path, data, mode=0o600)
+                return True
+            except (OSError, ValueError, TypeError):
+                logger.warning("gateway.session: terminal cwd fallback write failed: %s", path)
+                return False
+
+    def _terminal_cwd_state_key(self, session_key: str) -> str:
+        """Durable row for a chat's cwd is its conversation: /new and /resume start clean, while a
+        continuation repoint carries the value over through ``SessionEntry.metadata``."""
+        entry = self._entry_locked(session_key)
+        return entry.session_id if entry is not None and entry.session_id else session_key
+
+    def _read_terminal_cwd_durable(self, session_key: str) -> Optional[str]:
+        db = self._db_for_key(session_key)
+        getter = getattr(db, "get_meta", None) if db is not None else None
+        try:
+            value = getter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key)) \
+                if callable(getter) else None
+        except Exception as exc:
+            logger.warning("gateway.session: terminal cwd state read failed: %s", exc, exc_info=True)
+            value = None
+        if isinstance(value, str):
+            return value or None  # "" is the cleared marker: the sidecar must not resurrect it
+        return self._read_terminal_cwd_fallback(session_key)
+
+    def _write_terminal_cwd_durable(self, session_key: str, cwd: Optional[str]) -> bool:
+        db = self._db_for_key(session_key)
+        setter = getattr(db, "set_meta", None) if db is not None else None
+        if callable(setter):
+            try:
+                setter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key), cwd or "")
+                return True
+            except Exception as exc:
+                logger.warning("gateway.session: terminal cwd state write failed: %s", exc, exc_info=True)
+        return self._write_terminal_cwd_fallback(session_key, cwd)
+
+    def persist_terminal_cwd(
+        self, session_key: str, cwd: Optional[str], *, expected_created_at: object | None = None,
+    ) -> bool:
+        """Persist route-private terminal state without putting it in routing JSON."""
+        with self._lock:
+            entry = self._entry_locked(session_key)
+            if entry is None or (
+                expected_created_at is not None and entry.created_at != expected_created_at
+            ):
+                return False
+            if not self._write_terminal_cwd_durable(session_key, cwd):
+                return False
+            if cwd:
+                entry.metadata[_TERMINAL_CWD_METADATA_KEY] = cwd
+            else:
+                entry.metadata.pop(_TERMINAL_CWD_METADATA_KEY, None)
+            self._save()
+            return True
+
+    def clear_persisted_terminal_cwd(self, session_key: str) -> bool:
+        return self.persist_terminal_cwd(session_key, None)
+
     def get_session_metadata(self, session_key: str, key: str, default: Any = None) -> Any:
         """Return a metadata value stored on a live session entry."""
+        if key == _TERMINAL_CWD_METADATA_KEY:
+            value = self.get_persisted_terminal_cwd(session_key)
+            return value if value is not None else default
         with self._lock:
             entry = self._entry_locked(session_key)
             return default if entry is None else entry.metadata.get(key, default)
@@ -1168,6 +1306,8 @@ class SessionStore(
         Internal bookkeeping must not advance the user-activity clock used by housekeeping
         and restart recovery.
         """
+        if key == _TERMINAL_CWD_METADATA_KEY:
+            return self.persist_terminal_cwd(session_key, value if isinstance(value, str) else None)
         return self._update_entry(session_key, lambda e: e.metadata.__setitem__(key, value))
 
     def set_model_override(self, session_key: str, override: Optional[dict[str, Any]]) -> None:
@@ -1184,7 +1324,7 @@ class SessionStore(
             data, generation = self._snapshot_routing_locked()
             # Snapshot reconciliation may replace the entry after database recovery.
             entry = self._entries[session_key]
-            data[session_key] = replace(entry, model_override=cleaned).to_dict()
+            data[session_key] = replace(entry, model_override=cleaned).to_routing_dict()
             self._persist_routing_data(data, generation)
             entry.model_override = cleaned
 

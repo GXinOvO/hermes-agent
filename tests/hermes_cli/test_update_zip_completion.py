@@ -182,7 +182,9 @@ def test_zip_helper_propagates_completion_status_after_real_verification(zip_upd
     receipt = json.loads((state.active / "logs/update_receipts/latest.json").read_text())
     # Was "partial": a success that names what is still owed.
     assert receipt["outcome"] == "success"
-    assert [f["step"] for f in receipt.get("followups", [])] == {
+    assert [(check["profile"], check["status"]) for check in receipt["state_db_checks"]] == [
+        ("default home", "missing"), ("profile other", "missing")]
+    assert [f["step"] for f in receipt.get("followups", [])] == ["state_db_check", "state_db_check"] + {
         "healthy": [], "unsafe-sqlite": ["sqlite_runtime"], "stale-fleet": ["gateway_restart"]}[verdict]
     assert receipt["runtime_outcomes"][0]["outcome"] == (
         "unaccounted" if verdict == "stale-fleet" else "restarted")

@@ -379,6 +379,12 @@ def has_pending_final(event):
 
 
 async def prepare_delivery(adapter, value, source):
+    """Prepare the generic recovery calls, including explicit per-call claim identity.
+
+    ``pending_final_transport.prepare`` derives a stable execution/claim pair from
+    the sealed descriptor before calling claim-bound adapters, so this path does not
+    mint an unbound plan or bypass the adapter's claim contract.
+    """
     from gateway.pending_final_transport import prepare
     return await prepare(adapter, value, source)
 
@@ -417,8 +423,10 @@ async def claim_event(event, kind, content, *, route=None, adapter_profile=None,
     db, admission_id = db_for_event(event)
     if db is None:
         return None
-    with db._read_ctx() as conn:
-        value = _read(conn, admission_id)
+    def read():
+        with db._read_ctx() as conn:
+            return _read(conn, admission_id)
+    value = await asyncio.to_thread(read)
     if value is None:
         return None
     if route is not None and value['binding']['route'] != route:
@@ -506,7 +514,11 @@ async def recover(runner):
                     for method, kwargs in calls:
                         if not await asyncio.to_thread(current, receipt, kind):
                             raise DeliveryUncertain('pending final claim invalidated')
-                        result = await strict_call(adapter, method, **kwargs)
+                        if value['binding']['policy'] == 'human_reply_v1':
+                            operation = adapter._send_with_retry if method == 'send' else getattr(adapter, method)
+                            result = await operation(**kwargs)
+                        else:
+                            result = await strict_call(adapter, method, **kwargs)
                         results.append(result)
                         if not getattr(result, 'success', False):
                             break
@@ -516,6 +528,10 @@ async def recover(runner):
                 except Exception as exc:
                     logger.exception('Sealed final transport raised after claim; delivery is unknown')
                     result = SendResult(success=False, error=str(exc))
+                if (kind == 'text' and value['binding']['policy'] == 'human_reply_v1'
+                        and results and not result.success):
+                    from gateway.delivery_ledger import record_human_final_failure
+                    await asyncio.to_thread(record_human_final_failure, claimed, str(result.error or ''), db=authority.db)
                 result = await finish_event(receipt, kind, result)
                 delivered += int(result.success)
                 if not result.success:

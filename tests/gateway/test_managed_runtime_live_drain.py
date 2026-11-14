@@ -25,6 +25,7 @@ def test_managed_turn_finishes_inside_configured_restart_drain(tmp_path):
     url = f'http://127.0.0.1:{peer.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'managed_workers': True},
+        'security': {'allow_lazy_installs': False},
         'agent': {'restart_after_turn_timeout': 0, 'restart_drain_timeout': 20},
         'model': {'provider': 'custom', 'default': 'drain-fixture', 'base_url': url},
         'platform_toolsets': {'cli': []}, 'auxiliary': {'title_generation': {'enabled': False}}}))

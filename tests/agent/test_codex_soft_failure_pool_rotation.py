@@ -39,6 +39,7 @@ class _Agent:
     def __init__(self, pool: CredentialPool) -> None:
         self._credential_pool = pool
         self.api_key = pool.select().access_token
+        self._interrupt_requested = False
         self.swapped_to: list = []
         self._try_activate_fallback = MagicMock(return_value=False)
 

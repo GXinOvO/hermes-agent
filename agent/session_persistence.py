@@ -443,6 +443,7 @@ def _db_flush_failed(agent, e: Exception, batch_rows: list[dict[str, Any]], adop
     # explanation names the real cause.
     from hermes_state import StateDbCorruptError, StateDbReplacedError, classify_persistence_error, divert_session_transcript_jsonl
     from hermes_state_errors import CompressionSessionClosedError
+    from hermes_state_runtime import RuntimeStoreError
     agent._last_persistence_error_cause = classify_persistence_error(e)
     if agent._last_persistence_error_cause == "session_row_missing":
         # The session row was removed under this live agent (`hermes sessions delete`, the Desktop/web
@@ -462,7 +463,12 @@ def _db_flush_failed(agent, e: Exception, batch_rows: list[dict[str, Any]], adop
         agent._flushed_db_message_ids = set()
         agent._last_flushed_db_idx = 0
         agent._session_db_created = False
-        agent._ensure_db_session()
+        try:
+            agent._ensure_db_session()
+        except RuntimeStoreError as recreate_exc:
+            logger.warning("Session DB row for %s could not be recreated: %s",
+                           getattr(agent, "session_id", None), recreate_exc)
+            return None
         parent_id = agent._parent_session_id
         if not agent._session_db_created and parent_id and _db_flush_session_row_gone(agent, parent_id):
             # Delegate child whose parent was deleted (cascade): the row's own parent FK would reject every

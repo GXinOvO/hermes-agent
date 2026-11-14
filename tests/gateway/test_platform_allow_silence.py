@@ -71,7 +71,7 @@ async def _queued(runner, source, result=None, reply_expected=None):
 
 async def _recovered(runner, event, tmp_path, platform):
     """Finish a real live turn, crash before delivery, restart: what recovery owes the chat."""
-    from gateway.delivery_ledger import sweep_recoverable
+    from gateway import delivery_ledger
     _, store = _db_runner(tmp_path)
     runner.session_store = store
     runner._run_agent = AsyncMock(return_value=_result(agent_persisted=False, messages=[
@@ -81,8 +81,13 @@ async def _recovered(runner, event, tmp_path, platform):
         _close_store_db(store)
         recovered, store = _db_runner(tmp_path)
         await recovered._recover_unclean_sessions()
-        owed = sweep_recoverable(deliverable_platforms={platform})
-        assert _entry_for(store, event.source).active_turn_token is None
+        assert delivery_ledger.sweep_recoverable(deliverable_platforms={platform}) == []
+        entry = _entry_for(store, event.source)
+        with delivery_ledger._connect() as conn:
+            owed = conn.execute("SELECT content,state,attempts FROM delivery_obligations "
+                                "WHERE session_key=? AND platform=?", (entry.session_key, platform)).fetchall()
+        assert all(row == (_unexpected_silence_reply(), 'unknown', 0) for row in owed)
+        assert entry.active_turn_token is None
         return owed
     finally:
         _close_store_db(store)

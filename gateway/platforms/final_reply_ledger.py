@@ -83,8 +83,11 @@ async def finalize(adapter, oid, result, event, delivery_adapter):
             await finish_event(receipt, 'text', result)
             return
         from gateway.delivery_ledger import record_human_final_failure
-        oid = await asyncio.to_thread(record_human_final_failure, receipt[4], str(getattr(result, 'error', '') or ''))
+        oid = await asyncio.to_thread(record_human_final_failure, receipt[4],
+                                      str(getattr(result, 'error', '') or ''), db=receipt[0])
         await finish_event(receipt, 'text', result)
+        if oid is None:
+            return
     try:
         from gateway.dead_targets import classify_dead_error
         from gateway.delivery_ledger import is_reconnect_only, mark_delivered, mark_failed

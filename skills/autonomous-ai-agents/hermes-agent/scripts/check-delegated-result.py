@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
+
+_source = Path(__file__).resolve().parents[4]
+if (_source / "tools" / "delegation_output_schema.py").is_file():
+    sys.path.insert(0, str(_source))
 
 import jsonschema
 from jsonschema.exceptions import SchemaError

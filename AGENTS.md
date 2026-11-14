@@ -1,9 +1,8 @@
 # Hermes Agent - Development Guide
 
-This root file is a hub: what applies everywhere, then a routing table. Each area's `AGENTS.md`
-loads automatically when you work in that directory; read it before editing there.
-`python scripts/check` caps this file at 12k chars and every root-to-area chain at 30k: long form
-goes in `website/docs/developer-guide/`.
+Read each area's `AGENTS.md` before editing. Shared rules and routing follow.
+`python scripts/check` caps this file at 12k chars and root-to-area chains at 30k; long form:
+`website/docs/developer-guide/`.
 
 **Never give up on the right solution.**
 

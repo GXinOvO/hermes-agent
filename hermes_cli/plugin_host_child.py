@@ -327,6 +327,27 @@ class HostRuntime:
 
     def op_asgi(self, params: dict[str, Any]) -> Any:
         """Serve one dashboard API request with the plugin's FastAPI ``router`` (loaded once)."""
+        app = self._asgi_app(params)
+
+        async def request() -> dict[str, Any]:
+            import httpx
+            from hermes_cli.plugin_host_http_auth import with_hosted_admission
+            transport = httpx.ASGITransport(app=with_hosted_admission(app, params.get("authenticated")))
+            async with httpx.AsyncClient(transport=transport, base_url="http://plugin-host") as client:
+                response = await client.request(
+                    str(params["method"]), str(params["path"]), params=str(params.get("query") or ""),
+                    headers=[tuple(h) for h in params.get("headers") or []],
+                    content=decode(params.get("body")) or b"")
+            return {"status": response.status_code, "headers": list(response.headers.multi_items()),
+                    "body": response.content}
+
+        return encode(self._run(request()))
+
+    def op_prepare_asgi(self, params: dict[str, Any]) -> None:
+        """Load a dashboard router without executing a user request."""
+        self._asgi_app(params)
+
+    def _asgi_app(self, params: dict[str, Any]):
         api_path = Path(str(params["dashboard_dir"])) / str(params["api_file"])
         app = self.asgi_apps.get(str(api_path))
         if app is None:
@@ -344,20 +365,7 @@ class HostRuntime:
             app = FastAPI()
             app.include_router(router)
             self.asgi_apps[str(api_path)] = app
-
-        async def request() -> dict[str, Any]:
-            import httpx
-            from hermes_cli.plugin_host_http_auth import with_hosted_admission
-            transport = httpx.ASGITransport(app=with_hosted_admission(app, params.get("authenticated")))
-            async with httpx.AsyncClient(transport=transport, base_url="http://plugin-host") as client:
-                response = await client.request(
-                    str(params["method"]), str(params["path"]), params=str(params.get("query") or ""),
-                    headers=[tuple(h) for h in params.get("headers") or []],
-                    content=decode(params.get("body")) or b"")
-            return {"status": response.status_code, "headers": list(response.headers.multi_items()),
-                    "body": response.content}
-
-        return encode(self._run(request()))
+        return app
 
     def op_invoke(self, params: dict[str, Any]) -> Any:
         ref = int(params["ref"])
@@ -441,7 +449,8 @@ class HostRuntime:
 
 _HANDLERS: dict[str, Callable[[HostRuntime, dict[str, Any]], Any]] = {
     "hello": HostRuntime.op_hello, "load": HostRuntime.op_load, "load_instance": HostRuntime.op_load_instance,
-    "asgi": HostRuntime.op_asgi, "profile_call": HostRuntime.op_profile_call,
+    "asgi": HostRuntime.op_asgi, "prepare_asgi": HostRuntime.op_prepare_asgi,
+    "profile_call": HostRuntime.op_profile_call,
     "invoke": HostRuntime.op_invoke,
     "obj_invoke": HostRuntime.op_obj_invoke, "obj_getattr": HostRuntime.op_obj_getattr,
     "obj_setattr": HostRuntime.op_obj_setattr, "unload": HostRuntime.op_unload,

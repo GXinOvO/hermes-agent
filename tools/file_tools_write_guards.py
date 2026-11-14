@@ -651,6 +651,12 @@ def _is_internal_file_status_text(content: str) -> bool:
         len(stripped) <= 2 * len(_READ_DEDUP_STATUS_MESSAGE))
 
 
+_INTERNAL_DISPLAY_CONTENT_ERROR = (
+    "Refusing to write internal read_file display text as file content. "
+    "Strip read_file line-number prefixes or reconstruct the intended "
+    "file contents before writing.")
+
+
 def _looks_like_read_file_line_numbered_content(content: str) -> bool:
     """True for content dominated by read_file's ``LINE_NUM|CONTENT`` display (>=60% of
     non-empty lines are consecutive numbered lines; a lone ``1|value`` is allowed)."""

@@ -126,6 +126,89 @@ def test_only_unmapped_human_emails_fail_the_contributor_check(repo, step):
     assert status["results"][0]["detail"] == "zoe@example.net (Zoë New)"
 
 
+def test_contributor_check_uses_the_pr_base_not_an_older_main(repo, step):
+    commit(repo, {"old": "x"}, author=("Prior", "prior@example.net"))
+    base = git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, {"new": "x"}, author=("Known", "12+c@users.noreply.github.com"))
+    passing = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base)
+    assert passing.returncode == 0, passing.stdout
+
+    commit(repo, {"unmapped": "x"}, author=("New", "new@example.net"))
+    failing = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base)
+    assert failing.returncode == 1
+    assert "new@example.net" in failing.stdout
+    assert "prior@example.net" not in failing.stdout
+
+
+@pytest.mark.parametrize("pr_email, should_pass", [
+    ("12+known@users.noreply.github.com", True),
+    ("pr-author@example.net", False),
+])
+def test_contributor_check_uses_actual_merge_parents_when_base_advances(repo, step, pr_email, should_pass):
+    stale_base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"feature": "x"}, author=("PR Author", pr_email))
+    git(repo, "checkout", "-q", "main")
+    commit(repo, {"target": "x"}, author=("Target Author", "target-only@example.net"))
+    git(repo, "merge", "--no-ff", "-q", "-m", "PR merge", "feature")
+    result = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=stale_base,
+                      _HERMES_PR_HEAD_SHA=head)
+    assert (result.returncode == 0) is should_pass, result.stdout
+    assert "target-only@example.net" not in result.stdout
+    if not should_pass:
+        assert pr_email in result.stdout
+
+
+def test_contributor_check_supports_direct_head_checkout(repo, step):
+    base = git(repo, "rev-parse", "HEAD").strip()
+    head = commit(repo, {"feature": "x"}, author=("PR Author", "pr-author@example.net"))
+    result = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base,
+                      _HERMES_PR_HEAD_SHA=head)
+    assert result.returncode == 1
+    assert "pr-author@example.net" in result.stdout
+
+
+def test_contributor_check_rejects_mismatched_merge_head(repo, step):
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "-b", "feature")
+    commit(repo, {"feature": "x"})
+    git(repo, "checkout", "-q", "main")
+    wrong_head = commit(repo, {"target": "x"})
+    git(repo, "merge", "--no-ff", "-q", "-m", "PR merge", "feature")
+    result = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base,
+                      _HERMES_PR_HEAD_SHA=wrong_head)
+    assert result.returncode != 0
+    assert "does not match the event head" in result.stderr
+
+
+def test_contributor_check_refuses_an_unresolvable_pr_head(repo, step):
+    base = git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, {"new": "x"})
+    result = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=base,
+                      _HERMES_PR_HEAD_SHA="0" * 40)
+    assert result.returncode != 0
+
+
+def test_contributor_check_refuses_a_base_outside_the_merge_target(repo, step):
+    git(repo, "checkout", "-q", "--orphan", "unrelated")
+    unrelated = commit(repo, {"other": "x"})
+    git(repo, "checkout", "-q", "main")
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"feature": "x"})
+    git(repo, "checkout", "-q", "main")
+    commit(repo, {"target": "x"})
+    git(repo, "merge", "--no-ff", "-q", "-m", "PR merge", "feature")
+    result = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA=unrelated,
+                      _HERMES_PR_HEAD_SHA=head)
+    assert result.returncode != 0
+
+
+def test_contributor_check_refuses_an_unresolvable_pr_base(repo, step):
+    commit(repo, {"new": "x"}, author=("Known", "12+c@users.noreply.github.com"))
+    failed = step.run(repo, "check_contributor_emails.py", _HERMES_PR_BASE_SHA="0" * 40)
+    assert failed.returncode != 0
+
+
 def test_supply_chain_scan_flags_payload_lines_but_not_lockfiles(repo, step):
     base = git(repo, "rev-parse", "HEAD").strip()
     # Built from pieces: the scanner reads this PR's own added lines, so no line here may match it.

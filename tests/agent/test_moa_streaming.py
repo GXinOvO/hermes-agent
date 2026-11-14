@@ -6,6 +6,7 @@ the acting model's output can stream to the user. stream=False is the original
 complete-response path and must stay byte-identical.
 """
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -178,18 +179,24 @@ def test_create_forwards_stream_read_timeout(monkeypatch, tmp_path):
 # call_llm-level: stream branch returns the raw SDK stream
 # --------------------------------------------------------------------------
 
-def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch):
-    """call_llm(stream=True) returns the client's raw stream object directly,
-    attaches stream/stream_options to the request, and does NOT run response
-    validation (which assumes a complete response)."""
+def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch, caplog):
+    """call_llm(stream=True) preserves stream chunks and finalizes its receipt on consumption."""
     from agent import auxiliary_client as ac
 
     captured = {}
 
+    def chunk(text, finish=None):
+        return SimpleNamespace(
+            id="moa-stream", model="m", usage=None,
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=text, reasoning=None), finish_reason=finish,
+            )],
+        )
+
     class _Completions:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return "RAW_STREAM"
+            return iter([chunk("RAW_"), chunk("STREAM", "stop")])
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=_Completions()),
@@ -207,16 +214,24 @@ def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch):
 
     monkeypatch.setattr(ac, "_validate_llm_response", _no_validate)
 
-    out = ac.call_llm(
-        provider="custom",
-        model="m",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        stream_options={"include_usage": True},
-    )
+    with caplog.at_level("INFO", logger="agent.auxiliary_wire"):
+        out = ac.call_llm(
+            provider="custom",
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
 
-    assert out == "RAW_STREAM"
+        assert [part.choices[0].delta.content for part in out] == ["RAW_", "STREAM"]
     assert captured.get("stream") is True
     assert captured.get("stream_options") == {"include_usage": True}
+    prefix = "auxiliary wire receipt: "
+    receipts = [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
+                if record.getMessage().startswith(prefix)]
+    [receipt] = receipts
+    assert receipt["status"] == "returned"
+    assert receipt["response"]["visible_content_chars"] == len("RAW_STREAM")
+    assert receipt["response"]["finish_reason"] == "stop"
 
 

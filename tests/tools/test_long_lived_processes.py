@@ -76,6 +76,25 @@ class _SandboxLikeEnv(LongLivedProcessMixin):
 
 
 @pytest.mark.platforms("posix")  # POSIX argv and process-group signals
+def test_local_long_lived_keeps_known_pgid_when_leader_lookup_races(monkeypatch):
+    from tools.environments import local
+
+    proc = type("Proc", (), {"pid": 67896})()
+    monkeypatch.setattr(local, "_IS_WINDOWS", False)
+    monkeypatch.setattr(local, "_make_run_env", lambda env: env)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr("hermes_cli.process_identity.spawn_owned", lambda *args, **kwargs: proc)
+    env = object.__new__(local.LocalEnvironment)
+    env.env = {}
+    env.cwd = "."
+
+    spawned = env._spawn_long_lived(["sleep", "1"], None)
+
+    assert spawned._hermes_pgid == proc.pid
+    assert spawned._hermes_owned_pgid == proc.pid
+
+
+@pytest.mark.platforms("posix")  # POSIX argv and process-group signals
 def test_a_first_start_never_sees_the_table_without_its_lock():
     env = _HostEnv()
     # The first-touch window the old two-key init could leave: another thread saw the table

@@ -92,13 +92,12 @@ async def test_bridge_capability_is_method_scoped_and_unqualified_send_does_not_
     names = {'a2a':'A2AAdapter', 'raft':'RaftAdapter', 'buzz':'BuzzAdapter', 'photon':'PhotonAdapter', 'irc':'IRCAdapter'}
     mod = importlib.import_module('plugins.platforms.' + kind + '.adapter')
     adapter = getattr(mod, names[kind])(PlatformConfig(enabled=True))
-    # Raft now qualifies only exact-channel text via its issued native plan.
-    # The old platform-wide unsupported premise is retained in the original RED
-    # receipt. An unqualified 'peer' target still has no publication capability.
+    # Raft qualifies text only through an issued claim-bound native plan.
+    # An unqualified call must stop before it reaches the adapter.
     assert supports_strict_transport(adapter) is (kind == 'raft')
     for method in ['send_typing', 'send_document', 'send_image_file', 'send_video', 'send_voice']:
         assert not supports_strict_transport(adapter, method)
-    expected = 'exact channel' if kind == 'raft' else 'strict_transport_unverified'
+    expected = 'claim-bound plan required' if kind == 'raft' else 'strict_transport_unverified'
     with pytest.raises(RuntimeError, match=expected):
         await strict_call(adapter, chat_id='peer', content='sealed answer')
     with strict_transport_scope():

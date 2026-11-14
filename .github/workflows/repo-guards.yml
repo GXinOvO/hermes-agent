@@ -65,10 +65,10 @@ permissions:
 jobs:
   guards:
     name: Repository guards
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.commit }}
           # Full history: merge bases (history, contributors, prompt surface, lockfile diff,
@@ -152,6 +152,11 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         if: ${{ !cancelled() && (inputs.python || inputs.catalog) }}
+        env:
+          # A fork's PRs target dev, so a dispatched run (no PR base) must diff against origin/dev;
+          # the script's origin/main default then scans every fork commit and reports stale emails.
+          _HERMES_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || (github.repository == 'GXinOvO/hermes-agent' && 'origin/dev') || '' }}
+          _HERMES_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/ci/check_contributor_emails.py
 
       - name: Upload review status artifact (contributor check)

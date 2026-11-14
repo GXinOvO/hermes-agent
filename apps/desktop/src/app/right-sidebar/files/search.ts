@@ -370,7 +370,7 @@ export async function runFileSearch(
   const report = () => onProgress?.({ dirsScanned: outcome.dirsScanned, filesScanned: outcome.filesScanned, hits, reads })
 
   const startedAt = Date.now()
-  const outOfTime = () => Date.now() - startedAt > limits.maxMs
+  const outOfTime = () => Date.now() - startedAt >= limits.maxMs
 
   if (!query.trim() || !options.root) {
     return outcome
