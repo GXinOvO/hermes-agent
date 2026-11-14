@@ -31,6 +31,7 @@
 | F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
 | F20 | Cron provider 请求审计 | 记录每次 Cron 请求的初始/实际路由、重试、推理参数、SDK 调用与响应身份，敏感值不入账；app-server 只观测子进程接口参数，子 Agent、ACP 与 MoA 下游未覆盖 | `cron/usage_audit.jsonl`；隔离验证，待部署后的自然运行读回 |
 | F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
+| F22 | 会话预览过滤模型切换通知 | 新会话先切模型时，侧栏预览跳过 `model_switch` 内部行；后续真实问题正常显示，只有通知时预览为空；不改历史消息 | `hermes_state_common.py`、`tests/hermes_state/test_hermes_state.py`；远端 `dev` 基线已复现，补丁通过 SessionDB 相关测试；运行安装待重载 |
 
 ## 使用时需要记住的边界
 
@@ -121,7 +122,8 @@
 
 | 编号 | 实现与验证入口 |
 | --- | --- |
-| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
+| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f1](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
+| F22 | 本次修复的 [会话预览过滤](hermes_state_common.py) · [回归测试](tests/hermes_state/test_hermes_state.py)；远端 `dev` 基线两条用例均失败，修复后 SessionDB 相关测试通过，提交和运行安装状态随 PR 读回 |
 
 ### 2026-11-10 上游同步兼容
 
