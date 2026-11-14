@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -157,7 +159,7 @@ def request_edits(key, base_url, model, evidence):
         raise ValueError("model response exceeds limit")
     parsed = json.loads(data)
     print(json.dumps({"requested_model": model, "response_model": parsed.get("model"),
-                      "usage": parsed.get("usage"), "reasoning_effort": "max"}, ensure_ascii=False))
+                      "usage": parsed.get("usage"), "reasoning_effort": "max"}, ensure_ascii=False), flush=True)
     return parse_response(parsed, model)
 
 
@@ -229,28 +231,85 @@ def evidence_for(root, source, base, head, paths):
     for path in paths:
         if len(blobs) >= 8:
             break
-        candidate = root / path
-        if path == "FORK_FEATURES.md" or not candidate.is_file() or candidate.is_symlink():
+        entry = git(root, "ls-tree", "-l", head, "--", path).split(None, 4)
+        if len(entry) != 5 or entry[0] not in {"100644", "100755"} or int(entry[3]) > 60_000:
             continue
-        if candidate.stat().st_size <= 60_000:
-            blobs.append({"path": path, "source": bounded(candidate.read_text(encoding="utf-8-sig", errors="replace"), 6000)})
+        content = subprocess.check_output(["git", "-C", str(root), "show", f"{head}:{path}"],
+                                          timeout=60).decode("utf-8-sig", errors="replace")
+        blobs.append({"path": path, "source": bounded(content, 6000)})
     return {"catalog": catalog_for_model(source), "reviewed_base": base, "target": head,
             "commit_url_prefix": "https://github.com/GXinOvO/hermes-agent/commit/",
             "commits": commits, "changed_paths": "\n".join(paths), "diff": diff,
             "source_samples": blobs, "merged_prs": pull_requests(root, {line.split()[0] for line in commits.splitlines()})}
 
 
-def review_batch(root, key, base_url, model, source, base, head, paths):
+def _cache_digest(value):
+    data = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(data).hexdigest()
+
+
+def _save_cache(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _review_target(root, cache, source, base, current, model, base_url):
+    identity = _cache_digest([source, base, model, base_url, Path(__file__).read_text(encoding="utf-8-sig")])
+    plan = cache / "plans" / (identity + ".json")
+    target = current
+    try:
+        saved = json.loads(plan.read_text(encoding="utf-8-sig"))
+        if saved["identity"] == identity and re.fullmatch(r"[a-f0-9]{40}", saved["target"]):
+            git(root, "merge-base", "--is-ancestor", base, saved["target"])
+            git(root, "merge-base", "--is-ancestor", saved["target"], current)
+            target = saved["target"]
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass
+    return target, plan
+
+
+def review_batch(root, key, base_url, model, source, base, head, paths, cache=None):
+    entry = None
     try:
         evidence = evidence_for(root, source, base, head, paths)
+        if cache is not None:
+            identity = _cache_digest([model, base_url, PROMPT, evidence, Path(__file__).read_text(encoding="utf-8-sig")])
+            entry = cache / "responses" / (identity + ".json")
+            try:
+                saved = json.loads(entry.read_text(encoding="utf-8-sig"))
+                if not isinstance(saved, dict) or saved.get("input_sha256") != identity:
+                    saved = {}
+            except (OSError, ValueError):
+                saved = {}
+            if saved.get("split") is True:
+                raise IncompleteModelResponse("cached batch split")
+            try:
+                reviewed = apply_edits(source, saved["response"])
+                print(json.dumps({"cache_hit": True, "paths": len(paths)}), flush=True)
+                return reviewed, [len(saved["response"]["edits"])]
+            except (ValueError, KeyError, TypeError):
+                pass
         edits = request_edits(key, base_url, model, evidence)
-        return apply_edits(source, edits), [len(edits["edits"])]
+        reviewed = apply_edits(source, edits)
+        if entry is not None:
+            _save_cache(entry, {"input_sha256": entry.stem, "response": edits})
+        return reviewed, [len(edits["edits"])]
     except (IncompleteModelResponse, ModelEditMismatch):
         if len(paths) == 1:
             raise
+        if entry is not None:
+            _save_cache(entry, {"input_sha256": entry.stem, "split": True})
         midpoint = len(paths) // 2
-        left, left_counts = review_batch(root, key, base_url, model, source, base, head, paths[:midpoint])
-        right, right_counts = review_batch(root, key, base_url, model, left, base, head, paths[midpoint:])
+        left, left_counts = review_batch(root, key, base_url, model, source, base, head, paths[:midpoint], cache)
+        right, right_counts = review_batch(root, key, base_url, model, left, base, head, paths[midpoint:], cache)
         return right, left_counts + right_counts
 
 
@@ -261,6 +320,11 @@ def update(root, key, base_url, model):
     source = path.read_text(encoding="utf-8-sig")
     base, head = checkpoint(source), git(root, "rev-parse", "HEAD")
     git(root, "merge-base", "--is-ancestor", base, head)
+    cache_dir = os.environ.get("FORK_CATALOG_CACHE_DIR")
+    cache = Path(cache_dir) if cache_dir else None
+    plan = None
+    if cache is not None:
+        head, plan = _review_target(root, cache, source, base, head, model, base_url)
     paths = [path for path in git(root, "diff", "--name-only", "--no-renames", base, head, "--", ".").splitlines()
              if reviewable(path)]
     if not paths:
@@ -268,12 +332,16 @@ def update(root, key, base_url, model):
         return False
     if not key or not base_url or not model:
         raise ValueError("FORK_CATALOG_API_KEY, BASE_URL and MODEL are required")
+    if plan is not None:
+        _save_cache(plan, {"identity": plan.stem, "target": head})
     candidates = []
     batches = split_paths(root, base, head, paths)
-    for batch in batches:
-        reviewed, counts = review_batch(root, key, base_url, model, source, base, head, batch)
+    print(json.dumps({"reviewed_from": base, "target": head, "batches": len(batches)}), flush=True)
+    for index, batch in enumerate(batches):
+        reviewed, counts = review_batch(root, key, base_url, model, source, base, head, batch, cache)
         source = reviewed
         candidates.extend(counts)
+        print(json.dumps({"batch_completed": index + 1, "batches": len(batches), "paths": len(batch)}), flush=True)
     candidate = set_checkpoint(source, head)
     if checkpoint(candidate) != head:
         raise ValueError("candidate checkpoint does not match reviewed head")

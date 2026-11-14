@@ -34,6 +34,7 @@ jobs:
           FORK_CATALOG_API_KEY: ${{ secrets.FORK_CATALOG_API_KEY }}
           FORK_CATALOG_BASE_URL: ${{ vars.FORK_CATALOG_BASE_URL }}
           FORK_CATALOG_MODEL: ${{ vars.FORK_CATALOG_MODEL }}
+          FORK_CATALOG_CACHE_DIR: ${{ runner.tool_cache }}/hermes-fork-catalog/GXinOvO-hermes-agent
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
