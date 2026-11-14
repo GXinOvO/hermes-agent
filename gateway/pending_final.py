@@ -423,8 +423,10 @@ async def claim_event(event, kind, content, *, route=None, adapter_profile=None,
     db, admission_id = db_for_event(event)
     if db is None:
         return None
-    with db._read_ctx() as conn:
-        value = _read(conn, admission_id)
+    def read():
+        with db._read_ctx() as conn:
+            return _read(conn, admission_id)
+    value = await asyncio.to_thread(read)
     if value is None:
         return None
     if route is not None and value['binding']['route'] != route:

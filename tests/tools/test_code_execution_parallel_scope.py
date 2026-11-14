@@ -38,8 +38,12 @@ def test_parallel_workers_keep_profile_scope_and_callbacks_isolated(tmp_path, mo
                 profile.mkdir()
                 home_token = set_hermes_home_override(profile)
                 session_token = set_current_session_key(f"scope-owner-{index}")
-                values = tuple((lambda i=i: i) if i < 5 else f"vault-owner-{index}"
-                               for i in range(len(callback_api)))
+                states = {
+                    'set_current_session_id': f'vault-owner-{index}',
+                    '_set_tool_whitelist': (frozenset({'read_file'}), f'blocked-scope-{index}'),
+                }
+                values = tuple(states.get(setter.__name__, lambda i=i: i)
+                               for i, (_getter, setter) in enumerate(callback_api))
                 try:
                     marker.set(f"scope-{index}")
                     for (_getter, setter), value in zip(callback_api, values):
