@@ -62,6 +62,7 @@ def _make_agent(monkeypatch, completions):
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     monkeypatch.setattr("agent.process_bootstrap.OpenAI", lambda **kwargs: client)
     monkeypatch.setattr("model_tools.get_tool_definitions", lambda *a, **k: [])
+    monkeypatch.setattr("agent.context_compressor.get_model_context_length", lambda *a, **k: 128_000)
 
     agent = AIAgent(
         model="test-model",

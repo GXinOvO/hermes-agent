@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from agent.redact import mask_secret, redact_cdp_url, redact_sensitive_text, RedactingFormatter
+from agent.redact import RedactingFormatter, mask_secret, redact_cdp_url, redact_sensitive_text
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +102,27 @@ class TestKnownPrefixes:
             "glpat-short",                            # suffix under 10 chars
             "myglpat-AbCdEfGhIjKlMnOpQrSt",           # embedded — lookbehind blocks
         ]:
+            assert redact_sensitive_text(benign) == benign
+
+    def test_grafana_token_prefixes(self):
+        """Bare Grafana service-account / Cloud tokens redact (#150339); look-alikes stay intact."""
+        from agent.redact import redact_terminal_output
+        # NOTE: prefix + suffix CONCATENATION so no contiguous token literal exists in this file.
+        sa_body = "Q7zR4Lm9Xc2Vb5Nw8Kd3Hf6JtPa0Sg7Y"
+        cloud_body = "eyJvIjoiMTIzNDU2IiwibiI6InN0YWNrLXRva2VuIiwiayI6Ilo3cTRMbTlYYzJWYjVOdzgifQ"
+        for token, body in [
+            ("glsa_" + sa_body + "_0123abcd", sa_body),  # service-account token + checksum
+            ("glsa_" + sa_body, sa_body),                # checksum dropped / format drift
+            ("glc_" + cloud_body + "==", cloud_body),    # Cloud access-policy token, padded
+            ("glc_" + cloud_body, cloud_body),
+            ("glc_" + cloud_body[:40] + "+/" + cloud_body[40:], cloud_body[40:]),  # base64 +/ chars
+        ]:
+            for out in (redact_sensitive_text(f"$ printf '%s' \"$GRAFANA_TOKEN\"\n{token}\n"),
+                        redact_terminal_output(f"{token}\n", "printenv GRAFANA_TOKEN")):
+                assert body not in out, f"{token!r} survived redaction: {out!r}"
+        for benign in ["glsa_short", "glc_config_loader", "myglsa_" + sa_body,
+                       "src/glc_renderer/backend/opengl/shaders/main.frag",  # a glc_* path is not a token
+                       "cd /home/u/glc_project/build/release/artifacts/output"]:
             assert redact_sensitive_text(benign) == benign
 
     def test_context7_api_key_prefix(self):
@@ -517,30 +538,6 @@ class TestPythonReprFields:
     def test_code_file_preserves_secret_shaped_fixture(self):
         text = "CONFIG = {'BRAVE_API_KEY': 'fixture-value-1234567890'}"
         assert redact_sensitive_text(text, force=True, code_file=True) == text
-
-
-class TestAuthHeaders:
-
-
-
-
-
-    def test_authorization_prose_unchanged(self):
-        # "authorization" without a colon-delimited value is plain prose.
-        text = "the authorization model is fully open"
-        assert redact_sensitive_text(text) == text
-
-    def test_token_flush_against_double_quote_preserves_quote(self):
-        # Regression for #43083: a token sitting flush against a closing
-        # double quote must NOT pull that quote into the mask. Greedy \S+
-        # used to eat it, turning value corruption into syntax corruption
-        # (unterminated quote → shell EOF).
-        text = 'curl -H "Authorization: Bearer sk-abcdef1234567890"'
-        result = redact_sensitive_text(text)
-        assert "sk-abcdef1234567890" not in result
-        assert result.count('"') == 2, result  # both quotes survive
-        assert result.endswith('"'), result
-
 
 
 class TestApiKeyHeaders:

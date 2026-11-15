@@ -239,21 +239,6 @@ _API_CALL_MODULES = frozenset({"chat_completion_helpers"})
 _MAX_OUTER_LOOP_ERRORS = 8
 
 
-def _is_interpreter_shutdown_error(exc: Exception) -> bool:
-    """True for a fatal interpreter-shutdown RuntimeError. The RuntimeError type gate
-    stays here: a ValueError carrying similar text must not match (#93269)."""
-    if isinstance(exc, RuntimeError):
-        # ── Interpreter finalization: abandon immediately ── The process is exiting (TUI quit, SIGTERM,
-        # one-shot done) while this turn — typically the post-turn review fork's daemon thread — is
-        # mid-flight. Retries, credential rotation, and fallbacks are all futile ("cannot schedule new
-        # futures..."), and the buffered ⚠️/❌ retry trace spams the shell after the TUI already exited. End
-        # the turn with a single log line: no print, no traceback, no debug dump, no retry. Same class as
-        # cron delivery (#55924/#58720) and concurrent tool submission — shared predicate.
-        from tools.interpreter_shutdown import interpreter_shutting_down
-        return interpreter_shutting_down(exc)
-    return False
-
-
 def _moa_client_consumes_prepared_request(client: Any) -> bool:
     """True when ``client`` is the in-process MoA facade (only ``MoAChatCompletions`` exposes
     ``prepare()``; other clients raise TypeError on ``_moa_prepared_request`` even while
@@ -1887,6 +1872,9 @@ def run_conversation(
         finally:
             end_voice_turn_route(agent)
     fence_result_reply(result)
+    # Joined before settle_held_final so a held transform sees the lead, unless a collapsed partial already ran it.
+    from agent.primary_auth_fallback import lead_failed_turn_with_primary_auth
+    lead_failed_turn_with_primary_auth(agent, result)
     settle_held_final(agent, result)
     if isinstance(result, dict) and isinstance(result.get("messages"), list):
         from agent.session_persistence import drop_ephemeral_scaffolding
