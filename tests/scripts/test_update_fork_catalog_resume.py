@@ -130,21 +130,36 @@ def test_single_path_model_edit_mismatch_retries_once(tmp_path, monkeypatch):
     assert "| F01 | final |" in catalog.read_text()
 
 
-def test_single_path_model_edit_mismatch_remains_fail_closed_after_one_retry(tmp_path, monkeypatch):
+def test_single_path_model_edit_mismatch_allows_two_retries(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    catalog, _ = repository(root)
+    monkeypatch.setenv("FORK_CATALOG_CACHE_DIR", str(tmp_path / "cache"))
+    first = {"edits": [{"old": "| F01 | old |", "new": "| removed |"}]}
+    second = {"edits": [{"old": "| F01 | old |", "new": "| removed again |"}]}
+    third = {"edits": [{"old": "| F01 | old |", "new": "| F01 | final |"}]}
+    fourth = {"edits": []}
+    with patch.object(updater, "request_edits", side_effect=[first, second, third, fourth]) as request:
+        assert updater.update(root, "inert", "http://localhost/v1", "deepseek-v4.1-flash")
+    assert request.call_count == 4
+    assert "| F01 | final |" in catalog.read_text()
+
+
+def test_single_path_model_edit_mismatch_remains_fail_closed_after_two_retries(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
     catalog, _ = repository(root)
     before = catalog.read_bytes()
     monkeypatch.setenv("FORK_CATALOG_CACHE_DIR", str(tmp_path / "cache"))
     invalid = {"edits": [{"old": "| F01 | old |", "new": "| removed |"}]}
-    with patch.object(updater, "request_edits", side_effect=[invalid, invalid]) as request:
+    with patch.object(updater, "request_edits", side_effect=[invalid, invalid, invalid]) as request:
         try:
             updater.update(root, "inert", "http://localhost/v1", "deepseek-v4.1-flash")
         except updater.ModelEditMismatch:
             pass
         else:
-            raise AssertionError("second invalid edit must remain fail-closed")
-    assert request.call_count == 2
+            raise AssertionError("third invalid edit must remain fail-closed")
+    assert request.call_count == 3
     assert catalog.read_bytes() == before
 
 
