@@ -20,7 +20,7 @@ a clean ``interpreter_shutdown`` exit reason.
 """
 from __future__ import annotations
 
-from agent.conversation_loop import _is_interpreter_shutdown_error
+from agent.turn_loop_errors import _is_interpreter_shutdown_error
 
 class TestInterpreterShutdownDetection:
     """Verify the interpreter-shutdown error matcher used by the

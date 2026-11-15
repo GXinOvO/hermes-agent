@@ -261,18 +261,6 @@ def _ra():
     return run_agent
 
 
-def _is_interpreter_shutdown_submit_error(exc: RuntimeError) -> bool:
-    """Shutdown-race predicate; ``tools.interpreter_shutdown`` knows both CPython message variants.
-
-    Delegates so all sites (cron delivery, conversation-loop retry, tool submission) recognize both CPython
-    shutdown-message variants instead of each matching its own substring (the bug class behind
-    #55924/#58720).
-    """
-    from tools.interpreter_shutdown import interpreter_shutting_down
-
-    return interpreter_shutting_down(exc)
-
-
 _emit_terminal_post_tool_call = emit_terminal_post_tool_call
 
 
@@ -765,7 +753,9 @@ def _dispatch_authorized_once(
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
     from agent.tool_progress_relay import bound_tool_progress
     from tools.connectors.data_use import collect_data_use
-    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
+    from tools.mcp_elicitation_form import bound_form_asker  # MCP elicitation asks on this turn's clarify surface
+    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use, \
+            bound_form_asker(getattr(agent, "clarify_callback", None)):
         try:
             return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
         finally:
@@ -1450,7 +1440,8 @@ class _ConcurrentBatch:
             try:
                 f = executor.submit(propagate_context_to_thread(self.run_worker), i, submit_index)
             except RuntimeError as submit_error:
-                if not _is_interpreter_shutdown_submit_error(submit_error):
+                from tools.interpreter_shutdown import interpreter_shutting_down
+                if not interpreter_shutting_down(submit_error):
                     raise
                 skipped = runnable[submit_index:]
                 logger.warning(

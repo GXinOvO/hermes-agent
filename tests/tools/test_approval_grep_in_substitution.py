@@ -8,7 +8,9 @@ simple command: an unquoted ``;`` ``|`` ``&`` newline, or the ``)`` / backtick c
 """
 import pytest
 
-from tools.approval_detection import _quoted_grep_pattern_spans, _shell_tokens_with_spans, detect_hardline_command
+from tools.approval_detection import detect_hardline_command
+from tools.approval_shell_tokens import _shell_tokens_with_spans
+from tools.approval_detection import _quoted_grep_pattern_spans
 
 
 @pytest.mark.parametrize("command", [

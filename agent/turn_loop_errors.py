@@ -32,6 +32,21 @@ class OuterErrorVerdict:
     final_response: Any
 
 
+def _is_interpreter_shutdown_error(exc: Exception) -> bool:
+    """True for a fatal interpreter-shutdown RuntimeError. The RuntimeError type gate
+    stays here: a ValueError carrying similar text must not match (#93269)."""
+    if isinstance(exc, RuntimeError):
+        # ── Interpreter finalization: abandon immediately ── The process is exiting (TUI quit, SIGTERM,
+        # one-shot done) while this turn — typically the post-turn review fork's daemon thread — is
+        # mid-flight. Retries, credential rotation, and fallbacks are all futile ("cannot schedule new
+        # futures..."), and the buffered ⚠️/❌ retry trace spams the shell after the TUI already exited. End
+        # the turn with a single log line: no print, no traceback, no debug dump, no retry. Same class as
+        # cron delivery (#55924/#58720) and concurrent tool submission — shared predicate.
+        from tools.interpreter_shutdown import interpreter_shutting_down
+        return interpreter_shutting_down(exc)
+    return False
+
+
 def handle_outer_loop_error(
     agent: Any, *, e: Any, _outer_error_count: Any, api_call_count: Any, messages: Any,
     conversation_history: Any, _turn_exit_reason: Any, failed: Any, final_response: Any,
@@ -43,7 +58,7 @@ def handle_outer_loop_error(
     (assistant→assistant); ``finalize_turn`` appends only when safe."""
     from agent.conversation_loop import (
         _API_CALL_MODULES, _LOCAL_PROCESSING_MODULES, _MAX_OUTER_LOOP_ERRORS,
-        _is_interpreter_shutdown_error, _ra,
+        _ra,
     )
 
     def _verdict(action: str) -> OuterErrorVerdict:

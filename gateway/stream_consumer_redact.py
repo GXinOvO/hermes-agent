@@ -31,8 +31,10 @@ _LOOKBACK = 1024        # most settled text re-redacted with each newly settled 
 # ``bot:token``, ``user@host``).
 _PROBE = "Q7mZ2xW9rT4kL8vB3nH6pD1sF5gJ0cYa8Kd2LmP4"
 _CONTINUATIONS = (_PROBE, "." + _PROBE, ":" + _PROBE, "-" + _PROBE, "_" + _PROBE, "@example.com/")
-# Literal starts of secrets the prefix list does not carry (JWT, base64 PEM, age).
-_LITERALS = tuple(lit for lit in (*_PREFIX_SUBSTRINGS, "eyJ", "LS0tLS1CRUdJTi", "AGE-SECRET-KEY-1") if lit)
+# Literal starts of secrets the prefix list does not carry (JWT, base64 PEM, age, Discord mfa).
+# Hold mfa. from its first byte: its 84-char secret body can otherwise be streamed
+# almost in full before the complete-token redactor recognizes it.
+_LITERALS = tuple(lit for lit in (*_PREFIX_SUBSTRINGS, "eyJ", "LS0tLS1CRUdJTi", "AGE-SECRET-KEY-1", "mfa.") if lit)
 _LITERAL_MAX = max(map(len, _LITERALS))
 _NON_KEY_CHAR_RE = re.compile(r"[^A-Za-z0-9_\-]")
 # A Zhipu key's 32-hex id still arriving: no probe completes it until its ``.secret`` part does.
@@ -40,7 +42,7 @@ _HEX_ID_TAIL_RE = re.compile(r"(?<![A-Za-z0-9_.-])[0-9a-f]{8,32}\Z")
 
 _KW = r"(?:key|token|secret|passw(?:or)?d|pass(?:phrase)?|pwd|pw|credentials?|auth\w*|cookie|sig\w*|bearer)"
 _OPEN_VALUE = r"(?:\\?\"[^\"\n]*|\\?'[^'\n]*|\S*)"  # an open quoted value (to its own quote) or a token
-# A CLI flag's quoted value may span lines (agent.redact._QUOTED_FLAG_VALUE): hold to its closing quote.
+# A CLI flag's quoted value may span lines (agent.redact_cli_flags._QUOTED_FLAG_VALUE): hold to its closing quote.
 _OPEN_FLAG_VALUE = r"(?:\\?\"(?:\\[\s\S]|[^\"\\]){0,512}\\?|\\?'(?:'\\''|[^']){0,512}|\S*)"
 _OPEN_TAIL_RE = re.compile(
     rf"\b(?:proxy-)?authorization\s*(?::\s*(?:\S+[ \t]+)?\S*)?\Z"            # header, scheme, credential
