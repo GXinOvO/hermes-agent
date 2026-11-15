@@ -9,7 +9,7 @@ import {
 import { map, type MapStore } from 'nanostores'
 
 import type { HermesApiRequest } from '@/global'
-import { type ExactSessionOwner, exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactSessionSnapshot } from '@/lib/exact-session-owner'
+import { type ExactSessionOwner, exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactSessionSnapshot, sameExactSessionOwner } from '@/lib/exact-session-owner'
 
 import { CanonicalDesktopProtocol, canonicalProfile, canonicalPromptParams, canonicalSessionKey, openGatewaySocket, recordCanonicalOwner, splitRewindSubmit } from './canonical-protocol'
 import { DialReadiness, GATEWAY_NOT_CONNECTED_MESSAGE, remainingRequestBudget } from './dial-readiness'
@@ -140,6 +140,8 @@ export class HermesGateway extends JsonRpcGatewayClient {
   }
 
   protected override validateResponse(method: string, params: Record<string, unknown>, result: unknown): void {
+    if (method === 'session.events.since') { this.validateExactReplay(params, result) }
+
     if (params.expected_owner === undefined) { return }
     const owner = exactSessionOwnerFromWire(params.expected_owner)
 
@@ -149,6 +151,18 @@ export class HermesGateway extends JsonRpcGatewayClient {
       requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? ''), owner)
     } else {
       requireExactSessionSnapshot(result, String(params.session_id ?? ''), owner)
+    }
+  }
+
+  private validateExactReplay(params: Record<string, unknown>, result: any): void {
+    const sessionId = String(params.session_id ?? '')
+    const source = this.exactSources.get(sessionId)
+
+    if (!source) { return }
+    const witness = this.sessionOwnerWitness(sessionId, source.profile, result?.replay_epoch)
+
+    if (!sameExactSessionOwner(source.owner, witness)) {
+      throw new Error('来源会话身份已变化，请重新绑定来源会话。')
     }
   }
 
@@ -264,9 +278,18 @@ export class HermesGateway extends JsonRpcGatewayClient {
     this.attached.clear()
     this.sessionWitnesses.clear()
     this.exactResumes.clear()
-    this.exactEventEpochs.clear()
-    this.exactSources.clear()
+    this.suspendExactSources()
     super.close()
+  }
+
+  private suspendExactSources(): void {
+    this.exactEventEpochs.clear()
+
+    for (const [sessionId, source] of this.exactSources) {
+      source.events = undefined
+      source.checkedEpochs = new Set()
+      this.exactEventEpochs.set(sessionId, new Set())
+    }
   }
 
   // An epoch's owner qualifies the shared client's retained replay cursor, not this socket's
@@ -441,8 +464,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
     const ready = this.readiness.begin(generation, this.nativeDial)
     this.sessionWitnesses.clear()
     this.exactResumes.clear()
-    this.exactEventEpochs.clear()
-    this.exactSources.clear()
+    this.suspendExactSources()
 
     try {
       // The transport's own rejection names a dial that never opened (#41566); readiness only
@@ -506,6 +528,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
       await this.waitForRequestReadiness(method, timeoutMs, deadline, signal, generation)
     }
 
+    params = this.guardExactAttachment(method, params)
     const expectedOwner = params.expected_owner === undefined ? undefined : exactSessionOwnerFromWire(params.expected_owner)
 
     if (params.expected_owner !== undefined && (!this.canonical || !expectedOwner)) {
@@ -523,6 +546,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
     if (redirected) { return redirected }
     params = this.routeCanonicalParams(method, params)
 
+    if (method === 'session.events.since') { await this.verifyExactReplay(params, deadline, signal) }
     await this.attachForRequest(method, params, deadline, signal)
     this.requireConnectionGeneration(generation)
     params = this.routeCanonicalParams(method, params)
@@ -534,6 +558,31 @@ export class HermesGateway extends JsonRpcGatewayClient {
     if (method === 'prompt.submit' && this.backendClarifyBatch) { params = { ...params, clarify_batch: true } }
 
     return this.requestCanonical<T>(method, params, expectedOwner, deadline, signal, generation)
+  }
+
+  private guardExactAttachment(method: string, params: Record<string, unknown>): Record<string, unknown> {
+    if (!['session.resume', 'session.activate'].includes(method) || params.expected_owner) { return params }
+    const sessionId = String(params.session_id ?? '')
+    const source = this.exactSources.get(sessionId)
+
+    if (!source || (params.profile !== undefined && this.resolveSessionProfile(sessionId, params.profile) !== source.profile)) { return params }
+
+    return { ...params, profile: source.profile, expected_owner: exactSessionOwnerToWire(source.owner) }
+  }
+
+  private async verifyExactReplay(params: Record<string, unknown>, deadline: number, signal?: AbortSignal): Promise<void> {
+    const sessionId = String(params.session_id ?? '')
+    const source = this.exactSources.get(sessionId)
+
+    if (!source || this.sessionOwnerWitness(sessionId, source.profile, String(params.replay_epoch ?? ''))) { return }
+    source.events ??= []
+
+    try {
+      await this.request('session.resume', { session_id: sessionId, profile: source.profile, omit_messages: true,
+        expected_owner: exactSessionOwnerToWire(source.owner) }, remainingRequestBudget(deadline, signal), signal)
+    } finally {
+      source.events = undefined
+    }
   }
 
   private async waitForRequestReadiness(
@@ -565,7 +614,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
     const source = this.exactSources.get(sessionId)
 
     const pending: PendingExactResume = {
-      allowedEpochs: new Set([...this.replayProfiles.entries()]
+      allowedEpochs: new Set(this.exactEventEpochs.get(sessionId) ?? [...this.replayProfiles.entries()]
         .filter(([, owner]) => owner.sessionId === sessionId).map(([epoch]) => epoch)),
       checkedEpochs: new Set([...(source?.checkedEpochs ?? []), ...(source?.events?.map(event => event.replay_epoch ?? '') ?? [])]),
       events: source?.events ?? []

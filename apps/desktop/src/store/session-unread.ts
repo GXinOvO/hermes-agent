@@ -3,6 +3,7 @@ import { Codecs, persistentAtom } from '@/lib/persisted'
 import { isMessagingSource } from '@/lib/session-source'
 import { stableArray } from '@/lib/stable-array'
 import { readKey } from '@/lib/storage'
+import { $primaryGatewayRoute } from '@/store/gateway-primary-route'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import type { SessionInfo } from '@/types/hermes'
 
@@ -160,6 +161,11 @@ const isSelected = (row: SessionInfo, selected: null | string): boolean =>
 /** The persistence bucket a row belongs to — its OWN profile, never the live
  *  gateway's (the lists are routinely cross-profile). */
 const profileKeyForRow = (row: SessionInfo): string => normalizeProfileKey(row.profile)
+
+const rowMatchesConnection = (row: SessionInfo, connectionId: string): boolean =>
+  row.connection_id?.trim()
+    ? row.connection_id.trim() === connectionId.trim()
+    : $primaryGatewayRoute.get().connectionId === connectionId.trim()
 
 /** The row a bare stored id refers to. Ids are caller-supplied and each
  *  profile's backend is its own namespace, so two profiles can hold the same
@@ -319,17 +325,20 @@ observeCanonicalAdmissions((admissionId, status) => {
 })
 
 /** The row of a known owner profile; with no owner, the bare-id tie-break. */
-function resolveOwnedRow(storedSessionId: string, profile?: string): SessionInfo | undefined {
-  return profile
-    ? rowsFor([$sessions.get(), $cronSessions.get(), $messagingSessions.get()]).find(
-        r => sessionMatchesStoredId(r, storedSessionId) && profileKeyForRow(r) === normalizeProfileKey(profile)
-      )
-    : resolveLoadedRow(storedSessionId)
+function resolveOwnedRow(storedSessionId: string, profile?: string, connectionId?: string): SessionInfo | undefined {
+  if (!profile && !connectionId) {
+    return resolveLoadedRow(storedSessionId)
+  }
+
+  return rowsFor([$sessions.get(), $cronSessions.get(), $messagingSessions.get()]).find(row =>
+    sessionMatchesStoredId(row, storedSessionId) && (!profile || profileKeyForRow(row) === normalizeProfileKey(profile)) &&
+    (!connectionId || rowMatchesConnection(row, connectionId))
+  )
 }
 
 /** A project-tree row for *storedSessionId* in *profile*'s bucket, else the live gateway's (as the
  *  live-source lookup): the tree mixes profiles, and an unhinted completion comes from the live gateway. */
-function projectTreeRow(storedSessionId: string, profile?: string): SessionInfo | undefined {
+function projectTreeRow(storedSessionId: string, profile?: string, connectionId?: string): SessionInfo | undefined {
   const owner = normalizeProfileKey(profile ?? $activeGatewayProfile.get())
 
   return $projectTree
@@ -338,7 +347,8 @@ function projectTreeRow(storedSessionId: string, profile?: string): SessionInfo 
       ...(project.previewSessions ?? []),
       ...project.repos.flatMap(repo => repo.groups.flatMap(group => group.sessions))
     ])
-    .find(row => sessionMatchesStoredId(row, storedSessionId) && profileKeyForRow(row) === owner)
+    .find(row => sessionMatchesStoredId(row, storedSessionId) && profileKeyForRow(row) === owner &&
+      (!connectionId || rowMatchesConnection(row, connectionId)))
 }
 
 /** Sources the live poll reported, by profile and stored id: a messaging turn can settle before its row
@@ -455,8 +465,13 @@ export interface SessionUnreadSnapshot {
   seen: SeenCounts
 }
 
-export function isSessionAvailableForProfile(storedSessionId: string, profileHint?: null | string): boolean {
-  return Boolean(resolveOwnedRow(storedSessionId, profileHint ?? undefined) ?? projectTreeRow(storedSessionId, profileHint ?? undefined))
+export function isSessionAvailableForProfile(
+  storedSessionId: string,
+  profileHint?: null | string,
+  connectionId?: string
+): boolean {
+  return Boolean(resolveOwnedRow(storedSessionId, profileHint ?? undefined, connectionId) ??
+    projectTreeRow(storedSessionId, profileHint ?? undefined, connectionId))
 }
 
 /** Read persisted unread state for a source-bound reference without using the
@@ -464,9 +479,20 @@ export function isSessionAvailableForProfile(storedSessionId: string, profileHin
 export function isSessionUnreadForProfile(
   storedSessionId: string,
   profileHint?: null | string,
-  snapshot: SessionUnreadSnapshot = { markers: $unreadFinishedMarkers.get(), seen: $sessionSeenCounts.get() }
+  snapshot: SessionUnreadSnapshot = { markers: $unreadFinishedMarkers.get(), seen: $sessionSeenCounts.get() },
+  connectionId?: string
 ): boolean {
-  const row = resolveOwnedRow(storedSessionId, profileHint ?? undefined) ?? projectTreeRow(storedSessionId, profileHint ?? undefined)
+  const row = resolveOwnedRow(storedSessionId, profileHint ?? undefined, connectionId) ??
+    projectTreeRow(storedSessionId, profileHint ?? undefined, connectionId)
+
+  if (connectionId && !row) {
+    return false
+  }
+
+  if (connectionId) {
+    return row?.unread === true
+  }
+
   const profile = row ? profileKeyForRow(row) : unlistedProfile(profileHint)
   const durableId = row ? sessionPinId(row) : storedSessionId
   const markers = snapshot.markers[profile] ?? []

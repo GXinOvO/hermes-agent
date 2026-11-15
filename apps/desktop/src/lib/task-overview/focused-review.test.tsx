@@ -140,8 +140,8 @@ test.each([
   await reconnect()
   const replaced = { ...owner, ...replacement }
   setOwner(replaced)
-  await gateway.request('session.resume', { session_id: 'same', profile: 'worker' })
-  expect(gateway.sessionOwnerWitness('same', 'worker', 'accepted')).toEqual(replaced)
+  await expect(gateway.request('session.resume', { session_id: 'same', profile: 'worker' })).rejects.toThrow('来源会话身份已变化')
+  expect(gateway.sessionOwnerWitness('same', 'worker', 'accepted')).toBeUndefined()
   expect($focusedOverviewKey.get()).toBe(key)
   await act(async () => { await expect(appendFocusedOverviewRequest(key, 'replaced owner request')).resolves.toBe(false) })
   expect(draft.draftRef.current).not.toContain('replaced owner request')

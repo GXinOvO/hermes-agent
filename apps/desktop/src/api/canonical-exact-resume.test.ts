@@ -204,12 +204,14 @@ test.each(['close', 'reconnect'])('stops buffered epoch delivery after a synchro
   const seen: any[] = []
   let redial: Promise<void> | undefined
   let closedCursor: Record<string, number> | undefined
+  let closedResumeCount = 0
   client.onAny(event => {
     seen.push(event)
 
     if (event.replay_epoch === 'renewed') {
       client.close()
       closedCursor = client.getSeqWatermarks()
+      closedResumeCount = sent.filter(frame => frame.method === 'session.resume').length
 
       if (action === 'reconnect') { redial = reconnect() }
     }
@@ -227,8 +229,11 @@ test.each(['close', 'reconnect'])('stops buffered epoch delivery after a synchro
   expect(seen.filter(event => event.session_id === 'same').map(event => event.replay_epoch)).toEqual(['accepted', 'renewed'])
   expect(client.getSeqWatermarks()).toEqual(closedCursor)
   expect(client.sessionOwnerWitness('same', 'default', 'final')).toBeUndefined()
-  expect((client as any).exactSources.size).toBe(0)
-  expect(sent.filter(frame => frame.method === 'session.resume')).toHaveLength(2)
+  expect((client as any).exactSources.size).toBe(1)
+  expect((client as any).exactSources.get('same').events).toBeUndefined()
+  expect(closedResumeCount).toBe(2)
+  expect(sent.filter(frame => frame.method === 'session.resume').every(frame =>
+    JSON.stringify(frame.params.expected_owner) === JSON.stringify(exactSessionOwnerToWire(owner)))).toBe(true)
 }, false))
 
 test('overview reads verify their own echo without adopting a resume subscription', async () => fixture(async (client, setReply) => {

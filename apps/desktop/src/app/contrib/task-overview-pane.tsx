@@ -103,8 +103,8 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
     const candidates = Object.entries(sessionStates).filter(([, state]) => state.storedSessionId === reference.storedId)
 
     const profile = reference.targetProfile || reference.profile
-    const unread = isSessionUnreadForProfile(reference.storedId, profile, { markers: unreadMarkers, seen: seenCounts })
-    const sourceAvailable = isSessionAvailableForProfile(reference.storedId, profile)
+    const unread = isSessionUnreadForProfile(reference.storedId, profile, { markers: unreadMarkers, seen: seenCounts }, reference.connectionId)
+    const sourceAvailable = isSessionAvailableForProfile(reference.storedId, profile, reference.connectionId)
 
     let unavailable: TaskActivitySnapshot | undefined
 

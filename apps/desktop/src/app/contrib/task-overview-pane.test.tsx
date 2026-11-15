@@ -287,7 +287,7 @@ describe('task overview acceptance', () => {
     }
 
     fixture.store.list.mockResolvedValueOnce([{ task: { ...fixture.task, primary }, revision: 1 }])
-    $sessions.set([makeSessionInfo({ id: 'session-a', profile: 'worker', message_count: 5 })])
+    $sessions.set([makeSessionInfo({ connection_id: 'source-a', id: 'session-a', profile: 'worker', message_count: 5, unread: true })])
     $unreadFinishedMarkers.set({ worker: ['session-a'] })
     render(<I18nProvider configClient={null} initialLocale="en"><TaskOverviewPane /></I18nProvider>)
 
@@ -321,13 +321,14 @@ describe('task overview acceptance', () => {
       { task: { ...fixture.task, primary, title: 'Idle matter' }, revision: 1 },
       { task: { ...fixture.task, id: 'unread', primary: unread, title: 'Unread matter' }, revision: 1 }
     ])
-    $sessions.set([makeSessionInfo({ id: primary.storedId, profile: 'worker' }), makeSessionInfo({ id: unread.storedId, profile: 'worker' })])
+    $sessions.set([makeSessionInfo({ connection_id: 'source-a', id: primary.storedId, profile: 'worker' }),
+      makeSessionInfo({ connection_id: 'source-a', id: unread.storedId, profile: 'worker', unread: true })])
     $unreadFinishedMarkers.set({ worker: [unread.storedId] })
     render(<I18nProvider configClient={null} initialLocale="en"><TaskOverviewPane attentionOnly /></I18nProvider>)
     expect(await screen.findByRole('button', { name: /Unread matter/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Idle matter/ })).toBeNull()
 
-    await act(async () => { $sessions.set([makeSessionInfo({ id: unread.storedId, profile: 'worker' })]) })
+    await act(async () => { $sessions.set([makeSessionInfo({ connection_id: 'source-a', id: unread.storedId, profile: 'worker', unread: true })]) })
     expect(await screen.findByRole('button', { name: /Idle matter/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('combobox', { name: 'Source activity' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Finished — unread' }))
@@ -347,7 +348,7 @@ describe('task overview acceptance', () => {
       { task: { ...fixture.task, id: 'missing', primary: { ...primary, storedId: 'missing-source' }, title: 'Missing source' }, revision: 1 },
       { task: { ...fixture.task, id: 'unbound', primary: null, title: 'Unbound matter' }, revision: 1 }
     ])
-    $sessions.set([makeSessionInfo({ id: primary.storedId, profile: 'worker' })])
+    $sessions.set([makeSessionInfo({ connection_id: 'source-a', id: primary.storedId, profile: 'worker' })])
     render(<I18nProvider configClient={null} initialLocale="en"><TaskOverviewPane attentionOnly /></I18nProvider>)
 
     expect(await screen.findByRole('button', { name: /Missing source/ })).toBeTruthy()
@@ -364,7 +365,8 @@ describe('task overview acceptance', () => {
 
     const related = { ...primary, storedId: 'unread-source' }
     fixture.store.list.mockResolvedValueOnce([{ task: { ...fixture.task, primary, related: [related] }, revision: 1 }])
-    $sessions.set([makeSessionInfo({ id: primary.storedId, profile: 'worker' }), makeSessionInfo({ id: related.storedId, profile: 'worker' })])
+    $sessions.set([makeSessionInfo({ connection_id: 'source-a', id: primary.storedId, profile: 'worker' }),
+      makeSessionInfo({ connection_id: 'source-a', id: related.storedId, profile: 'worker', unread: true })])
     $unreadFinishedMarkers.set({ worker: [related.storedId] })
     const openSession = vi.fn(async () => {})
     render(<I18nProvider configClient={null} initialLocale="en"><TaskOverviewPane attentionOnly openSession={openSession} /></I18nProvider>)
