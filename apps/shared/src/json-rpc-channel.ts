@@ -163,6 +163,7 @@ export interface JsonRpcRequestChannelOptions {
 export type HeartbeatLiveness = 'any-inbound' | 'response'
 
 interface PendingCall {
+  validateResult?: (result: unknown) => void
   reject: (error: Error) => void
   resolve: (value: unknown) => void
   timer?: ReturnType<typeof setTimeout>
@@ -294,7 +295,8 @@ export class JsonRpcRequestChannel {
     params: Record<string, unknown> = {},
     timeoutMs = this.options.requestTimeoutMs,
     signal?: AbortSignal,
-    notConnectedError: () => Error = () => new Error('gateway not connected')
+    notConnectedError: () => Error = () => new Error('gateway not connected'),
+    validateResult?: (result: unknown) => void
   ): Promise<T> {
     const transport = this.transport
 
@@ -318,6 +320,7 @@ export class JsonRpcRequestChannel {
       }
 
       const pending: PendingCall = {
+        validateResult,
         resolve: value => {
           detachAbort()
           resolve(value as T)
@@ -485,6 +488,14 @@ export class JsonRpcRequestChannel {
 
     if (frame.error) {
       call.reject(jsonRpcErrorFromFrame(frame.error))
+
+      return
+    }
+
+    try {
+      call.validateResult?.(frame.result)
+    } catch (error) {
+      call.reject(error instanceof Error ? error : new Error(String(error)))
 
       return
     }

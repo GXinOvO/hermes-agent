@@ -14,6 +14,8 @@ import {
 import { translateNow } from '@/i18n/runtime'
 import { type ChatMessage, chatMessageText, toChatMessages } from '@/lib/chat-messages'
 import { markReasoningEffortPending } from '@/lib/chat-runtime'
+import type { ExactSessionReference } from '@/lib/exact-session'
+import { exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionSnapshot, sameExactSessionOwner } from '@/lib/exact-session-owner'
 import { type GuardedModelSwitchResult, surfaceModelSwitchConfirm } from '@/lib/guarded-model-switch'
 import { noteMessageSent } from '@/store/desktop-metrics'
 import { notify } from '@/store/notifications'
@@ -23,7 +25,7 @@ import {
   readOnlyRuntimeIdFor,
   resumeWithStoredTranscriptFallback
 } from '@/store/read-only-transcript'
-import { knownSessionOwner, ownerLookupSessionRows } from '@/store/session'
+import { knownSessionOwner, ownerLookupSessionRows, setSessionOwnerHint } from '@/store/session'
 import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
 import {
   profileScopeForSessionOwner,
@@ -32,6 +34,8 @@ import {
 } from '@/store/session-request-router'
 import {
   $sessionTiles,
+  openSessionTile,
+  patchSessionTile,
   publishSessionState,
   sessionTileOwnerRoute,
   setSessionTileDelegate
@@ -81,6 +85,48 @@ function isWarmTileState(
   storedSessionId: string
 ): cached is ClientSessionState {
   return cached?.storedSessionId === storedSessionId && (cached.busy || cached.messages.length > 0)
+}
+
+function shouldRefreshWarmTile(
+  cached: ClientSessionState | undefined,
+  storedSessionId: string,
+  authoritativeSnapshot: boolean,
+  refreshTranscript: boolean
+): cached is ClientSessionState {
+  return isWarmTileState(cached, storedSessionId) && !refreshTranscript && !authoritativeSnapshot
+}
+
+function requireResumedTileRuntimeId(resumed: SessionResumeResult | undefined): string {
+  if (!resumed?.session_id) { throw new Error('resume returned no session id') }
+
+  return resumed.session_id
+}
+
+function openReadOnlySessionTile(
+  storedSessionId: string,
+  transcript: Awaited<ReturnType<typeof getLatestSessionMessages>> | null,
+  updateSessionState: SessionStateCache['updateSessionState']
+): string {
+  const readOnlyId = readOnlyRuntimeIdFor(storedSessionId)
+
+  updateSessionState(
+    readOnlyId,
+    state => ({
+      ...state,
+      busy: false,
+      awaitingResponse: false,
+      messages: state.messages.length > 0 ? state.messages : toChatMessages(transcript?.messages ?? [])
+    }),
+    storedSessionId
+  )
+
+  notify({
+    kind: 'info',
+    title: translateNow('desktop.readOnlyTranscriptTitle'),
+    message: translateNow('desktop.readOnlyTranscriptBody')
+  })
+
+  return readOnlyId
 }
 
 function mergeTileTranscript(
@@ -152,6 +198,95 @@ function mergeTileTranscript(
       : stream
 
   return merged.map((message, index) => (index === persisted.indexOf(counterpart) ? reply : message))
+}
+
+interface ExactTileResumeParams {
+  exact: ExactSessionReference
+  requestGateway: GatewayRequester
+  runtimeIdByStoredSessionIdRef: SessionStateCache['runtimeIdByStoredSessionIdRef']
+  sessionStateByRuntimeIdRef: SessionStateCache['sessionStateByRuntimeIdRef']
+  storedSessionId: string
+  updateSessionState: SessionStateCache['updateSessionState']
+}
+
+async function resumeExactTile({
+  exact,
+  requestGateway,
+  runtimeIdByStoredSessionIdRef,
+  sessionStateByRuntimeIdRef,
+  storedSessionId,
+  updateSessionState
+}: ExactTileResumeParams): Promise<string> {
+  if (exact.storedId !== storedSessionId || !isExactSessionOwner(exact.expectedOwner)) {
+    throw new Error('来源引用身份不完整，请重新绑定来源会话。')
+  }
+
+  const existing = boundTileRuntimeId(runtimeIdByStoredSessionIdRef, storedSessionId)
+  const cached = existing ? sessionStateByRuntimeIdRef.current.get(existing) : undefined
+
+  if (cached && !sameExactSessionOwner(cached.sourceOwner, exact.expectedOwner)) {
+    throw new Error('缓存会话来源不符，请关闭原标签后重试或重新绑定。')
+  }
+
+  const owner = { connectionId: exact.connectionId, profile: exact.profile,
+    targetProfile: exact.targetProfile, mode: exact.mode }
+
+  const resumed = await requestForSessionProfile<SessionResumeResult>(owner, requestGateway, 'session.resume', {
+    session_id: storedSessionId, expected_owner: exactSessionOwnerToWire(exact.expectedOwner)
+  })
+
+  requireExactSessionSnapshot(resumed, storedSessionId, exact.expectedOwner)
+  await Promise.resolve(null)
+  const runtimeId = requireResumedTileRuntimeId(resumed)
+  const info = resumed.info
+
+  const ownerRoute = { connectionId: exact.connectionId, profile: exact.profile,
+    targetProfile: exact.targetProfile, mode: exact.mode }
+
+  setSessionOwnerHint(storedSessionId, ownerRoute)
+  openSessionTile(storedSessionId, 'right', undefined, undefined, { workspaceMode: 'sessions', ownerRoute })
+  patchSessionTile(storedSessionId, { runtimeId, exactReference: exact })
+  updateSessionState(
+    runtimeId,
+    state => {
+      const previousMessages = state.messages.length > 0 ? state.messages : cached?.messages ?? []
+
+      const messages = resumed.messages.length > 0
+        ? overlayConcurrentMessageChanges(
+            mergeTileTranscript(cached?.messages ?? [], toChatMessages(resumed.messages), cached?.streamId),
+            cached?.messages ?? [],
+            previousMessages
+          )
+        : previousMessages
+
+      const busyChangedWhileResuming = cached
+        ? Boolean(state.busy && (state.turnStartedAt !== cached.turnStartedAt || (state.turnLive && !cached.turnLive)))
+        : state.busy
+
+      const running = resolveResumedBusy(resumed.running ?? info?.running, busyChangedWhileResuming)
+
+      return {
+        ...markReasoningEffortPending(state),
+        sourceOwner: exactSessionOwnerFromWire(info?.session_owner),
+        sourceReplayEpoch: info?.replay_epoch,
+        ...(typeof info?.fast === 'boolean' ? { fast: info.fast } : {}),
+        ...(typeof info?.model === 'string' ? { model: info.model } : {}),
+        ...(typeof info?.provider === 'string' ? { provider: info.provider } : {}),
+        ...(typeof info?.reasoning_effort === 'string'
+          ? { reasoningEffort: info.reasoning_effort, reasoningEffortPending: false }
+          : {}),
+        ...(typeof info?.reasoning_effort_wire === 'string'
+          ? { reasoningEffortWire: info.reasoning_effort_wire }
+          : {}),
+        awaitingResponse: running && !resumed.inflight?.assistant,
+        busy: running,
+        messages
+      }
+    },
+    storedSessionId
+  )
+
+  return runtimeId
 }
 
 interface SessionTileDelegateParams {
@@ -387,11 +522,19 @@ export function useSessionTileDelegate({
         )
       },
       resumeTile: async (storedSessionId, options) => {
+        const exact = options?.exactReference ?? $sessionTiles.get().find(tile => tile.storedSessionId === storedSessionId)?.exactReference
+
+        if (exact) {
+          return resumeExactTile({ exact, requestGateway, runtimeIdByStoredSessionIdRef,
+            sessionStateByRuntimeIdRef, storedSessionId, updateSessionState })
+        }
+
         // A retained tile can still own its runtime after the primary view drops
         // its reverse lookup. Reconnect invalidates both bindings.
         const existing = boundTileRuntimeId(runtimeIdByStoredSessionIdRef, storedSessionId)
 
         const cached = existing ? sessionStateByRuntimeIdRef.current.get(existing) : undefined
+
         const resumeRequestBaselineMessages = cached?.messages ?? []
         const refreshTranscript = options?.refreshTranscript === true
         const authoritativeSnapshot = options?.authoritativeSnapshot === true
@@ -407,7 +550,7 @@ export function useSessionTileDelegate({
         // warm snapshot is whatever the tile last painted, and cron bot-chat
         // deliveries that landed while the panel's WS was down never arrive
         // as realtime events (#96183).
-        if (existing && isWarmTileState(cached, storedSessionId) && !refreshTranscript && !authoritativeSnapshot) {
+        if (existing && shouldRefreshWarmTile(cached, storedSessionId, authoritativeSnapshot, refreshTranscript)) {
           publishSessionState(existing, cached)
 
           return existing
@@ -495,35 +638,12 @@ export function useSessionTileDelegate({
         const prefetch = await prefetchPromise
 
         if (outcome.mode === 'read-only') {
-          const readOnlyId = readOnlyRuntimeIdFor(storedSessionId)
-
-          updateSessionState(
-            readOnlyId,
-            state => ({
-              ...state,
-              busy: false,
-              awaitingResponse: false,
-              messages: state.messages.length > 0 ? state.messages : toChatMessages(outcome.transcript?.messages ?? [])
-            }),
-            storedSessionId
-          )
-
-          notify({
-            kind: 'info',
-            title: translateNow('desktop.readOnlyTranscriptTitle'),
-            message: translateNow('desktop.readOnlyTranscriptBody')
-          })
-
-          return readOnlyId
+          return openReadOnlySessionTile(storedSessionId, outcome.transcript, updateSessionState)
         }
 
         const resumed = outcome.resumed
 
-        const runtimeId = resumed?.session_id
-
-        if (!runtimeId) {
-          throw new Error('resume returned no session id')
-        }
+        const runtimeId = requireResumedTileRuntimeId(resumed)
 
         const currentBinding = boundTileRuntimeId(runtimeIdByStoredSessionIdRef, storedSessionId)
 
@@ -567,6 +687,8 @@ export function useSessionTileDelegate({
             return {
               // The deferred build reports the session's own effort later (#79807).
               ...markReasoningEffortPending(state),
+              sourceOwner: exactSessionOwnerFromWire(info?.session_owner),
+              sourceReplayEpoch: info?.replay_epoch,
               ...(typeof info?.fast === 'boolean' ? { fast: info.fast } : {}),
               ...(typeof info?.model === 'string' ? { model: info.model } : {}),
               ...(typeof info?.provider === 'string' ? { provider: info.provider } : {}),

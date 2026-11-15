@@ -3,6 +3,8 @@ import { useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PaneVisibleContext } from '@/components/pane-shell/pane-visibility'
+import { createClientSessionState } from '@/lib/chat-runtime'
+import { composerHost } from '@/sdk/composer'
 import {
   $freshDraftKey,
   $restoredDraftNotice,
@@ -17,7 +19,8 @@ import {
   stashSessionDraft,
   takeSessionDraft
 } from '@/store/composer'
-import { $connection } from '@/store/session'
+import { $connection, $selectedStoredSessionId } from '@/store/session'
+import { clearAllSessionStates, publishSessionState } from '@/store/session-states'
 
 import { useComposerActions } from '../../hooks/use-composer-actions'
 import type { QueueEditState } from '../composer-utils'
@@ -43,11 +46,12 @@ interface ProbeHarnessProps {
   onLayoutSnapshot: (attachments: ComposerAttachment[]) => void
   /** Optional pre-paint text probe: called with the composer's mirrored text in the layout phase. */
   onTextSnapshot?: (text: string) => void
+  onDraftSnapshot?: (draft: ReturnType<typeof useComposerDraft>) => void
   sessionId: string
 }
 
-function ProbeHarness({ activeQueueSessionKey, onLayoutSnapshot, onTextSnapshot, sessionId }: ProbeHarnessProps) {
-  const { draftRef } = useComposerDraft({
+function ProbeHarness({ activeQueueSessionKey, onDraftSnapshot, onLayoutSnapshot, onTextSnapshot, sessionId }: ProbeHarnessProps) {
+  const draft = useComposerDraft({
     activeQueueSessionKey,
     focusKey: null,
     inputDisabled: false,
@@ -62,7 +66,8 @@ function ProbeHarness({ activeQueueSessionKey, onLayoutSnapshot, onTextSnapshot,
   // performs at render time — observes the OUTGOING session's attachments.
   useLayoutEffect(() => {
     onLayoutSnapshot(mainComposerScope.$attachments.get())
-    onTextSnapshot?.(draftRef.current)
+    onTextSnapshot?.(draft.draftRef.current)
+    onDraftSnapshot?.(draft)
   })
 
   return null
@@ -85,6 +90,8 @@ describe('useComposerDraft — attachment scope stays coherent with the committe
     delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
     vi.unstubAllGlobals()
     $connection.set(null)
+    $selectedStoredSessionId.set(null)
+    clearAllSessionStates()
   })
 
   it('clears the outgoing session attachments by the layout phase right after switching sessions', () => {
@@ -170,6 +177,62 @@ describe('useComposerDraft — attachment scope stays coherent with the committe
 
     clearSessionDraft('session-A')
     clearSessionDraft('session-B')
+  })
+
+  it('refuses a queued insert for A after the primary composer switches to B', async () => {
+    let latest!: ReturnType<typeof useComposerDraft>
+    $selectedStoredSessionId.set('session-A')
+    const rendered = render(<ProbeHarness activeQueueSessionKey="session-A" onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="session-A" />)
+    const pending = composerHost.insertText('session-A', 'register A task', { mode: 'block' })
+
+    rendered.rerender(<ProbeHarness activeQueueSessionKey="session-B" onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="session-B" />)
+    $selectedStoredSessionId.set('session-B')
+
+    await expect(pending).resolves.toBe(false)
+    expect(latest.draftRef.current).not.toContain('register A task')
+  })
+
+  it('accepts an insert while the primary composer remains on the addressed session', async () => {
+    let latest!: ReturnType<typeof useComposerDraft>
+    const submitted = vi.fn()
+    window.addEventListener('hermes:composer-submit', submitted)
+    $selectedStoredSessionId.set('session-A')
+    const rendered = render(<ProbeHarness activeQueueSessionKey="session-A" onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="session-A" />)
+
+    await act(async () => { await expect(composerHost.insertText('session-A', 'register A task', { mode: 'block' })).resolves.toBe(true) })
+    expect(latest.draftRef.current).toContain('register A task')
+    expect(submitted).not.toHaveBeenCalled()
+    window.removeEventListener('hermes:composer-submit', submitted)
+    rendered.unmount()
+  })
+
+  it('accepts an insert addressed by runtime id in the matching session tile', async () => {
+    let latest!: ReturnType<typeof useComposerDraft>
+    publishSessionState('runtime-A', createClientSessionState('session-A'))
+    render(<ComposerScopeProvider value={{ ...MAIN_COMPOSER_SCOPE, target: 'tile:session-A' }}><ProbeHarness activeQueueSessionKey="session-A" onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="runtime-A" /></ComposerScopeProvider>)
+
+    await act(async () => { await expect(composerHost.insertText('runtime-A', 'tile draft text')).resolves.toBe(true) })
+    expect(latest.draftRef.current).toContain('tile draft text')
+  })
+
+  it('accepts an insert addressed to a new-chat draft', async () => {
+    let latest!: ReturnType<typeof useComposerDraft>
+    render(<ProbeHarness activeQueueSessionKey={null} onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="" />)
+
+    await act(async () => { await expect(composerHost.insertText('new', 'new draft text')).resolves.toBe(true) })
+    expect(latest.draftRef.current).toContain('new draft text')
+  })
+
+  it('refuses a queued insert when its source changes without a session-id change', async () => {
+    let latest!: ReturnType<typeof useComposerDraft>
+    let current = true
+    $selectedStoredSessionId.set('session-A')
+    render(<ProbeHarness activeQueueSessionKey="session-A" onDraftSnapshot={draft => { latest = draft }} onLayoutSnapshot={() => undefined} sessionId="session-A" />)
+    const pending = composerHost.insertText('session-A', 'old source text', { isCurrent: () => current })
+    current = false
+
+    await act(async () => { await expect(pending).resolves.toBe(false) })
+    expect(latest.draftRef.current).not.toContain('old source text')
   })
 
   it('carries a pre-session draft onto the session the fresh chat is re-homed to, before its runtime id is known', () => {

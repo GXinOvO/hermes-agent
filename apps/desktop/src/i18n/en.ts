@@ -32,9 +32,13 @@ import { enSharedMetrics } from './en_shared_metrics'
 import { enThemePicker } from './en_theme_picker'
 import { enUninstallSection } from './en_uninstall_section'
 import { enUpdateChannel } from './en_update_channel'
+import { enSessionReview } from './session-review'
+import { enTaskOverview } from './task-overview'
 import type { Translations } from './types'
 
 export const en: Translations = {
+  sessionReview: enSessionReview,
+  taskOverview: enTaskOverview,
   externalOpenFailed: enExternalOpenFailed,
   sharedMetrics: enSharedMetrics,
   appTour: enAppTour,
@@ -1044,6 +1048,9 @@ export const en: Translations = {
       focusFollowsMouseTitle: 'Focus follows mouse',
       focusFollowsMouseDesc:
         'Moving over another chat switches the input focus and Files workspace. When off, click or use the keyboard to switch. Applies to docked and floating composers.',
+      taskOverviewTitle: 'Task follow-up',
+      taskOverviewDesc:
+        'Show the built-in local task follow-up panel and its titlebar button. Items are stored on this device and require explicit acceptance to complete.',
       fileBrowserTitle: 'File Browser',
       fileBrowserDesc:
         'Show the file browser beside the chat when a workspace is open. The titlebar toggle changes this too.',

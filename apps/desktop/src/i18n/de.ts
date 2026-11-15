@@ -27,8 +27,29 @@ import { deThemePicker } from './de_theme_picker'
 import { deUpdateChannel } from './de_update_channel'
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introDe } from './intro-de'
+import { deSessionReview } from './session-review-locales'
 
 export const deOverrides = {
+  sessionReview: deSessionReview,
+  taskOverview: {
+    attention: "Aufmerksamkeit",
+    attentionEmpty: "Keine Aufgaben benötigen Aufmerksamkeit",
+    addRelated: "Aktuelles Gespräch als zugehörig hinzufügen",
+    editTask: "Aufgabe bearbeiten",
+    description: "Beschreibung",
+    notes: "Notizen",
+    search: "Aufgaben suchen",
+    statusFilter: "Nach Status filtern",
+    allStatuses: "Alle Status",
+    sort: "Aufgaben sortieren",
+    sortUpdated: "Zuletzt aktualisiert",
+    activity: "Quellaktivität",
+    activityIdle: "Inaktiv",
+    activityRunning: "Läuft",
+    activityWaiting: "Wartet auf Eingabe",
+    activityUnread: "Abgeschlossen · ungelesen",
+    activityUnavailable: "Quelle nicht verfügbar"
+  },
   gatewayGroupOpen: {
     opening: "Gruppenchat wird geöffnet…",
     lookupFailed: "Diese Gruppe konnte auf dem Gateway nicht gefunden werden. Versuche es erneut.",
@@ -1082,6 +1103,9 @@ export const deOverrides = {
         'Beim Bewegen über einen anderen Chat wechseln Eingabefokus und Datei-Arbeitsbereich. Wenn deaktiviert, wechseln Sie per Klick oder Tastatur. Gilt für angedockte und schwebende Eingabefelder.',
       composerPopoutDesc:
         'Erlaubt, den Composer aus seiner Ablage herauszuziehen. Wenn aus, bleibt er unten angedockt.',
+      taskOverviewTitle: 'Aufgaben nachverfolgen',
+      taskOverviewDesc:
+        'Zeigt das integrierte lokale Aufgabenfenster und die Schaltfläche in der Titelleiste. Aufgaben werden auf diesem Gerät gespeichert und erst nach ausdrücklicher Bestätigung abgeschlossen.',
       fileBrowserTitle: 'Dateibrowser',
       fileBrowserDesc:
         'Zeigt den Dateibrowser neben dem Chat, wenn ein Arbeitsbereich geöffnet ist. Der Schalter in der Titelleiste ändert diese Einstellung ebenfalls.',

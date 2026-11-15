@@ -203,7 +203,7 @@ class SessionAuthority:
         # reset while that turn's admission is started, so the drain runs it once the turn settles.
         self.deferred_resets = {}
 
-    def authorize(self, actor, ref, capability):
+    def authorize(self, actor, ref, capability, *, allow_local_adoption=True):
         """Every handler calls this first, so a later ``self.sessions[ref.session_id]`` is
         safe: a deleted/evicted live entry surfaces here as ``not_found``, not as a KeyError
         deeper in the handler."""
@@ -224,7 +224,7 @@ class SessionAuthority:
                     (POLICY_PREFIX + ref.session_id, LEGACY_PREFIX + ref.session_id)).fetchone()
             if local or str(row.get('chat_id') or '').startswith('local-'):
                 from gateway.session_local_recovery import restore_local_session
-                restore_local_session(self, ref.session_id)
+                restore_local_session(self, ref.session_id, allow_adoption=allow_local_adoption)
             else:
                 from gateway.session_route_recovery import restore_routed_session
                 from gateway.session_history_mount import mount_history

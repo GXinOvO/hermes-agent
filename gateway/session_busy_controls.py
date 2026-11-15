@@ -15,8 +15,11 @@ def handlers(connection):
     }
 
 
-def authorize(connection, ref, params, capability):
-    connection.authority.authorize(connection.actor, ref, capability)
+def authorize(connection, ref, params, capability, *, allow_local_adoption=True):
+    if allow_local_adoption:
+        connection.authority.authorize(connection.actor, ref, capability)
+    else:
+        connection.authority.authorize(connection.actor, ref, capability, allow_local_adoption=False)
     # The contract's ``profile`` is nullable; null means this owner, as an omitted key does.
     if params.get('profile') is not None:
         from hermes_cli.profiles import profile_matches_home

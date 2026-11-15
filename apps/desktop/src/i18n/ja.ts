@@ -27,8 +27,29 @@ import { jaProjects } from './ja_projects'
 import { jaSharedMetrics } from './ja_shared_metrics'
 import { jaThemePicker } from './ja_theme_picker'
 import { jaUpdateChannel } from './ja_update_channel'
+import { jaSessionReview } from './session-review-locales'
 
 export const jaOverrides = {
+  sessionReview: jaSessionReview,
+  taskOverview: {
+    attention: "要確認",
+    attentionEmpty: "確認が必要な事項はありません",
+    addRelated: "現在の会話を関連付ける",
+    editTask: "事項を編集",
+    description: "説明",
+    notes: "メモ",
+    search: "事項を検索",
+    statusFilter: "状態で絞り込み",
+    allStatuses: "すべての状態",
+    sort: "事項の並び順",
+    sortUpdated: "更新日時",
+    activity: "ソースの状態",
+    activityIdle: "アイドル",
+    activityRunning: "実行中",
+    activityWaiting: "入力待ち",
+    activityUnread: "完了・未読",
+    activityUnavailable: "ソースを利用できません"
+  },
   gatewayGroupOpen: {
     opening: "グループチャットを開いています…",
     lookupFailed: "ゲートウェイでこのグループを検索できませんでした。もう一度お試しください。",
@@ -591,6 +612,9 @@ export const jaOverrides = {
         '別のチャットにマウスを移動すると、入力フォーカスとファイルのワークスペースを切り替えます。オフの場合はクリックまたはキーボードで切り替えます。固定・フローティング両方の入力欄に適用されます。',
       composerPopoutDesc:
         '入力欄をドックからドラッグして外せるようにします。オフの間は画面下部にドッキングされたままです。',
+      taskOverviewTitle: 'タスクのフォローアップ',
+      taskOverviewDesc:
+        '内蔵のローカルタスクフォローアップパネルとタイトルバーのボタンを表示します。タスクはこのデバイスに保存され、明示的に承認するまで完了になりません。',
       fileBrowserTitle: 'ファイルブラウザ',
       fileBrowserDesc:
         'ワークスペースを開いているとき、チャットの横にファイルブラウザを表示します。タイトルバーのボタンでも切り替わります。',

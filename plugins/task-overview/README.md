@@ -1,5 +1,13 @@
 # Task overview
 
+Hermes Desktop now also provides a built-in **Task follow-up** panel, opened
+from the titlebar and controlled in Settings → Appearance → Window layout.
+Its session overview, independent matters and attention tabs do not require
+this plugin. The legacy plugin below remains available while client migration
+and real Mac/SSH acceptance are pending; its older writer cannot update the
+built-in panel's migrated database. Do not remove existing records to enable
+the built-in panel.
+
 A task card for one session plus a device-local follow-up panel for manually
 tracked matters. The two features keep business acceptance separate from agent
 activity and todo state.

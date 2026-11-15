@@ -22,6 +22,7 @@ from . import (
     tools_mcp_plugins,
 )
 from . import canonical
+from . import canonical_task_overview
 from .base import JsonValue, Params, Payload, Result, WireEnum
 from .registry import CANONICAL_METHODS, CANONICAL_NAMESPACES, EVENTS, METHODS, SERVER_REQUESTS
 

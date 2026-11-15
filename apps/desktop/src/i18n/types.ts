@@ -9,6 +9,8 @@
 import type { ErrorCodeKey } from '@/lib/error-surface'
 import type { TipId } from '@/lib/tips/catalog'
 
+import type { SessionReviewCopy } from './session-review'
+import type { TaskOverviewCopy } from './task-overview'
 import type { AppTourTranslations } from './types_app_tour'
 import type { BillingTranslations } from './types_billing'
 import type { BootTranslations } from './types_boot'
@@ -92,6 +94,8 @@ interface ModeOptionCopy {
 }
 
 export interface Translations extends NoticeTranslations {
+  sessionReview: SessionReviewCopy
+  taskOverview: TaskOverviewCopy
   /** Shared-metrics consent: first-run dialog + Settings › Safety toggles. */
   sharedMetrics: SharedMetricsTranslations
   appTour: AppTourTranslations
@@ -856,6 +860,8 @@ export interface Translations extends NoticeTranslations {
       composerPopoutDesc: string
       focusFollowsMouseTitle: string
       focusFollowsMouseDesc: string
+      taskOverviewTitle: string
+      taskOverviewDesc: string
       fileBrowserTitle: string
       fileBrowserDesc: string
       vibeHeartsTitle: string

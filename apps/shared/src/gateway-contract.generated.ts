@@ -5023,6 +5023,7 @@ export interface RuntimeDescribeResult {
   authority_epoch: number
   capabilities: string[]
   session_create: SessionCreateDescriptor
+  store_instance_id?: string | null
   skin?: SkinPayload | null
 }
 export interface SessionCreateDescriptor {
@@ -5214,6 +5215,7 @@ export interface CanonicalClientIdentity {
   version?: string | null
 }
 export interface CanonicalSnapshot {
+  owner?: ExpectedSessionOwner | null
   session_id: string
   stored_session_id: string
   messages: TranscriptMessage[]
@@ -5234,6 +5236,12 @@ export interface CanonicalSnapshot {
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   open_requests?: OpenRequestEntry[] | null
+}
+export interface ExpectedSessionOwner {
+  instance_id: string
+  profile_id: string
+  authority_epoch: number
+  store_instance_id: string
 }
 export interface CanonicalPendingAdmission {
   admission_id: string
@@ -5314,6 +5322,7 @@ export interface CanonicalResumeParams {
   defer_history?: boolean
   omit_messages?: boolean
   cols?: number | null
+  expected_owner?: ExpectedSessionOwner | null
   display_projection?: boolean
 }
 export interface CanonicalListParams {
@@ -5655,6 +5664,42 @@ export interface StoredTranscriptRow {
   compacted_messages?: number | null
   truncated?: boolean | null
   [key: string]: unknown
+}
+export interface TaskOverviewParams {
+  profile?: string | null
+  session_id: string
+  stored_id: string
+  expected_owner: ExpectedSessionOwner
+}
+export interface TaskOverviewResult {
+  version: 1
+  session_id: string
+  stored_session_id: string
+  resolved_id: string
+  owner: ExpectedSessionOwner
+  authority_epoch: number
+  snapshot_scope: 'persisted_display'
+  fetched_at: number
+  complete: true
+  conversation_revision: unknown
+  messages: TaskOverviewMessage[]
+  todo_state: TodoState | null
+  verification: Record<string, unknown> | null
+  verification_cwd: string | null
+  verification_error: string | null
+}
+export interface TaskOverviewMessage {
+  role: 'user' | 'assistant' | 'tool'
+  row_id: number
+  content?: string | null
+  timestamp?: number | null
+  display_kind?: string | null
+  _compressed_summary?: boolean | null
+  name?: string | null
+  tool_calls?: OmittedTaskOverviewCall[] | null
+}
+export interface OmittedTaskOverviewCall {
+  type: 'omitted'
 }
 /** Open: the plugin's handler owns every other key. ``session_id`` names the session the call acts in and passes that session's authorization first. */
 export interface PluginRpcParams {
@@ -7240,6 +7285,7 @@ export interface CanonicalRpcMethods {
   /** The session.usage dict on demand: what main's classic CLI read off its agent. */
   'session.stats': { params: SessionStatsParams; result: SessionStats }
   'session.steer': { params: CanonicalCorrectionParams; result: CanonicalCorrectionResult }
+  'session.task_overview': { params: TaskOverviewParams; result: TaskOverviewResult }
   /** One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). With `subagent_id`: a delegated child of the session (running: through the parent's roster; finished: through its stored row, when its ancestry reaches this conversation); a foreign or unknown child is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch. */
   'session.transcript': { params: StoredTranscriptParams; result: StoredTranscriptResult }
   /** Ink ``!cmd`` / ``{!cmd}`` on the shared owner: one safe command for a local session, in its frozen launch cwd (``gateway/session_shell.py``). */
@@ -7303,6 +7349,7 @@ export const CANONICAL_RPC_METHODS = [
   'session.resume',
   'session.stats',
   'session.steer',
+  'session.task_overview',
   'session.transcript',
   'shell.exec',
   'worker.adopt',

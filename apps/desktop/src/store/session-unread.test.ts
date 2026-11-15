@@ -5,6 +5,7 @@ import type { SessionInfo } from '@/types/hermes'
 import { makeSessionInfo } from '../test/session-info'
 
 import { $activeGatewayProfile } from './profile'
+import { $projectTree } from './project-tree'
 import {
   $cronSessions,
   $messagingSessions,
@@ -19,6 +20,8 @@ import {
   $sessionSeenCounts,
   $unreadFinishedMarkers,
   forgetSessionUnread,
+  isSessionAvailableForProfile,
+  isSessionUnreadForProfile,
   markSessionUnreadFinished
 } from './session-unread'
 
@@ -31,6 +34,7 @@ function resetAll() {
   $sessions.set([])
   $cronSessions.set([])
   $messagingSessions.set([])
+  $projectTree.set([])
   $selectedStoredSessionId.set(null)
   $activeGatewayProfile.set('default')
   $sessionSeenCounts.set({})
@@ -192,6 +196,46 @@ describe('persisted unread (session-unread)', () => {
 
     expect($unreadFinishedMarkers.get()).toEqual({ work: ['fresh'] })
     expect($unreadFinishedSessionIds.get()).toEqual(['fresh'])
+  })
+
+  it('scopes source availability and unread markers to the owning profile', () => {
+    setSessions([
+      session({ id: 'same-id', profile: 'worker-a', message_count: 5 }),
+      session({ id: 'same-id', profile: 'worker-b', message_count: 5 })
+    ])
+    $unreadFinishedMarkers.set({ 'worker-a': ['same-id'] })
+    $sessionSeenCounts.set({ 'worker-a': { 'same-id': 5 }, 'worker-b': { 'same-id': 5 } })
+
+    expect(isSessionAvailableForProfile('same-id', 'worker-a')).toBe(true)
+    expect(isSessionAvailableForProfile('same-id', 'worker-b')).toBe(true)
+    expect(isSessionUnreadForProfile('same-id', 'worker-a')).toBe(true)
+    expect(isSessionUnreadForProfile('same-id', 'worker-b')).toBe(false)
+  })
+
+  it('does not treat an unlisted marker as proof that its source is available', () => {
+    $unreadFinishedMarkers.set({ 'hidden-profile': ['hidden-id'] })
+
+    expect(isSessionAvailableForProfile('hidden-id', 'hidden-profile')).toBe(false)
+    expect(isSessionUnreadForProfile('hidden-id', 'hidden-profile')).toBe(true)
+  })
+
+  it('reads availability and unread state from the profile-scoped project tree lineage', () => {
+    $projectTree.set([{
+      id: 'project', label: 'project', path: null, sessionCount: 1,
+      repos: [{
+        id: 'repo', label: 'repo', path: null, sessionCount: 1,
+        groups: [{
+          id: 'lane', label: 'lane', path: null,
+          sessions: [session({ id: 'tip', _lineage_root_id: 'root', profile: 'worker', message_count: 6 })]
+        }]
+      }]
+    }])
+    $sessionSeenCounts.set({ worker: { root: 3 } })
+
+    expect(isSessionAvailableForProfile('tip', 'worker')).toBe(true)
+    expect(isSessionUnreadForProfile('tip', 'worker')).toBe(true)
+    expect(isSessionAvailableForProfile('tip', 'other-worker')).toBe(false)
+    expect(isSessionUnreadForProfile('tip', 'other-worker')).toBe(false)
   })
 
   it('forgets a deleted session’s persisted unread, per profile', () => {

@@ -25,8 +25,29 @@ import { ruProjects } from './ru_projects'
 import { ruSharedMetrics } from './ru_shared_metrics'
 import { ruThemePicker } from './ru_theme_picker'
 import { ruUpdateChannel } from './ru_update_channel'
+import { ruSessionReview } from './session-review-locales'
 
 export const ruOverrides = {
+  sessionReview: ruSessionReview,
+  taskOverview: {
+    attention: "Внимание",
+    attentionEmpty: "Нет задач, требующих внимания",
+    addRelated: "Добавить текущий разговор как связанный",
+    editTask: "Изменить задачу",
+    description: "Описание",
+    notes: "Заметки",
+    search: "Поиск задач",
+    statusFilter: "Фильтр по статусу",
+    allStatuses: "Все статусы",
+    sort: "Сортировка задач",
+    sortUpdated: "Последнее обновление",
+    activity: "Активность источника",
+    activityIdle: "Без активности",
+    activityRunning: "Выполняется",
+    activityWaiting: "Ожидает ввода",
+    activityUnread: "Завершено · не прочитано",
+    activityUnavailable: "Источник недоступен"
+  },
   gatewayGroupOpen: {
     opening: "Открываем групповой чат…",
     lookupFailed: "Не удалось найти эту группу на шлюзе. Попробуйте ещё раз.",
@@ -564,6 +585,9 @@ export const ruOverrides = {
         'Наведение на другой чат переключает фокус ввода и рабочую папку в панели файлов. Если выключено, используйте щелчок или клавиатуру. Действует для закреплённого и плавающего поля ввода.',
       composerPopoutDesc:
         'Позволяет вытягивать композер из его док-зоны. Когда выключено, он остаётся закреплённым внизу.',
+      taskOverviewTitle: 'Отслеживание дел',
+      taskOverviewDesc:
+        'Показывать встроенную панель локальных дел и кнопку в заголовке. Дела хранятся на этом устройстве и завершаются только после явного принятия.',
       fileBrowserTitle: 'Файловый браузер',
       fileBrowserDesc:
         'Показывает файловый браузер рядом с чатом, когда открыто рабочее пространство. Кнопка в заголовке окна меняет эту настройку.',

@@ -10215,6 +10215,17 @@
             "default": null,
             "title": "Cols"
           },
+          "expected_owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpectedSessionOwner"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "display_projection": {
             "default": false,
             "title": "Display Projection",
@@ -11130,6 +11141,17 @@
       "CanonicalSnapshot": {
         "additionalProperties": false,
         "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpectedSessionOwner"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -18852,6 +18874,35 @@
         "title": "ErrorSurface",
         "type": "object"
       },
+      "ExpectedSessionOwner": {
+        "additionalProperties": false,
+        "properties": {
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "store_instance_id": {
+            "title": "Store Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "profile_id",
+          "authority_epoch",
+          "store_instance_id"
+        ],
+        "title": "ExpectedSessionOwner",
+        "type": "object"
+      },
       "FailedDelegation": {
         "additionalProperties": false,
         "description": "``async_delegation.failed_delegations_for_session`` row: one failed task of an async delegation.",
@@ -26112,6 +26163,21 @@
           }
         },
         "title": "OkResult",
+        "type": "object"
+      },
+      "OmittedTaskOverviewCall": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "omitted",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "OmittedTaskOverviewCall",
         "type": "object"
       },
       "OnboardingCatalogPlugin": {
@@ -36720,6 +36786,18 @@
           "session_create": {
             "$ref": "#/components/schemas/SessionCreateDescriptor"
           },
+          "store_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Store Instance Id"
+          },
           "skin": {
             "anyOf": [
               {
@@ -46166,6 +46244,256 @@
         "title": "TaskIdResult",
         "type": "object"
       },
+      "TaskOverviewMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          },
+          "display_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Display Kind"
+          },
+          "_compressed_summary": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Compressed Summary"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OmittedTaskOverviewCall"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Calls"
+          }
+        },
+        "required": [
+          "role",
+          "row_id"
+        ],
+        "title": "TaskOverviewMessage",
+        "type": "object"
+      },
+      "TaskOverviewParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_id": {
+            "title": "Stored Id",
+            "type": "string"
+          },
+          "expected_owner": {
+            "$ref": "#/components/schemas/ExpectedSessionOwner"
+          }
+        },
+        "required": [
+          "session_id",
+          "stored_id",
+          "expected_owner"
+        ],
+        "title": "TaskOverviewParams",
+        "type": "object"
+      },
+      "TaskOverviewResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "resolved_id": {
+            "title": "Resolved Id",
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ExpectedSessionOwner"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "snapshot_scope": {
+            "const": "persisted_display",
+            "title": "Snapshot Scope",
+            "type": "string"
+          },
+          "fetched_at": {
+            "title": "Fetched At",
+            "type": "integer"
+          },
+          "complete": {
+            "const": true,
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "conversation_revision": {
+            "title": "Conversation Revision"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/TaskOverviewMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "todo_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TodoState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
+          },
+          "verification_cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Cwd"
+          },
+          "verification_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Error"
+          }
+        },
+        "required": [
+          "version",
+          "session_id",
+          "stored_session_id",
+          "resolved_id",
+          "owner",
+          "authority_epoch",
+          "snapshot_scope",
+          "fetched_at",
+          "complete",
+          "conversation_revision",
+          "messages",
+          "todo_state",
+          "verification",
+          "verification_cwd",
+          "verification_error"
+        ],
+        "title": "TaskOverviewResult",
+        "type": "object"
+      },
       "TerminalClosePayload": {
         "additionalProperties": false,
         "properties": {
@@ -51303,6 +51631,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/CanonicalCorrectionResult"
+        }
+      }
+    },
+    {
+      "name": "session.task_overview",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TaskOverviewParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TaskOverviewResult"
         }
       }
     },

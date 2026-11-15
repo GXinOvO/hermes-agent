@@ -11,8 +11,29 @@ import { arDiagnostics } from './ar_diagnostics'
 import { arFirstRun } from './ar_first_run'
 import { arSettings } from './ar_settings'
 import { defineLocale, type TranslationOverrides } from './define-locale'
+import { arSessionReview } from './session-review-locales'
 
 export const arOverrides = {
+  sessionReview: arSessionReview,
+  taskOverview: {
+    attention: "تحتاج الانتباه",
+    attentionEmpty: "لا توجد مهام تحتاج إلى الانتباه",
+    addRelated: "إضافة المحادثة الحالية كمصدر ذي صلة",
+    editTask: "تعديل المهمة",
+    description: "الوصف",
+    notes: "ملاحظات",
+    search: "البحث في المهام",
+    statusFilter: "التصفية حسب الحالة",
+    allStatuses: "كل الحالات",
+    sort: "ترتيب المهام",
+    sortUpdated: "آخر تحديث",
+    activity: "نشاط المصدر",
+    activityIdle: "خامل",
+    activityRunning: "قيد التشغيل",
+    activityWaiting: "بانتظار الإدخال",
+    activityUnread: "مكتمل — غير مقروء",
+    activityUnavailable: "المصدر غير متاح"
+  },
   gatewayGroupOpen: {
     opening: "جارٍ فتح محادثة المجموعة…",
     lookupFailed: "تعذّر العثور على هذه المجموعة على البوابة. حاول مجددًا.",

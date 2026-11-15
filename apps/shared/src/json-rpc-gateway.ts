@@ -448,11 +448,18 @@ export class JsonRpcGatewayClient {
       params,
       timeoutMs,
       signal,
-      () => new Error(this.options.notConnectedErrorMessage)
+      () => new Error(this.options.notConnectedErrorMessage),
+      result => this.validateResponse(method, params, result)
     )
   }
 
-  private handleEvent(event: GatewayEvent): void {
+  protected validateResponse(_method: string, _params: Record<string, unknown>, _result: unknown): void {}
+
+  protected admitEvent(_event: GatewayEvent): boolean { return true }
+
+  protected handleEvent(event: GatewayEvent): void {
+    if (!this.admitEvent(event)) { return }
+
     if (isGatewayReady(event)) {
       if (event.payload?.heartbeat === true) {
         this.channel.startHeartbeat()
@@ -722,6 +729,7 @@ export class JsonRpcGatewayClient {
    * Seq-less events always dispatch (no ordering contract to violate).
    */
   private dispatchIfNewer(event: GatewayEvent): void {
+    if (!this.admitEvent(event)) { return }
     const sid = event.session_id
     const seq = event.seq
 

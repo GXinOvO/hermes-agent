@@ -379,6 +379,8 @@ export const zhHantSettings = {
       focusFollowsMouseDesc:
         '滑鼠移入另一會話時，切換輸入焦點和檔案工作區。關閉後，需點擊或使用鍵盤切換。適用於停靠和懸浮輸入框。',
       composerPopoutDesc: '允許將輸入框拖出底部停靠區。關閉時，輸入框停靠在底部。',
+      taskOverviewTitle: '事項跟進',
+      taskOverviewDesc: '顯示內建的本機事項面板和標題列按鈕。事項儲存在此裝置上，只有明確驗收後才會完成。',
       fileBrowserTitle: '檔案瀏覽器',
       fileBrowserDesc: '開啟工作區時，在聊天旁顯示檔案瀏覽器。標題列的切換按鈕也會變更此設定。',
       vibeHeartsTitle: '心情愛心',

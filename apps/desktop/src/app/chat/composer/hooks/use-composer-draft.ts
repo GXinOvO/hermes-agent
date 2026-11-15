@@ -344,11 +344,16 @@ export function useComposerDraft({
       setFocusRequestId(id => id + 1)
     })
 
-    const offInsert = onComposerInsertRequest(({ mode, target: requested, text, token }) => {
+    const offInsert = onComposerInsertRequest(({ expectedSessionIds, isCurrent, mode, target: requested, text, token }) => {
       if (requested === target) {
+        const ids = [sessionIdRef.current, activeQueueSessionKeyRef.current].filter((id): id is string => Boolean(id))
+        const currentSessionIds = new Set(ids.length ? ids : [freshDraftScope()])
+        const sessionMatches = !expectedSessionIds?.length || expectedSessionIds.every(id => currentSessionIds.has(id))
+        const accepted = sessionMatches && (!isCurrent || isCurrent()) && appendExternalText(text, mode)
+
         // A tokened insert came from the plugin SDK — echo whether the text
         // actually landed, so its promise never settles on a silent no-op.
-        ackComposerInsert(token, appendExternalText(text, mode))
+        ackComposerInsert(token, accepted)
       }
     })
 

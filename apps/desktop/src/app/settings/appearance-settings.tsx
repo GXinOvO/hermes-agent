@@ -79,12 +79,12 @@ import { AppearanceExtraSlot } from './appearance-contrib'
 import type { AppearanceSubpageId } from './appearance-subpages'
 import { ChatFontSetting } from './chat-font-setting'
 import { MODE_OPTIONS } from './constants'
-import { ComposerInteractionSettings } from './focus-follows-mouse-setting'
 import { setNested } from './helpers'
 import { MinimizeToTraySetting } from './minimize-to-tray-setting'
 import { PetSettings } from './pet-settings'
 import { ListRow, RowFootnoteAction, SectionHeading, SettingsContent, ToggleRow } from './primitives'
 import { SETTING_IDS, settingElementId } from './settings-manifest'
+import { WindowLayoutInteractionSettings } from './task-overview-setting'
 import { TerminalFontSetting } from './terminal-font-setting'
 import { useSettingDeepLink } from './use-setting-deep-link'
 
@@ -965,7 +965,7 @@ export function AppearanceSettings({ subpage }: AppearanceSettingsProps = {}) {
             />
           )}
 
-          {show('window-layout') && <ComposerInteractionSettings />}
+          {show('window-layout') && <WindowLayoutInteractionSettings />}
 
           {show('general') && <ResumeLastSessionSetting />}
 
