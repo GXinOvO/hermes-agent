@@ -106,14 +106,14 @@ export const composerHost = {
    *  when a mounted surface claimed and applied the text, false when the
    *  text trims to nothing or no surface answers for the address within the
    *  bus settle window — never a silent no-op. */
-  insertText: (sessionId: null | string, text: string, opts?: { mode?: ComposerInsertMode }): Promise<boolean> => {
-    const { target } = resolveComposerAddress(sessionId)
+  insertText: (sessionId: null | string, text: string, opts?: { isCurrent?: () => boolean; mode?: ComposerInsertMode }): Promise<boolean> => {
+    const { ids, target } = resolveComposerAddress(sessionId)
 
     if (target === null) {
       return Promise.resolve(false)
     }
 
-    return requestComposerInsertAcked(text, { mode: opts?.mode ?? 'block', target })
+    return requestComposerInsertAcked(text, { mode: opts?.mode ?? 'block', target, expectedSessionIds: ids.length ? ids : undefined, isCurrent: opts?.isCurrent })
   },
 
   /** Send `text` as if the user typed it + pressed Enter, and return

@@ -9,6 +9,7 @@ import {
 import { map, type MapStore } from 'nanostores'
 
 import type { HermesApiRequest } from '@/global'
+import { type ExactSessionOwner, exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactSessionSnapshot } from '@/lib/exact-session-owner'
 
 import { CanonicalDesktopProtocol, canonicalProfile, canonicalPromptParams, canonicalSessionKey, openGatewaySocket, recordCanonicalOwner, splitRewindSubmit } from './canonical-protocol'
 import { DialReadiness, GATEWAY_NOT_CONNECTED_MESSAGE, remainingRequestBudget } from './dial-readiness'
@@ -92,6 +93,24 @@ function requestDeadline(timeoutMs: number | undefined): number {
 
 export type GatewaySessionWire = 'canonical' | 'legacy'
 
+interface PendingExactResume {
+  allowedEpochs: Set<string>
+  checkedEpochs: Set<string>
+  events: GatewayEvent[]
+}
+
+interface ExactResumeRequestState {
+  sessionId: string
+  owner: ExactSessionOwner
+  pending: PendingExactResume
+  generation: number
+  acceptedEpoch?: string
+}
+
+interface CanonicalRequestState {
+  prepared: Record<string, unknown>
+}
+
 export class HermesGateway extends JsonRpcGatewayClient {
   private canonical = false
   private nativeDial = false
@@ -109,6 +128,56 @@ export class HermesGateway extends JsonRpcGatewayClient {
   // Frames of an ambiguous (session, epoch) parked until its owner probes settle.
   private readonly parkedFrames = new Map<string, Array<() => void>>()
   private connectionGeneration = 0
+  private readonly sessionWitnesses = new Map<string, { owner: ExactSessionOwner; replayEpoch: string }>()
+  private readonly exactResumes = new Map<string, { allowedEpochs: Set<string>; checkedEpochs: Set<string>; events: GatewayEvent[] }>()
+  private readonly exactEventEpochs = new Map<string, Set<string>>()
+  private readonly exactSources = new Map<string, { owner: ExactSessionOwner; profile: string; checkedEpochs: Set<string>; events?: GatewayEvent[] }>()
+
+  sessionOwnerWitness(sessionId: string, profile: string, replayEpoch: string): ExactSessionOwner | undefined {
+    const witness = this.sessionWitnesses.get(canonicalSessionKey(sessionId, this.resolveSessionProfile(sessionId, profile)))
+
+    return this.connectionState === 'open' && witness?.replayEpoch === replayEpoch ? { ...witness.owner } : undefined
+  }
+
+  protected override validateResponse(method: string, params: Record<string, unknown>, result: unknown): void {
+    if (params.expected_owner === undefined) { return }
+    const owner = exactSessionOwnerFromWire(params.expected_owner)
+
+    if (!owner) { throw new Error('来源身份凭据不完整，请重新绑定来源会话。') }
+
+    if (method === 'session.task_overview') {
+      requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? ''), owner)
+    } else {
+      requireExactSessionSnapshot(result, String(params.session_id ?? ''), owner)
+    }
+  }
+
+  protected override admitEvent(event: GatewayEvent): boolean {
+    const pending = event.session_id ? this.exactResumes.get(event.session_id) : undefined
+
+    if (pending && !pending.allowedEpochs.has(event.replay_epoch ?? '')) {
+      pending.events.push(event)
+
+      return false
+    }
+
+    const allowed = event.session_id ? this.exactEventEpochs.get(event.session_id) : undefined
+
+    if (!allowed || allowed.has(event.replay_epoch ?? '')) { return true }
+    const source = this.exactSources.get(event.session_id!)
+
+    if (source?.events) {
+      source.events.push(event)
+    } else if (source && !source.checkedEpochs.has(event.replay_epoch ?? '')) {
+      source.events = [event]
+      void this.request('session.resume', { session_id: event.session_id, profile: source.profile,
+        expected_owner: exactSessionOwnerToWire(source.owner) })
+        .catch(() => {})
+        .finally(() => { source.events = undefined })
+    }
+
+    return false
+  }
 
   override onRequest(handler: ServerRequestHandler): () => void {
     this.promptHandlers.add(handler)
@@ -193,6 +262,10 @@ export class HermesGateway extends JsonRpcGatewayClient {
     this.reconciledEpochs.clear()
     this.parkedFrames.clear()
     this.attached.clear()
+    this.sessionWitnesses.clear()
+    this.exactResumes.clear()
+    this.exactEventEpochs.clear()
+    this.exactSources.clear()
     super.close()
   }
 
@@ -366,6 +439,10 @@ export class HermesGateway extends JsonRpcGatewayClient {
     this.parkedFrames.clear()
 
     const ready = this.readiness.begin(generation, this.nativeDial)
+    this.sessionWitnesses.clear()
+    this.exactResumes.clear()
+    this.exactEventEpochs.clear()
+    this.exactSources.clear()
 
     try {
       // The transport's own rejection names a dial that never opened (#41566); readiness only
@@ -412,7 +489,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
       if (profile !== 'default') { params = { ...params, profile } }
     }
 
-    if (typeof sid === 'string' && ['session.resume', 'session.activate'].includes(method)) {
+    if (typeof sid === 'string' && ['session.resume', 'session.activate'].includes(method) && !params.expected_owner) {
       // Live frames may precede the attachment ACK. Register its explicit route
       // before the await; concurrent equal-ID mounts are reconciled above.
       this.rememberSessionProfile(sid, params.profile)
@@ -425,12 +502,19 @@ export class HermesGateway extends JsonRpcGatewayClient {
     const generation = this.connectionGeneration
     const deadline = requestDeadline(timeoutMs)
 
-    // Once readiness has settled (always, on a native dial) a request sends at once, as on main.
     if (!this.readiness.ready) {
-      // The channel's own timeout text, which callers match (`plugins.manage`'s timedOut).
-      const seconds = Math.round((timeoutMs ?? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS) / 1000)
-      await this.readiness.wait(deadline, signal, () => new Error(`request timed out after ${seconds}s: ${method}`))
-      this.requireConnectionGeneration(generation)
+      await this.waitForRequestReadiness(method, timeoutMs, deadline, signal, generation)
+    }
+
+    const expectedOwner = params.expected_owner === undefined ? undefined : exactSessionOwnerFromWire(params.expected_owner)
+
+    if (params.expected_owner !== undefined && (!this.canonical || !expectedOwner)) {
+      throw new Error('当前网关无法验证来源身份，请重新绑定来源会话。')
+    }
+
+    if (!expectedOwner && ['session.resume', 'session.activate'].includes(method) &&
+        this.exactResumes.has(String(params.session_id ?? ''))) {
+      throw new Error('来源会话正在验证，请稍后重试。')
     }
 
     if (!this.canonical) { return super.request<T>(method, legacyParams(method, params), remainingRequestBudget(deadline, signal), signal) }
@@ -441,62 +525,160 @@ export class HermesGateway extends JsonRpcGatewayClient {
 
     await this.attachForRequest(method, params, deadline, signal)
     this.requireConnectionGeneration(generation)
-    // The attach may have identified the named launch profile behind an
-    // implicit route. Its revision and generation are cached under that owner.
     params = this.routeCanonicalParams(method, params)
 
-    // Answered locally only once the owner's route is known: a named launch profile's
-    // retained rewind is keyed under its name, which a redial forgets until the attach.
     const local = this.protocol.localAnswer(method, params)
 
     if (local) { return local as T }
 
-    // The clarify card answers a whole question set as one form: declared, the owner asks the
-    // turn's multi-question clarify as ONE request; undeclared, one card per question. An older
-    // owner refuses the unknown key, so it rides only where `client.capabilities` advertised it.
     if (method === 'prompt.submit' && this.backendClarifyBatch) { params = { ...params, clarify_batch: true } }
 
-    let prepared = this.protocol.prepare(method, params)
-    const wireMethod = this.protocol.wire(method, prepared)
+    return this.requestCanonical<T>(method, params, expectedOwner, deadline, signal, generation)
+  }
+
+  private async waitForRequestReadiness(
+    method: string,
+    timeoutMs: number | undefined,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    generation: number
+  ): Promise<void> {
+    // Once readiness has settled (always, on a native dial) a request sends at once, as on main.
+    if (!this.readiness.ready) {
+      // The channel's own timeout text, which callers match (`plugins.manage`'s timedOut).
+      const seconds = Math.round((timeoutMs ?? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS) / 1000)
+      await this.readiness.wait(deadline, signal, () => new Error(`request timed out after ${seconds}s: ${method}`))
+      this.requireConnectionGeneration(generation)
+    }
+  }
+
+  private beginExactResume(
+    method: string,
+    params: Record<string, unknown>,
+    expectedOwner: ExactSessionOwner | undefined,
+    generation: number
+  ): ExactResumeRequestState | undefined {
+    if (!expectedOwner || method !== 'session.resume') { return undefined }
+    const sessionId = String(params.session_id ?? '')
+
+    if (!sessionId) { return undefined }
+    const source = this.exactSources.get(sessionId)
+
+    const pending: PendingExactResume = {
+      allowedEpochs: new Set([...this.replayProfiles.entries()]
+        .filter(([, owner]) => owner.sessionId === sessionId).map(([epoch]) => epoch)),
+      checkedEpochs: new Set([...(source?.checkedEpochs ?? []), ...(source?.events?.map(event => event.replay_epoch ?? '') ?? [])]),
+      events: source?.events ?? []
+    }
+
+    if (this.exactResumes.has(sessionId)) { throw new Error('来源会话正在验证，请稍后重试。') }
+    this.exactResumes.set(sessionId, pending)
+
+    return { sessionId, owner: expectedOwner, pending, generation }
+  }
+
+  private async requestCanonical<T>(
+    method: string,
+    params: Record<string, unknown>,
+    expectedOwner: ExactSessionOwner | undefined,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    generation: number
+  ): Promise<T> {
+    const state: CanonicalRequestState = { prepared: this.protocol.prepare(method, params) }
+    const exactState = this.beginExactResume(method, params, expectedOwner, generation)
 
     try {
-      let result: T
+      const result = await this.sendCanonicalRequest<T>(method, params, state, deadline, signal, generation)
 
-      try {
-        result = await super.request<T>(wireMethod, prepared, remainingRequestBudget(deadline, signal), signal)
-      } catch (error) {
-        if (!this.protocol.retryableFence(prepared, error)) { throw error }
-        // The refusal carried the owner's current fences: one retry at them, never a loop.
-        this.protocol.failure(prepared, error)
-        this.requireConnectionGeneration(generation)
-        prepared = this.protocol.prepare(method, params)
-        result = await super.request<T>(wireMethod, prepared, remainingRequestBudget(deadline, signal), signal)
-      }
-
-      this.requireConnectionGeneration(generation)
-
-      if (['session.resume', 'session.create', 'session.activate'].includes(method)) {
-        prepared = this.snapshotRoute(prepared, result)
-      }
-
-      // A settle follow-up (compress -> resume) inherits the caller's deadline and cancellation.
-      const followUp = (m: string, p: Record<string, unknown>) => {
-        this.requireConnectionGeneration(generation)
-
-        return this.request(m, p, remainingRequestBudget(deadline, signal), signal)
-      }
-
-      const settled = await this.protocol.settle(method, prepared, this.protocol.result(method, prepared, result), followUp) as T
-      this.requireConnectionGeneration(generation)
-
-      if (method === 'session.resume' || method === 'session.create' || method === 'session.activate') {
-        this.adoptAttachedSnapshot(settled as { session_id?: string; prompts?: Array<Record<string, unknown>> }, prepared.profile)
-      }
-
-      return settled
+      return await this.settleCanonicalResponse<T>(method, state.prepared, result, exactState, deadline, signal, generation)
     } catch (error) {
-      this.protocol.failure(prepared, error)
+      this.protocol.failure(state.prepared, error)
       throw error
+    } finally {
+      this.finishExactResume(exactState)
+    }
+  }
+
+  private async sendCanonicalRequest<T>(
+    method: string,
+    params: Record<string, unknown>,
+    state: CanonicalRequestState,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    generation: number
+  ): Promise<T> {
+    const wireMethod = this.protocol.wire(method, state.prepared)
+
+    try {
+      return await super.request<T>(wireMethod, state.prepared, remainingRequestBudget(deadline, signal), signal)
+    } catch (error) {
+      if (!this.protocol.retryableFence(state.prepared, error)) { throw error }
+      this.protocol.failure(state.prepared, error)
+      this.requireConnectionGeneration(generation)
+      state.prepared = this.protocol.prepare(method, params)
+
+      return super.request<T>(wireMethod, state.prepared, remainingRequestBudget(deadline, signal), signal)
+    }
+  }
+
+  private async settleCanonicalResponse<T>(
+    method: string,
+    prepared: Record<string, unknown>,
+    result: T,
+    exactState: ExactResumeRequestState | undefined,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    generation: number
+  ): Promise<T> {
+    this.requireConnectionGeneration(generation)
+
+    if (exactState) {
+      requireExactSessionSnapshot(result, exactState.sessionId, exactState.owner)
+      exactState.acceptedEpoch = (result as any).replay_epoch
+    }
+
+    if (['session.resume', 'session.create', 'session.activate'].includes(method)) { prepared = this.snapshotRoute(prepared, result) }
+
+    const followUp = (nextMethod: string, nextParams: Record<string, unknown>) => {
+      this.requireConnectionGeneration(generation)
+
+      return this.request(nextMethod, nextParams, remainingRequestBudget(deadline, signal), signal)
+    }
+
+    const settled = await this.protocol.settle(method, prepared, this.protocol.result(method, prepared, result), followUp) as T
+
+    this.requireConnectionGeneration(generation)
+
+    if (['session.resume', 'session.create', 'session.activate'].includes(method)) {
+      this.adoptAttachedSnapshot(settled as { session_id?: string; prompts?: Array<Record<string, unknown>> }, prepared.profile)
+
+      if (exactState) {
+        this.exactSources.set(exactState.sessionId, {
+          owner: exactState.owner,
+          profile: canonicalProfile(prepared.profile),
+          checkedEpochs: exactState.pending.checkedEpochs
+        })
+      }
+    }
+
+    return settled
+  }
+
+  private finishExactResume(state: ExactResumeRequestState | undefined): void {
+    if (!state || this.exactResumes.get(state.sessionId) !== state.pending) { return }
+    this.exactResumes.delete(state.sessionId)
+    const allowed = new Set(state.pending.allowedEpochs)
+
+    if (state.acceptedEpoch) { allowed.add(state.acceptedEpoch) }
+    this.exactEventEpochs.set(state.sessionId, allowed)
+
+    if (state.acceptedEpoch && state.generation === this.connectionGeneration) {
+      for (const event of state.pending.events) {
+        if (state.generation !== this.connectionGeneration) { break }
+
+        if (event.replay_epoch === state.acceptedEpoch || !state.pending.checkedEpochs.has(event.replay_epoch ?? '')) { this.handleEvent(event) }
+      }
     }
   }
 
@@ -548,7 +730,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
     }
   }
 
-  private adoptAttachedSnapshot(settled: { session_id?: string; replay_epoch?: string; info?: { profile_name?: string }; prompts?: Array<Record<string, unknown>> }, profile?: unknown): void {
+  private adoptAttachedSnapshot(settled: { session_id?: string; replay_epoch?: string; owner?: unknown; info?: { profile_name?: string }; prompts?: Array<Record<string, unknown>> }, profile?: unknown): void {
     // Prompts still open on the authority re-deliver like `open_requests` after a reconnect.
     const sid = settled.session_id
 
@@ -562,6 +744,12 @@ export class HermesGateway extends JsonRpcGatewayClient {
 
       if (typeof settled.replay_epoch === 'string') {
         this.replayProfiles.set(settled.replay_epoch, { sessionId: sid, profile: canonicalProfile(profile) })
+        this.exactEventEpochs.get(sid)?.add(settled.replay_epoch)
+        const owner = exactSessionOwnerFromWire(settled.owner)
+
+        if (isExactSessionOwner(owner)) {
+          this.sessionWitnesses.set(canonicalSessionKey(sid, profile), { owner, replayEpoch: settled.replay_epoch })
+        }
       }
     }
 

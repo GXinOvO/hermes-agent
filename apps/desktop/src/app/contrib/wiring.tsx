@@ -174,6 +174,7 @@ import { usePetBridge } from './hooks/use-pet-bridge'
 import { PreviewSigninsBoot } from './hooks/use-preview-signins-boot'
 import { useQuickEntryBridge } from './hooks/use-quick-entry-bridge'
 import { useSessionTileDelegate } from './hooks/use-session-tile-delegate'
+import { useTaskOverviewTool } from './hooks/use-task-overview-tool'
 import { McpInstallDeepLinkDialog } from './mcp-install-deeplink-dialog'
 import { useTitlebarToolContributions } from './panes'
 import { type AmbientGatewayRequest, createSessionRpcDispatcher } from './session-rpc-dispatcher'
@@ -1208,7 +1209,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // sets, computed here from the live connection. Page-registered tools
   // (preview's monitor/devtools cluster, …) arrive as registry contributions.
   const leftTitlebarTools = useTitlebarToolContributions('left')
-  const rightTitlebarTools = useTitlebarToolContributions('right')
+  const rightTitlebarTools = useTaskOverviewTool(useTitlebarToolContributions('right'))
   const connection = useStore($connection)
   const controlsPos = titlebarControlsPosition(connection?.windowButtonPosition, Boolean(connection?.isFullscreen))
   const controlsVars = useTitlebarControlsVars(controlsPos)
@@ -1239,7 +1240,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     paneToolCount > 0 ? `calc(${systemToolsWidth} + ${titlebarToolsWidthCss(paneToolCount)})` : systemToolsWidth
 
   const leftToolsWidth = titlebarToolsWidthCss(clusters.left)
-
   // Native caption reservations can translate chrome without resizing it.
   useEffect(() => {
     window.dispatchEvent(new CustomEvent(TITLEBAR_CHROME_CHANGED_EVENT))

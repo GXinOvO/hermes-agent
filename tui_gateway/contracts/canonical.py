@@ -406,6 +406,7 @@ class RuntimeDescribeResult(Result):
     authority_epoch: int
     capabilities: list[str]
     session_create: SessionCreateDescriptor
+    store_instance_id: str | None = None
     #: The owning profile's resolved skin (``resolve_skin()``, main's ``gateway.ready.skin``).
     skin: SkinPayload | None = None
 

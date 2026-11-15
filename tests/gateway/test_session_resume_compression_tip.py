@@ -54,6 +54,7 @@ async def test_session_resume_still_remaps_legacy_cli_source(monkeypatch, legacy
     authority = SimpleNamespace(
         profile_id='fixture',
         instance_id='one',
+        epoch=1,
         events={},
         db=legacy_db,
         sessions={owner_id: SimpleNamespace(source=SimpleNamespace(platform=None), route=f'agent:main:cli:dm:{owner_id}',

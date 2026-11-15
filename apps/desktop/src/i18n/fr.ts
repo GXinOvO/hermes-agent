@@ -27,8 +27,29 @@ import { frSharedMetrics } from './fr_shared_metrics'
 import { frThemePicker } from './fr_theme_picker'
 import { frUpdateChannel } from './fr_update_channel'
 import { introFr } from './intro-fr'
+import { frSessionReview } from './session-review-locales'
 
 export const frOverrides = {
+  sessionReview: frSessionReview,
+  taskOverview: {
+    attention: "À suivre",
+    attentionEmpty: "Aucune tâche ne nécessite votre attention",
+    addRelated: "Associer la conversation actuelle",
+    editTask: "Modifier la tâche",
+    description: "Description",
+    notes: "Notes",
+    search: "Rechercher des tâches",
+    statusFilter: "Filtrer par état",
+    allStatuses: "Tous les états",
+    sort: "Trier les tâches",
+    sortUpdated: "Dernière modification",
+    activity: "Activité de la source",
+    activityIdle: "Inactive",
+    activityRunning: "En cours",
+    activityWaiting: "En attente de saisie",
+    activityUnread: "Terminée · non lue",
+    activityUnavailable: "Source indisponible"
+  },
   gatewayGroupOpen: {
     opening: "Ouverture de la discussion de groupe…",
     lookupFailed: "Impossible de retrouver ce groupe sur la passerelle. Réessayez.",
@@ -1087,6 +1108,9 @@ export const frOverrides = {
         'Survoler une autre conversation change le focus de saisie et l’espace de travail des fichiers. Si désactivé, cliquez ou utilisez le clavier pour changer. S’applique aux zones de saisie ancrées et flottantes.',
       composerPopoutDesc:
         'Permet de faire glisser la zone de saisie hors de son emplacement. Désactivé, elle reste ancrée en bas.',
+      taskOverviewTitle: 'Suivi des tâches',
+      taskOverviewDesc:
+        "Affiche le panneau intégré de suivi des tâches locales et son bouton dans la barre de titre. Les tâches sont stockées sur cet appareil et nécessitent une validation explicite pour être terminées.",
       fileBrowserTitle: 'Navigateur de fichiers',
       fileBrowserDesc:
         "Affiche le navigateur de fichiers à côté du chat lorsqu'un espace de travail est ouvert. Le bouton de la barre de titre modifie aussi ce réglage.",

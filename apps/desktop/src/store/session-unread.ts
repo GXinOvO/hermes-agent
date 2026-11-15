@@ -450,6 +450,36 @@ export function ackStoredSessionId(storedSessionId: null | string, profileHint?:
   }
 }
 
+export interface SessionUnreadSnapshot {
+  markers: Markers
+  seen: SeenCounts
+}
+
+export function isSessionAvailableForProfile(storedSessionId: string, profileHint?: null | string): boolean {
+  return Boolean(resolveOwnedRow(storedSessionId, profileHint ?? undefined) ?? projectTreeRow(storedSessionId, profileHint ?? undefined))
+}
+
+/** Read persisted unread state for a source-bound reference without using the
+ * unscoped transient row-id atom. */
+export function isSessionUnreadForProfile(
+  storedSessionId: string,
+  profileHint?: null | string,
+  snapshot: SessionUnreadSnapshot = { markers: $unreadFinishedMarkers.get(), seen: $sessionSeenCounts.get() }
+): boolean {
+  const row = resolveOwnedRow(storedSessionId, profileHint ?? undefined) ?? projectTreeRow(storedSessionId, profileHint ?? undefined)
+  const profile = row ? profileKeyForRow(row) : unlistedProfile(profileHint)
+  const durableId = row ? sessionPinId(row) : storedSessionId
+  const markers = snapshot.markers[profile] ?? []
+
+  if (markers.includes(durableId) || markers.includes(storedSessionId)) {
+    return true
+  }
+
+  const watermark = snapshot.seen[profile]?.[durableId]
+
+  return Boolean(row && typeof watermark === 'number' && Number.isFinite(row.message_count) && row.message_count > watermark)
+}
+
 /** Sidebar "Mark all as read" — ack every LOADED row (watermark := its current
  *  count, markers retired) so the persisted layer doesn't repaint the dots the
  *  user just dismissed on the next list refresh. Rows not loaded keep their

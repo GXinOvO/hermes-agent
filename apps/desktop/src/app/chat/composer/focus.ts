@@ -34,6 +34,8 @@ interface InsertDetail {
   mode: ComposerInsertMode
   target: ComposerTarget
   text: string
+  expectedSessionIds?: string[]
+  isCurrent?: () => boolean
   /** Present when the caller wants an acknowledgement (plugin SDK
    *  `host.composer.insertText`); the claiming subscriber echoes it back on
    *  {@link INSERT_REPLY_EVENT}. Internal fire-and-forget inserts omit it. */
@@ -305,7 +307,9 @@ export const requestComposerInsert = (
  *  silent no-op. Internal callers keep the fire-and-forget form above. */
 export const requestComposerInsertAcked = (
   text: string,
-  { mode = 'block', target = 'active' }: { mode?: ComposerInsertMode; target?: ComposerTarget | 'active' } = {}
+  { mode = 'block', target = 'active', expectedSessionIds, isCurrent }: {
+    expectedSessionIds?: string[]; isCurrent?: () => boolean; mode?: ComposerInsertMode; target?: ComposerTarget | 'active'
+  } = {}
 ): Promise<boolean> => {
   const trimmed = text.trim()
   const pending = insertReplies
@@ -320,7 +324,7 @@ export const requestComposerInsertAcked = (
   return new Promise<boolean>(resolve => {
     pending.set(token, resolve)
 
-    dispatch<InsertDetail>(INSERT_EVENT, { mode, target: resolvedTarget, text: trimmed, token })
+    dispatch<InsertDetail>(INSERT_EVENT, { mode, target: resolvedTarget, text: trimmed, token, expectedSessionIds, isCurrent })
 
     // No claimant (unmounted address, input disabled, mid-teardown) must not
     // strand the promise: settle false and drop the slot.

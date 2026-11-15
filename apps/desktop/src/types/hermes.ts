@@ -850,6 +850,7 @@ export interface SessionResumeResult {
 }
 
 export interface SessionRuntimeInfo {
+  session_owner?: unknown
   stored_session_id?: string
   pending_submissions?: unknown
   /** Canonical snapshot only: the session replay epoch and event sequence its pending set reflects. */

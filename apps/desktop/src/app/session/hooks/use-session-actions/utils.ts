@@ -65,8 +65,6 @@ import { sessionOwnerRouteFromRow, type SessionOwnerScope } from '@/store/sessio
 import { reportBackendContract, reportInstallMethodWarning } from '@/store/updates'
 import type { SessionCreateResponse, SessionInfo, SessionResumeResult, SessionRuntimeInfo } from '@/types/hermes'
 
-import type { ClientSessionState } from '../../../types'
-
 import {
   committedReplyCovers,
   isStrictAnswerTextExtension,
@@ -85,6 +83,7 @@ import {
   conflictingTranscriptIdentity,
   transcriptRowIds
 } from './pending-turn-identity'
+import { runtimeSourceState, type SessionRuntimeStatePatch } from './runtime-info-state'
 import { reconcileOwnerApprovalMode } from './runtime-owner'
 import { publishSessionUsage } from './session-usage'
 
@@ -2105,23 +2104,6 @@ export async function resolveSessionOwner(storedSessionId: null | string): Promi
   return sessionOwnerRouteFromRow(row) ?? (row?.profile?.trim() || undefined)
 }
 
-type SessionRuntimeStatePatch = Partial<
-  Pick<
-    ClientSessionState,
-    | 'branch'
-    | 'cwd'
-    | 'fast'
-    | 'model'
-    | 'personality'
-    | 'provider'
-    | 'reasoningEffort'
-    | 'reasoningEffortPending'
-    | 'reasoningEffortWire'
-    | 'serviceTier'
-    | 'usage'
-    | 'yolo'
-  >
->
 
 interface ApplyRuntimeInfoOptions {
   /**
@@ -2225,7 +2207,7 @@ export function applyRuntimeInfo(
 
   reportRuntimeInfoAppState(info, owner)
 
-  const sessionState: SessionRuntimeStatePatch = {}
+  const sessionState: SessionRuntimeStatePatch = runtimeSourceState(info)
 
   if (typeof info.model === 'string') {
     sessionState.model = info.model

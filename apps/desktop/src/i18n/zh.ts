@@ -3,6 +3,8 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introZh } from './intro-zh'
+import { zhSessionReview } from './session-review'
+import { zhTaskOverview } from './task-overview'
 import { zhCatalog, zhSkillDeepLink } from './zh_catalog'
 import { zhClarify } from './zh_clarify'
 import { zhConnectorCard } from './zh_connector_card'
@@ -28,6 +30,8 @@ import { zhThemePicker } from './zh_theme_picker'
 import { zhUpdateChannel } from './zh_update_channel'
 
 export const zhOverrides = {
+  sessionReview: zhSessionReview,
+  taskOverview: zhTaskOverview,
   gatewayGroupOpen: {
     opening: "正在打开群聊…",
     lookupFailed: "无法在网关上查找此群组，请重试。",
@@ -805,6 +809,8 @@ export const zhOverrides = {
       focusFollowsMouseTitle: '鼠标经过时自动切换会话',
       focusFollowsMouseDesc:
         '鼠标移入另一会话时，切换输入焦点和文件工作区。关闭后，需点击或使用键盘切换。适用于停靠和悬浮输入框。',
+      taskOverviewTitle: '事项跟进',
+      taskOverviewDesc: '显示内置的本机事项面板和标题栏按钮。事项保存在此设备上，只有明确验收后才会完成。',
       fileBrowserTitle: '文件浏览器',
       fileBrowserDesc: '打开工作区时，在聊天旁显示文件浏览器。标题栏的切换按钮也会更改此设置。',
       vibeHeartsTitle: '心情爱心',

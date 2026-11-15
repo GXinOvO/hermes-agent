@@ -123,6 +123,7 @@ import { BASIC_TREE, DEFAULT_TREE, registerLayoutPresets } from './layout-preset
 import { bindLayoutSides } from './layout-sides'
 import { FilesPane, LogsPane, ReviewPaneContent } from './panes'
 import { PluginPreviewConsentDialog } from './plugin-preview-consent-dialog'
+import { TaskOverviewCorePane } from './task-overview-core-pane'
 import { ContribWiring, WiredPane } from './wiring'
 import { WorkspacePageHeaderHostContext } from './workspace-page-header'
 
@@ -289,6 +290,17 @@ registry.registerMany([
       tabTitleText: () => translateNow('sidebar.review')
     },
     render: () => idle(<ReviewPaneContent />)
+  },
+  {
+    id: 'task-overview',
+    area: 'panes',
+    title: translateNow('taskOverview.title'),
+    data: {
+      placement: 'right', width: '28rem', hideOnly: true,
+      tabTitle: () => <LocalizedTabTitle select={t => t.taskOverview.title} />,
+      tabTitleText: () => translateNow('taskOverview.title')
+    },
+    render: () => <TaskOverviewCorePane />
   }
 ])
 

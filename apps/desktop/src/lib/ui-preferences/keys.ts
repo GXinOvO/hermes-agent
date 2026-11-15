@@ -61,6 +61,7 @@ const SHARED_KEYS: ReadonlySet<string> = new Set([
   'hermes.desktop.composerPopout.enabled',
   'hermes.desktop.composerPopout.gesturesEnabled',
   'hermes.desktop.focusFollowsMouse',
+  'hermes.desktop.taskOverview.enabled',
   'hermes.desktop.files.showIgnored',
   'hermes.desktop.keybinds',
   'hermes.desktop.layoutPresets.v2',

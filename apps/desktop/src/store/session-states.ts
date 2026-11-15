@@ -35,6 +35,7 @@ import { resolveRememberedActivePane, workspaceScopeKey } from '@/components/pan
 import type { WorkspaceMode } from '@/contrib/types'
 import { dropBrowserProfilePrefs, migrateBrowserProfilePrefs } from '@/lib/browser-profile-prefs'
 import { finalizeInterruptedMessages, sealOpenToolParts } from '@/lib/chat-messages'
+import type { ExactSessionReference } from '@/lib/exact-session'
 import { tileFocusStampOnFocusChange } from '@/lib/session-timer-since'
 import { stableArray } from '@/lib/stable-array'
 import { readJson, writeJson } from '@/lib/storage'
@@ -97,6 +98,7 @@ import {
   type SessionProfileRoute
 } from './session-request-router'
 import { orderTilesByTree } from './session-tile-order'
+import { type StoredTile, toStored } from './session-tile-persistence'
 import { ackStoredSessionId, isMessagingCompletion, markSessionUnreadFinished } from './session-unread'
 import { migrateTranscriptTailsForProfile } from './transcript-tail-cache'
 import { isBrowserWindow, isSecondaryWindow } from './windows'
@@ -1161,6 +1163,7 @@ export type SplitDir = 'bottom' | 'left' | 'right' | 'top'
 export type TileDock = 'center' | SplitDir
 
 export interface SessionTile {
+  exactReference?: ExactSessionReference
   /** Stored session id — the durable identity (runtime ids are ephemeral). */
   storedSessionId: string
   /** Dock against `anchor` on adoption (default right; center = stack). */
@@ -1203,33 +1206,6 @@ const TILES_KEY = 'hermes.desktop.sessionTiles.v2'
 const LEGACY_TILES_KEY = 'hermes.desktop.sessionTiles.v1'
 const BOTS_TILE_BUCKET = '__bots_workspace__'
 
-/** Persisted placement — `dir` + strip slot (`before`) + dock `anchor` so a
- *  restart / profile swap re-adopts tiles in the same order, not all stacked
- *  right of workspace. */
-type StoredTile = Pick<
-  SessionTile,
-  | 'anchor'
-  | 'before'
-  | 'dir'
-  | 'ownerProfile'
-  | 'ownerRoute'
-  | 'storedSessionId'
-  | 'workspaceMode'
-  | 'workspaceOwnerKey'
-  | 'workspaceTabTitle'
->
-
-const toStored = (t: SessionTile): StoredTile => ({
-  anchor: t.anchor,
-  before: t.before,
-  dir: t.dir,
-  ...(t.ownerProfile ? { ownerProfile: t.ownerProfile } : {}),
-  ...(t.ownerRoute ? { ownerRoute: t.ownerRoute } : {}),
-  storedSessionId: t.storedSessionId,
-  ...(t.workspaceMode ? { workspaceMode: t.workspaceMode } : {}),
-  ...(t.workspaceOwnerKey ? { workspaceOwnerKey: t.workspaceOwnerKey } : {}),
-  ...(t.workspaceTabTitle ? { workspaceTabTitle: t.workspaceTabTitle } : {})
-})
 
 function parseTileList(value: unknown): StoredTile[] {
   return Array.isArray(value)
@@ -1251,6 +1227,7 @@ function parseTileList(value: unknown): StoredTile[] {
                 : undefined,
             before: typeof raw.before === 'string' || raw.before === null ? raw.before : undefined,
             dir: raw.dir,
+            ...(raw.exactReference ? { exactReference: raw.exactReference } : {}),
             ownerProfile: typeof raw.ownerProfile === 'string' ? normalizeProfileKey(raw.ownerProfile) : undefined,
             ownerRoute:
               raw.ownerRoute &&
@@ -2207,7 +2184,7 @@ export interface SessionTileDelegate {
    *  `authoritativeSnapshot` forces a message-bearing gateway resume. */
   resumeTile(
     storedSessionId: string,
-    options?: { authoritativeSnapshot?: boolean; refreshTranscript?: boolean }
+    options?: { authoritativeSnapshot?: boolean; refreshTranscript?: boolean; exactReference?: ExactSessionReference }
   ): Promise<string>
   /** Retire one runtime's busy/awaiting claim through the wiring cache
    *  (updateSessionState), so cache, focused view, busyRef, and tile mirrors

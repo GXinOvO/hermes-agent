@@ -27,8 +27,29 @@ import { esSharedMetrics } from './es_shared_metrics'
 import { esThemePicker } from './es_theme_picker'
 import { esUpdateChannel } from './es_update_channel'
 import { introEs } from './intro-es'
+import { esSessionReview } from './session-review-locales'
 
 export const esOverrides = {
+  sessionReview: esSessionReview,
+  taskOverview: {
+    attention: "Atención",
+    attentionEmpty: "No hay tareas que requieran atención",
+    addRelated: "Añadir conversación actual como relacionada",
+    editTask: "Editar tarea",
+    description: "Descripción",
+    notes: "Notas",
+    search: "Buscar tareas",
+    statusFilter: "Filtrar por estado",
+    allStatuses: "Todos los estados",
+    sort: "Ordenar tareas",
+    sortUpdated: "Última actualización",
+    activity: "Actividad del origen",
+    activityIdle: "Inactiva",
+    activityRunning: "En ejecución",
+    activityWaiting: "Esperando entrada",
+    activityUnread: "Terminada · sin leer",
+    activityUnavailable: "Origen no disponible"
+  },
   gatewayGroupOpen: {
     opening: "Abriendo el chat de grupo…",
     lookupFailed: "No se pudo encontrar este grupo en la pasarela. Inténtalo de nuevo.",
@@ -1084,6 +1105,9 @@ export const esOverrides = {
         'Al pasar por otro chat, cambian el foco de entrada y el espacio de trabajo de archivos. Si está desactivado, cambia con un clic o con el teclado. Se aplica a los campos de entrada anclados y flotantes.',
       composerPopoutDesc:
         'Permite arrastrar el compositor fuera de su posición fija. Si está desactivado, permanece anclado abajo.',
+      taskOverviewTitle: 'Seguimiento de tareas',
+      taskOverviewDesc:
+        'Muestra el panel integrado de seguimiento de tareas locales y su botón en la barra de título. Las tareas se guardan en este dispositivo y requieren aceptación explícita para completarse.',
       fileBrowserTitle: 'Explorador de archivos',
       fileBrowserDesc:
         'Muestra el explorador de archivos junto al chat cuando hay un espacio de trabajo abierto. El botón de la barra de título también cambia este ajuste.',

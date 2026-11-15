@@ -27,6 +27,13 @@ class CanonicalClientIdentity(Params):
     version: str | None = None
 
 
+class ExpectedSessionOwner(Params):
+    instance_id: str
+    profile_id: str
+    authority_epoch: int
+    store_instance_id: str
+
+
 class CanonicalCreateParams(ProfileParams):
     request_id: str | None = None
     source: Literal['cli', 'tui', 'gui', 'acp', 'tool', 'oneshot'] = 'cli'
@@ -80,6 +87,7 @@ class CanonicalResumeParams(ProfileParams):
     defer_history: bool = False
     omit_messages: bool = False
     cols: int | None = None
+    expected_owner: ExpectedSessionOwner | None = None
     # A renderer (the Ink TUI) asks for main's display projection of the same rows
     # (``tui_gateway.session_history._history_to_messages``) as ``display_messages``.
     display_projection: bool = False
@@ -150,6 +158,7 @@ class CanonicalSnapshotInfo(SessionInventoryFields):
 
 
 class CanonicalSnapshot(Result):
+    owner: ExpectedSessionOwner | None = None
     session_id: str
     stored_session_id: str
     messages: list[TranscriptMessage]

@@ -5,6 +5,7 @@ completion, and never upgrades targeted checks into "repo green"."""
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import re
 import shlex
 import sqlite3
@@ -144,6 +145,17 @@ def _transaction():
     from hermes_cli.sqlite_util import transaction
 
     return transaction(_connect())
+
+
+@contextmanager
+def _readonly_transaction():
+    conn = sqlite3.connect(_db_path().resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute('BEGIN')
+        yield conn
+    finally:
+        conn.close()
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -762,7 +774,7 @@ def _newest_workspace_verify(
     ).fetchone()
 
 
-def verification_status(*, session_id: str | None, cwd: str | Path | None) -> dict[str, Any]:
+def verification_status(*, session_id: str | None, cwd: str | Path | None, read_only: bool = False) -> dict[str, Any]:
     """Return the best known verification state for a session/workspace.
 
     Evidence recorded before the latest edit is reported as ``stale``. A
@@ -777,7 +789,7 @@ def verification_status(*, session_id: str | None, cwd: str | Path | None) -> di
 
     sid = str(session_id or "default")
     root = _root_for(facts, cwd)
-    with _DB_LOCK, _transaction() as conn:
+    with _DB_LOCK, (_readonly_transaction() if read_only else _transaction()) as conn:
         state = conn.execute(
             "SELECT last_event_id, last_edit_at, changed_paths_json"
             " FROM verification_state WHERE session_id = ? AND root = ?",

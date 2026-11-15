@@ -171,6 +171,61 @@ class AuthorityConnection:
         self._identity, self._operator, self._siblings = identity, operator, {}
         authority.events[self.actor.transport_id] = transport
 
+    async def _read_store_instance_id(self):
+        return await asyncio.to_thread(self.authority.db.get_meta, 'store_instance_id')
+
+    async def _expected_owner_guard(self, ref, params):
+        expected = params.get('expected_owner')
+
+        if expected is None:
+            return params, None
+
+        required = {'instance_id', 'profile_id', 'authority_epoch', 'store_instance_id'}
+        if (
+            not isinstance(expected, dict)
+            or set(expected) != required
+            or not all(isinstance(expected[key], str) and expected[key] == expected[key].strip() and expected[key] for key in ('instance_id', 'profile_id', 'store_instance_id'))
+            or type(expected['authority_epoch']) is not int
+            or expected['authority_epoch'] < 1
+        ):
+            raise RuntimeStoreError('invalid_params', field='expected_owner',
+                                    detail='expected_owner needs instance_id, profile_id, authority_epoch and store_instance_id')
+
+        if (not isinstance(ref.session_id, str)
+                or not ref.session_id
+                or ref.session_id != ref.session_id.strip()):
+            raise RuntimeStoreError('invalid_params', field='session_id',
+                                    detail='an exact resume needs one session id')
+
+        if 'title' in params or 'latest' in params:
+            raise RuntimeStoreError('invalid_params', field='expected_owner',
+                                    detail='expected_owner cannot ride a title/latest resume')
+
+        if 'session:read' not in self.actor.capabilities:
+            raise RuntimeStoreError('permission_denied')
+
+        authority = self.authority
+        database = authority.db
+        expected_tuple = (expected['instance_id'], expected['profile_id'], expected['authority_epoch'])
+        expected_store = expected['store_instance_id']
+        actual_store = await self._read_store_instance_id()
+
+        def guard(store_instance_id=actual_store):
+            current = self.authority
+            if (
+                current is not authority
+                or self.actor.profile_id != current.profile_id
+                or (current.instance_id, current.profile_id, current.epoch) != expected_tuple
+                or getattr(current, 'retired', False)
+                or getattr(current, 'retiring', False)
+                or current.db is not database
+                or store_instance_id != expected_store
+            ):
+                raise RuntimeStoreError('session_owner_changed')
+
+        guard()
+        return {key: value for key, value in params.items() if key != 'expected_owner'}, guard
+
     @property
     def host_scoped(self):
         """A host-scoped grant (the Desktop's shared-primary socket, the dashboard gate) acts for
@@ -290,6 +345,8 @@ class AuthorityConnection:
         handlers.update(onboarding_handlers(self))
         from gateway.session_stored_reads import handlers as stored_read_handlers
         handlers.update(stored_read_handlers(self))
+        from gateway.session_task_overview import task_overview
+        handlers['session.task_overview'] = partial(task_overview, self)
         return handlers
 
     async def dispatch(self, request):
@@ -343,7 +400,22 @@ class AuthorityConnection:
         original_params = dict(params)
         contract = contract or METHODS.get(method)
         authority = self.authority
-        if (isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
+        owner_guard = None
+        if method == 'session.resume' and 'expected_owner' in params:
+            try:
+                params, owner_guard = await self._expected_owner_guard(ref, params)
+            except RuntimeStoreError as exc:
+                return {'jsonrpc': '2.0', 'id': rid, 'error': {
+                    'code': 4001, 'message': exc.reason, 'data': _refusal_data(exc)}}
+            original_params = dict(params)
+        if owner_guard:
+            try:
+                owner_guard()
+            except RuntimeStoreError as exc:
+                return {'jsonrpc': '2.0', 'id': rid, 'error': {
+                    'code': 4001, 'message': exc.reason, 'data': _refusal_data(exc)}}
+        if (method != 'session.task_overview'
+                and isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
                 and ref.profile_id == getattr(authority, 'profile_id', None)
                 and ref.session_id not in getattr(authority, 'sessions', {ref.session_id: None})):
             # A first read of a session recovery never restored: its compression catch-up (#140060)
@@ -373,7 +445,7 @@ class AuthorityConnection:
                         'code': -32601, 'message': unknown_method_message(method),
                         'data': {'reason': 'unknown_method'}}}
                 else:
-                    result = await handlers[method](ref, params)
+                    result = await self._guarded_resume(ref, params, owner_guard) if owner_guard else await handlers[method](ref, params)
                     if isinstance(result, DeferredReply):  # answered off the serial dispatch
                         check_params_accepted(contract, original_params)
                         return result.start(self, rid, partial(check_result, contract))
@@ -569,6 +641,7 @@ class AuthorityConnection:
         from gateway.session_skin import resolved_skin
         return {'instance_id': self.authority.instance_id, 'profile_id': self.authority.profile_id,
                 'authority_epoch': self.authority.epoch,
+                'store_instance_id': await self._read_store_instance_id(),
                 'capabilities': ['durable-admission-v1', 'event-replay-v1', 'local-cli-create-v1', 'acp-editor-policy-v1',
                                  'acp-session-mcp-v1', 'clarify-batch-v1', 'plugin-rpc-v1', 'session-client-v1', 'session-transcript-v1', 'session-list-picker-v1',
                                  'session-list-cursor-v1'],
@@ -642,7 +715,28 @@ class AuthorityConnection:
         return {'sessions': await asyncio.to_thread(live_picker_page, self.authority, sessions, limit, workspace, picker),
                 'scope': 'live'}
 
-    async def resume(self, ref, params):
+    async def _guarded_resume(self, ref, params, guard):
+        authority = self.authority
+        previous = {key for live in authority.sessions.values() for key, actor in live.subscribers.items()
+                    if actor == self.actor}
+        subscriptions, reconnects, cursors = dict(self.subscriptions), set(self.reconnects), dict(self.replay_cursors)
+        try:
+            result = await self.resume(ref, params, owner_guard=guard)
+            guard()
+            if result['session_id'] != ref.session_id or result['stored_session_id'] != ref.session_id:
+                raise RuntimeStoreError('session_owner_changed')
+            return result
+        except BaseException:
+            for live in list(authority.sessions.values()):
+                for key, actor in list(live.subscribers.items()):
+                    if actor == self.actor and key not in previous:
+                        await authority.detach(self.actor, key)
+            self.subscriptions, self.reconnects, self.replay_cursors = subscriptions, reconnects, cursors
+            raise
+
+    async def resume(self, ref, params, *, owner_guard=None):
+        if owner_guard:
+            owner_guard()
         from gateway.session_local_inventory import snapshot_info
         replay_from = self.replay_cursors.pop(ref.session_id, None)
         reconnect = ref.session_id in self.reconnects
@@ -715,7 +809,11 @@ class AuthorityConnection:
             from gateway.session_open import open_local
             opening = open_local(self.authority, ref)
         try:
+            if owner_guard:
+                owner_guard()
             snapshot = await self.authority.attach(self.actor, ref, history=not omit, replay_from=replay_from)
+            if owner_guard:
+                owner_guard()
             self.subscriptions[ref.session_id] = snapshot.subscription_id
             self.handed_back.discard(ref.session_id)
             self._spawn_notice(ref)
@@ -742,8 +840,14 @@ class AuthorityConnection:
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
                 [row for row in history if not model_only(row)], self.authority.profile_id)
+        transcript = await _resume_transcript(self.authority, ref, snapshot, history, omit)
+        store_instance_id = await self._read_store_instance_id()
+        if owner_guard:
+            owner_guard(store_instance_id)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
-                **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
+                'owner': {'instance_id': self.authority.instance_id, 'profile_id': self.authority.profile_id,
+                          'authority_epoch': self.authority.epoch, 'store_instance_id': store_instance_id},
+                **transcript, **display,
                 'running': snapshot.handle.execution_state == 'running',
                 'authority_epoch': snapshot.handle.authority_epoch,
                 'replay_epoch': snapshot.replay_epoch, 'last_sequence': snapshot.last_sequence,

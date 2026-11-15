@@ -1,6 +1,7 @@
 import type * as React from 'react'
 
 import type { ChatMessage } from '@/lib/chat-messages'
+import type { ExactSessionOwner } from '@/lib/exact-session-owner'
 import type { Tiered } from '@/store/interface-mode'
 import type { SessionMessage, UsageStats } from '@/types/hermes'
 
@@ -149,6 +150,8 @@ export interface PersistedDisplayTranscriptProvenance {
 }
 
 export interface ClientSessionState {
+  sourceOwner?: ExactSessionOwner
+  sourceReplayEpoch?: string
   storedSessionId: string | null
   transcriptAuthorityEpoch?: number
   transcriptProvenance?: PersistedDisplayTranscriptProvenance

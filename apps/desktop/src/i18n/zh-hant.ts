@@ -1,5 +1,7 @@
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introZhHant } from './intro-zh-hant'
+import { zhHantSessionReview } from './session-review'
+import { zhHantTaskOverview } from './task-overview'
 import { zhHantArtifacts } from './zh-hant_artifacts'
 import { zhHantAssistant } from './zh-hant_assistant'
 import { zhHantBoot } from './zh-hant_boot'
@@ -14,6 +16,8 @@ import { zhHantFirstRun } from './zh-hant_first_run'
 import { zhHantSettings } from './zh-hant_settings'
 
 export const zhHantOverrides = {
+  sessionReview: zhHantSessionReview,
+  taskOverview: zhHantTaskOverview,
   gatewayGroupOpen: {
     opening: "正在開啟群組聊天…",
     lookupFailed: "無法在閘道上查找此群組，請重試。",

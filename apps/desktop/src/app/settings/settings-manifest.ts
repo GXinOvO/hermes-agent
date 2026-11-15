@@ -121,6 +121,11 @@ export const SETTINGS_MANIFEST = {
       ['focus', 'mouse', 'hover', 'session', 'pane', 'workspace', 'files', 'click'],
       'focusFollowsMouse'
     ),
+    taskOverview: appearanceSetting(
+      'window-layout',
+      ['task', 'overview', 'follow-up', 'followup', 'matters', 'tracking', 'checklist'],
+      'taskOverview'
+    ),
     userBubble: appearanceSetting('chat-display', ['opacity', 'transparent', 'message', 'bubble'], 'userBubble'),
     textDirection: appearanceSetting(
       'chat-display',
