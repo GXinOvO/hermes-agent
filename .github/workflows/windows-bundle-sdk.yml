@@ -3,17 +3,8 @@ name: Windows bundle SDK
 # tools. The vitest halves under js-tests run on Linux and skip every
 # runIf(win32) leg, so this is the only lane that runs the real downloader.
 on:
-  pull_request:
-    paths:
-      - 'apps/desktop/scripts/windows-bundle-tools.mjs'
-      - 'apps/desktop/scripts/windows-bundle-tools.test.mjs'
-      - 'scripts/msix-shared.mjs'
-      - 'apps/desktop/scripts/msix-shared.test.mjs'
-      - 'apps/desktop/scripts/sign-msix.mjs'
-      - 'apps/desktop/scripts/sign-msix.test.mjs'
-      - 'apps/desktop/scripts/batch-sign-binaries.mjs'
-      - 'apps/desktop/scripts/batch-sign-binaries.test.mjs'
-      - '.github/workflows/windows-bundle-sdk.yml'
+  # No `pull_request` trigger on this fork (see ci.yaml): dispatch it when the
+  # Windows bundle/signing scripts change.
   workflow_dispatch:
 permissions:
   contents: read

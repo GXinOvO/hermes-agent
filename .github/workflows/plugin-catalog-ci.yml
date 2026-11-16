@@ -11,9 +11,9 @@ name: Plugin Catalog CI
 #                            `hermes plugins validate`.
 
 on:
-  pull_request:
-    paths:
-      - "plugin-catalog/**"
+  # No `pull_request` trigger on this fork (see ci.yaml): dispatch it when a
+  # change to plugin-catalog/ needs the schema and pinned-source checks.
+  workflow_dispatch:
 
 permissions:
   contents: read

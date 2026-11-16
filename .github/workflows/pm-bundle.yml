@@ -31,19 +31,8 @@ on:
         required: false
         type: string
         default: ''
-  pull_request:
-    paths:
-      - 'pm/**'
-      - '!pm/**/*.md'
-      - 'scripts/bundles/**'
-      - 'scripts/ci/desktop_build_cache.py'
-      - '.github/actions/desktop-build-cache/**'
-      - 'scripts/windows-build-deps.ps1'
-      - 'scripts/build/windows-deps.ps1'
-      - '.github/actions/setup-windows-build-deps/**'
-      - 'uv.lock'
-      - 'pyproject.toml'
-      - '.github/workflows/pm-bundle.yml'
+  # No `pull_request` trigger on this fork (see ci.yaml): dispatch it when a
+  # change to the bundle inputs needs the three-platform smoke.
 
 permissions:
   contents: read
