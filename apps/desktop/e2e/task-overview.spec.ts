@@ -107,10 +107,10 @@ test.describe('built-in task overview', () => {
       execFileSync(python, ['-B', '-c', [
         'from hermes_state import SessionDB', 'from pathlib import Path', 'import sys',
         'db = SessionDB(db_path=Path(sys.argv[1]) / "state.db")',
-        'db.create_session("followup-create-source", source="desktop")',
+        'db.create_session("followup-create-source", source="desktop", model="mock-model", model_config={"gateway_runtime": {"provider": "custom", "base_url": sys.argv[2] + "/v1", "api_mode": "chat_completions"}})',
         'db.append_message("followup-create-source", role="user", content="Verify persistence")',
         'db.close()'
-      ].join('\n'), sandbox.hermesHome], {
+      ].join('\n'), sandbox.hermesHome, fixture.mockUrl], {
         cwd: path.resolve(import.meta.dirname, '../../..'),
         env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root }
       })

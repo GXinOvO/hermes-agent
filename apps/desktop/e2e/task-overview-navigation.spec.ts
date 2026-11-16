@@ -26,11 +26,11 @@ test('captures a real source, reopens it after navigating away, and refuses a re
     'import sys',
     'db = SessionDB(db_path=Path(sys.argv[1]) / "state.db")',
     'for sid, text in [("exact-source-native", "Source conversation preserved"), ("other-source-native", "Other conversation marker")]:',
-    '    db.create_session(sid, source="desktop")',
+    '    db.create_session(sid, source="desktop", model="mock-model", model_config={"gateway_runtime": {"provider": "custom", "base_url": sys.argv[2] + "/v1", "api_mode": "chat_completions"}})',
     '    db.append_message(sid, role="user", content=text)',
     '    db.append_message(sid, role="assistant", content="Stored response for " + sid)',
     'db.close()'
-  ].join('\n'), sandbox.hermesHome], {
+  ].join('\n'), sandbox.hermesHome, mock.url], {
     cwd: root, env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root, PYTHONPATH: root }
   })
   let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined

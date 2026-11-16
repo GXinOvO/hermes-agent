@@ -11,7 +11,8 @@ import { taskAnalysisReply } from './task-analysis-fixture'
 
 const SOURCE = 'Verify the release on the target device before acceptance.'
 
-test('creates from a source, displays grounded analysis, and preserves it across restart', async () => {
+for (const compressed of [false, true]) {
+test(`creates from a ${compressed ? 'compressed tip' : 'source'}, displays grounded analysis, and preserves it across restart`, async () => {
   test.setTimeout(180000)
   const sandbox = createSandbox('task-analysis')
   const mock = await startMockServer({ replyForPrompt: taskAnalysisReply })
@@ -28,8 +29,12 @@ test('creates from a source, displays grounded analysis, and preserves it across
     'db.create_session("analysis-source", source="desktop", model="mock-model", model_config=route)',
     'db.append_message("analysis-source", role="user", content=sys.argv[2])',
     'db.append_message("analysis-source", role="assistant", content="Implementation ready; target-device acceptance remains pending.")',
+    'if sys.argv[4] == "true":',
+    '    assert db.try_acquire_compression_lock("analysis-source", "e2e-analysis")',
+    '    db.publish_compression_child(parent_session_id="analysis-source", child_session_id="analysis-tip", source="desktop", model="mock-model", model_config=route, messages=[{"role": "user", "content": "Continue the original request; target-device acceptance remains pending."}], compression_lock_holder="e2e-analysis")',
+    '    db.release_compression_lock("analysis-source", "e2e-analysis")',
     'db.close()'
-  ].join('\n'), sandbox.hermesHome, SOURCE, mock.url], {
+  ].join('\n'), sandbox.hermesHome, SOURCE, mock.url, String(compressed)], {
     cwd: root, env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root, PYTHONPATH: root }
   })
   let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
@@ -43,7 +48,7 @@ test('creates from a source, displays grounded analysis, and preserves it across
     const panel = page.getByRole('region', { name: 'Task follow-up', exact: true })
     await panel.getByRole('button', { name: 'New task', exact: true }).click()
     await panel.getByLabel('Task name', { exact: true }).fill('Release acceptance')
-    await panel.getByLabel('Session link', { exact: true }).fill('@session:default/analysis-source')
+    await panel.getByLabel('Session link', { exact: true }).fill(`@session:default/${compressed ? 'analysis-tip' : 'analysis-source'}`)
     await expect(panel.getByLabel('Description', { exact: true })).toHaveCount(0)
     await expect(panel.getByLabel('Remaining steps', { exact: true })).toHaveCount(0)
     await panel.getByRole('button', { name: 'Save task', exact: true }).click()
@@ -71,3 +76,4 @@ test('creates from a source, displays grounded analysis, and preserves it across
     sandbox.cleanup()
   }
 })
+}

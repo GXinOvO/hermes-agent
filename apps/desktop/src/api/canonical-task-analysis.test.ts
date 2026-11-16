@@ -14,7 +14,7 @@ for (const method of ['session.task_source', 'session.task_analysis']) {
     const server = new ws.WebSocketServer({ host: '127.0.0.1', port: 0 })
     await new Promise<void>(resolve => server.once('listening', resolve))
     const sent: string[] = []
-    let value = { session_id: 'source', stored_session_id: 'source', owner: exactSessionOwnerToWire(owner), authority_epoch: 3 }
+    let value = { session_id: 'source-root', resolved_id: 'source-tip', stored_session_id: 'source-tip', owner: exactSessionOwnerToWire(owner), authority_epoch: 3 }
     server.on('connection', (socket: any) => socket.on('message', (bytes: Buffer) => {
       const frame = JSON.parse(bytes.toString())
       sent.push(frame.method)
@@ -26,8 +26,8 @@ for (const method of ['session.task_source', 'session.task_analysis']) {
       const address = server.address() as { port: number }
       await client.connect(`ws://127.0.0.1:${address.port}/api/ws?native_dial=fixture&ticket=test`)
 
-      const params = { session_id: 'source', profile: 'default', expected_owner: exactSessionOwnerToWire(owner),
-        ...(method === 'session.task_analysis' ? { stored_id: 'source', task_id: 'matter', title: '目标' } : {}) }
+      const params = { session_id: method === 'session.task_source' ? 'source-tip' : 'source-root', profile: 'default', expected_owner: exactSessionOwnerToWire(owner),
+        ...(method === 'session.task_analysis' ? { stored_id: 'source-tip', task_id: 'matter', title: '目标' } : {}) }
 
       expect(await client.request(method, params)).toMatchObject(value)
       value = { ...value, owner: { ...value.owner, store_instance_id: 'replacement' } }

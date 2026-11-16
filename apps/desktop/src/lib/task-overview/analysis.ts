@@ -1,4 +1,4 @@
-import { exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview } from '@/lib/exact-session-owner'
+import { exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactTaskSource } from '@/lib/exact-session-owner'
 import { parseSessionRefValue } from '@/lib/session-refs'
 import { activeGatewayConnectionId, activeGatewayProfileKey, dialedGatewayModeFor, gatewayRouteState, openGatewayForAgent } from '@/store/gateway'
 
@@ -38,18 +38,8 @@ export async function resolveTaskSource(value: string): Promise<TaskReference> {
   const gateway = gatewayRouteState(connectionId, profile).gateway
 
   if (!gateway || !mode) { throw new Error('来源连接不可用。') }
-  const runtime = await gateway.request<any>('runtime.describe')
-  const owner = exactSessionOwnerFromWire(runtime)
-
-  if (!owner || !runtime.capabilities?.includes('task-analysis-v1')) {
-    throw new Error('此来源尚不支持事项分析，请更新对应后端。')
-  }
-
-  const result = await gateway.request<any>('session.task_source', {
-    session_id: parsed.sessionId, profile, expected_owner: exactSessionOwnerToWire(owner)
-  })
-
-  requireExactSessionOverview(result, parsed.sessionId, parsed.sessionId, owner)
+  const result = await gateway.request<any>('session.task_source', { session_id: parsed.sessionId, profile })
+  const owner = requireExactTaskSource(result, parsed.sessionId)
 
   if (gateway !== gatewayRouteState(connectionId, profile).gateway) { throw new Error('来源连接已变化，请重试。') }
 
@@ -72,12 +62,18 @@ export async function loadTaskAnalysis(task: Task, refresh = false): Promise<Tas
 
   if (!gateway) { throw new Error('来源连接不可用，保留上次分析结果。') }
 
+  const source = await gateway.request<any>('session.task_source', {
+    session_id: reference.storedId, profile: reference.targetProfile, expected_owner: exactSessionOwnerToWire(reference.expectedOwner)
+  })
+
+  requireExactTaskSource(source, reference.storedId, reference.expectedOwner)
+
   const result = await gateway.request<any>('session.task_analysis', {
-    session_id: reference.storedId, stored_id: reference.storedId, profile: reference.targetProfile,
+    session_id: source.session_id, stored_id: reference.storedId, profile: reference.targetProfile,
     expected_owner: exactSessionOwnerToWire(reference.expectedOwner), task_id: task.id, title: task.title, refresh
   }, refresh ? 180000 : undefined)
 
-  requireExactSessionOverview(result, reference.storedId, reference.storedId, reference.expectedOwner)
+  requireExactSessionOverview(result, source.session_id, reference.storedId, reference.expectedOwner)
 
   if (gateway !== gatewayRouteState(reference.connectionId, reference.profile).gateway || result.task_id !== task.id) {
     throw new Error('事项分析来源已变化，请重试。')

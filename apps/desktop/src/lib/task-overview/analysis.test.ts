@@ -28,9 +28,11 @@ const result = () => ({
   goal: { text: '检查发布', evidence: [{ row_id: 1, quote: '检查发布' }] }, completed: [], remaining: [], needs_user: []
 })
 
-const envelope = () => ({ session_id: 'session-a', stored_session_id: 'session-a', authority_epoch: 3, owner: fixture.owner, task_id: 'matter', analysis: result() })
+const source = () => ({ session_id: 'session-a', stored_session_id: 'session-a', resolved_id: 'session-a', authority_epoch: 3, owner: fixture.owner })
+const envelope = () => ({ ...source(), task_id: 'matter', analysis: result() })
+const respond = (analysis: unknown) => fixture.request.mockImplementation(async method => method === 'session.task_source' ? source() : analysis)
 
-beforeEach(() => { fixture.request.mockReset(); fixture.open.mockClear() })
+beforeEach(() => { fixture.request.mockReset(); fixture.open.mockClear(); respond(envelope()) })
 
 test('accepts the existing session reference and desktop hash forms', () => {
   expect(parseTaskSource('@session:work/session-a')).toEqual({ profile: 'work', sessionId: 'session-a' })
@@ -39,48 +41,60 @@ test('accepts the existing session reference and desktop hash forms', () => {
   expect(() => parseTaskSource('https://other.example/#/session-a')).toThrow('其他连接')
 })
 
-test('resolves a source on the explicit connection and profile without restoring a conversation', async () => {
-  fixture.request.mockResolvedValueOnce({ ...fixture.owner, capabilities: ['task-analysis-v1'] }).mockResolvedValueOnce(envelope())
+test('resolves on the explicit profile using its own source witness without restoring a conversation', async () => {
   expect(await resolveTaskSource('@session:work/session-a')).toEqual(primary)
-  expect(fixture.request.mock.calls.map(call => call[0])).toEqual(['runtime.describe', 'session.task_source'])
-  expect(fixture.request.mock.calls[0][1]).toBeUndefined()
-  expect(fixture.request).toHaveBeenLastCalledWith('session.task_source', {
-    session_id: 'session-a', profile: 'work', expected_owner: fixture.owner
-  })
+  expect(fixture.request).toHaveBeenCalledExactlyOnceWith('session.task_source', { session_id: 'session-a', profile: 'work' })
 })
 
-test('refuses replaced source witnesses and unsupported backends', async () => {
-  fixture.request.mockResolvedValueOnce({ ...fixture.owner, capabilities: ['task-analysis-v1'] })
-    .mockResolvedValueOnce({ ...envelope(), owner: { ...fixture.owner, store_instance_id: 'replacement' } })
+test('resolves and analyzes a compressed tip on its returned logical source', async () => {
+  const resolved = { ...source(), session_id: 'root-a', resolved_id: 'tip-b', stored_session_id: 'tip-a' }
+  fixture.request.mockImplementation(async method => method === 'session.task_source' ? resolved : { ...resolved, task_id: 'matter', analysis: result() })
+  const reference = await resolveTaskSource('@session:work/tip-a')
+  expect(reference).toEqual({ ...primary, storedId: 'tip-a' })
+  const compressed = createTask({ ...task(), primary: reference }, 1700000000000)
+  expect(await loadTaskAnalysis(compressed, true)).toEqual(result())
+  expect(fixture.request).toHaveBeenLastCalledWith('session.task_analysis', expect.objectContaining({
+    session_id: 'root-a', stored_id: 'tip-a', expected_owner: fixture.owner, refresh: true
+  }), 180000)
+})
+
+test('refuses a wrong echoed id, incomplete witness and an unsupported source method', async () => {
+  fixture.request.mockResolvedValueOnce({ ...source(), stored_session_id: 'other' })
   await expect(resolveTaskSource('session-a')).rejects.toThrow('来源会话身份')
-  fixture.request.mockResolvedValueOnce({ ...fixture.owner, capabilities: [] })
-  await expect(resolveTaskSource('session-a')).rejects.toThrow('更新对应后端')
+  fixture.request.mockResolvedValueOnce({ ...source(), owner: { instance_id: 'incomplete' } })
+  await expect(resolveTaskSource('session-a')).rejects.toThrow('来源会话身份')
+  fixture.request.mockRejectedValueOnce(new Error('unknown_method'))
+  await expect(resolveTaskSource('session-a')).rejects.toThrow('unknown_method')
 })
 
-test('reads a saved analysis without generating or mutating manual task fields', async () => {
-  fixture.request.mockResolvedValueOnce(envelope())
+test('refuses a replaced source witness before analysis and does not silently rebind', async () => {
+  fixture.request.mockResolvedValueOnce({ ...source(), owner: { ...fixture.owner, store_instance_id: 'replacement' } })
+  await expect(loadTaskAnalysis(task(), true)).rejects.toThrow('来源会话身份')
+  expect(fixture.request.mock.calls.map(call => call[0])).toEqual(['session.task_source'])
+})
+
+test('reads saved analysis without generation or manual task mutation', async () => {
   const original = task()
   expect(await loadTaskAnalysis(original)).toEqual(result())
-  expect(fixture.request.mock.calls[0][1]).toMatchObject({ refresh: false, task_id: 'matter', title: '检查发布' })
+  expect(fixture.request.mock.calls[1][1]).toMatchObject({ refresh: false, task_id: 'matter', title: '检查发布' })
   expect(original).toMatchObject({ status: 'unspecified', resolution: { state: 'open' } })
   expect(cachedTaskAnalysis(original)).toBeNull()
 })
 
-test('refreshes explicitly and rejects wrong task names and unsupported completion', async () => {
-  fixture.request.mockResolvedValueOnce(envelope())
+test('refreshes explicitly and rejects wrong tasks, names and unsupported completion', async () => {
   await loadTaskAnalysis(task(), true)
-  expect(fixture.request.mock.calls[0][1].refresh).toBe(true)
-  fixture.request.mockResolvedValueOnce({ ...envelope(), task_id: 'other' })
+  expect(fixture.request.mock.calls[1][1].refresh).toBe(true)
+  respond({ ...envelope(), task_id: 'other' })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('来源已变化')
-  fixture.request.mockResolvedValueOnce({ ...envelope(), analysis: { ...result(), title: '其他事项' } })
+  respond({ ...envelope(), analysis: { ...result(), title: '其他事项' } })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('名称不一致')
-  fixture.request.mockResolvedValueOnce({ ...envelope(), analysis: { ...result(), status: 'done' } })
+  respond({ ...envelope(), analysis: { ...result(), status: 'done' } })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('Invalid task analysis')
 })
 
 test('rejects claims without evidence and inconsistent coverage', async () => {
-  fixture.request.mockResolvedValueOnce({ ...envelope(), analysis: { ...result(), goal: { text: '凭空推断', evidence: [] } } })
+  respond({ ...envelope(), analysis: { ...result(), goal: { text: '凭空推断', evidence: [] } } })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('Invalid task analysis')
-  fixture.request.mockResolvedValueOnce({ ...envelope(), analysis: { ...result(), analyzed_messages: 3 } })
+  respond({ ...envelope(), analysis: { ...result(), analyzed_messages: 3 } })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('Invalid task analysis')
 })
