@@ -367,12 +367,18 @@ def _replace_queued_user_row_for_turn(session: dict, queued: dict, is_dispatchin
     # The DISPATCHING envelope's replacement carries no marker (its turn adopts the row immediately);
     # still-queued envelopes keep the never-drained marker (#125577) so a restart between drains
     # retires the row rather than gluing the never-run prompt into the previous turn.
+    from hermes_state_common import QUEUED_PROMPT_METADATA_KEY
+    source_row = None
+    if (early.get("display_metadata") or {}).get("submission_id"):
+        source_row = {**early, "display_metadata": {
+            key: value for key, value in early["display_metadata"].items()
+            if key != QUEUED_PROMPT_METADATA_KEY}}
     if is_dispatching:
-        _persist_submit_user_row(session, queued.get("text"), queued.get("_queued_display_kind"))
-    else:
-        from hermes_state_common import QUEUED_PROMPT_METADATA_KEY
         _persist_submit_user_row(session, queued.get("text"), queued.get("_queued_display_kind"),
-                                 accept_metadata={QUEUED_PROMPT_METADATA_KEY: True})
+                                 source_row=source_row)
+    else:
+        _persist_submit_user_row(session, queued.get("text"), queued.get("_queued_display_kind"),
+                                 accept_metadata={QUEUED_PROMPT_METADATA_KEY: True}, source_row=source_row)
     fresh = session.get("_submit_user_row")
     if not (isinstance(fresh, dict) and isinstance(fresh.get("_row_id"), int)):
         return None  # re-append wrote nothing: keep the accept-time row active
@@ -406,6 +412,7 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     after" message must NEVER become a live correction."""
     mode = "queue" if queued else _load_busy_input_mode()
     agent = session.get("agent")
+    previous_turn_user_input = False
     # Compression in flight demotes steer/interrupt to queue: a correction delivered
     # mid-compression aborts the compression instead of waiting for it (#61042). The
     # follow-up drains when compression finishes — the Discord-gateway contract.
@@ -415,6 +422,7 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
         if not session.get("running"):
             return None  # turn ended since prompt.submit's busy check; caller retries on the idle session
         # Typed while the turn ran, in any busy mode: the running turn no longer counts as unattended.
+        previous_turn_user_input = bool(session.get("_turn_user_input"))
         session["_turn_user_input"] = True
         image_paths = list(session.get("attached_images", []))
         if image_paths:
@@ -437,11 +445,27 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
             if image_paths:
                 session["attached_images"] = image_paths + list(session.get("attached_images", []))
             return None
+        old_queue = ([session["queued_prompt"]] if session.get("queued_prompt") else []) \
+            + list(session.get("queued_prompts") or [])
+        old_queue_text = {id(entry): entry.get("text") for entry in old_queue if isinstance(entry, dict)}
         envelope = _enqueue_prompt(session, text, transport, image_paths=image_paths, turn_author=turn_author)
         # Durable AT ACCEPT (not when the turn runs): a cold resume sees the queued message and a
         # backend restart cannot lose it. Lives on the envelope, never the shared session slot.
         if envelope is not None:
-            _persist_queued_user_row(session, envelope, display_kind)
+            try:
+                _persist_queued_user_row(session, envelope, display_kind)
+            except Exception as exc:
+                _ac_set_queue(session, old_queue)
+                for entry in old_queue:
+                    if isinstance(entry, dict) and id(entry) in old_queue_text:
+                        entry["text"] = old_queue_text[id(entry)]
+                session["_turn_user_input"] = previous_turn_user_input
+                if image_paths:
+                    session["attached_images"] = image_paths + list(session.get("attached_images", []))
+                from tui_gateway.input_provenance import InputProvenanceWriteError
+                if isinstance(exc, InputProvenanceWriteError):
+                    return {"jsonrpc": "2.0", "error": {"code": 5072, "message": "Session provenance could not be saved, so this message was not queued. Send it again."}, "id": rid}
+                raise
         session["last_active"] = time.time()
     # Attachments need their own model invocation: queue without cancelling so the user gets both results in order.
     # ``steer`` must NEVER escalate to a hard interrupt: it would kill the live turn AND drop ``AIAgent._pending_steer``

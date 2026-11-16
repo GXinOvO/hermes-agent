@@ -1,4 +1,5 @@
 """Transaction-scoped rewind shared by storage and canonical mutations."""
+import json
 from hermes_state_messages import _ACTIVE_IDS_SQL, _SET_COUNTERS_SQL, _placeholders
 
 
@@ -26,6 +27,36 @@ def rewind_in_transaction(self, conn, session_id, target_message_id, *,
                                      (session_id, target_message_id)).fetchall()]
     if ids:
         conn.execute(f"UPDATE messages SET active = 0 WHERE id IN ({_placeholders(ids)})", ids)
+        lineage_ids = self._expand_compression_lineage(conn, [session_id])
+        uids = [row[0] for row in conn.execute(
+            f"SELECT message_uid FROM messages WHERE role='user' AND id IN ({_placeholders(ids)}"
+            ") AND message_uid IS NOT NULL", ids)]
+        metadata_rows = conn.execute(
+            f"SELECT id,role,display_metadata FROM messages WHERE session_id=? AND id IN ({_placeholders(ids)})",
+            (session_id, *ids)).fetchall()
+        if uids and lineage_ids:
+            metadata_rows += conn.execute(
+                f"SELECT id,role,display_metadata FROM messages WHERE session_id IN ({_placeholders(lineage_ids)}) "
+                f"AND role='user' AND message_uid IN ({_placeholders(uids)})",
+                (*lineage_ids, *uids)).fetchall()
+        seen_metadata_ids = set()
+        for row in metadata_rows:
+            if row["id"] in seen_metadata_ids:
+                continue
+            seen_metadata_ids.add(row["id"])
+            if row["role"] != "user":
+                continue
+            try:
+                metadata = json.loads(row["display_metadata"] or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if "submission_id" not in metadata:
+                continue
+            metadata.pop("submission_id", None)
+            conn.execute("UPDATE messages SET display_metadata=?, platform_message_id=NULL WHERE id=?",
+                         (self._encode_display_metadata(metadata), row["id"]))
     if replacement is not None:
         self._insert_message_rows(conn, session_id, [replacement])
         replacement_message_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])

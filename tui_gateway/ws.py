@@ -151,6 +151,7 @@ class WSTransport:
         #: for legacy-token/stdio. RPC params can never populate it: sole identity authority for relay authorship
         #: and for the ``user_id`` the agent is built with (``server._session_auth_user_id``).
         self.auth_identity = auth_identity
+        self.verified_operator = False
         self.desktop_local = False
         #: The served profile home whose skin this peer follows (None = the launch home); see change_watcher.
         self.skin_home: str | None = None
@@ -398,7 +399,14 @@ async def _dispatch_request(authority_connection: Any, req: Any, req_method: Any
         return None
     with serving_local_desktop(getattr(transport, "desktop_local", False)):
         if authority_connection is None:
-            return await asyncio.to_thread(server.dispatch, req, transport)
+            from tui_gateway.input_provenance import inbound_input_scope, record_accepted_input
+            with inbound_input_scope(req, transport):
+                response = await asyncio.to_thread(server.dispatch, req, transport)
+                try:
+                    await asyncio.to_thread(record_accepted_input, response)
+                except Exception:  # health: allow BLE001 -- receipt failure must not negate an accepted input
+                    _log.exception("accepted input source receipt failed peer=%s", transport._peer)
+                return response
         resp = await authority_connection.dispatch(req)
         actor = authority_connection.actor
         if (_is_unknown_method(resp) and req_method in server._methods
@@ -648,6 +656,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
         _disable_nagle(ws)
         _log.info("ws accepted peer=%s", peer)
         transport = WSTransport(ws, asyncio.get_running_loop(), peer=peer, auth_identity=auth_identity)
+        transport.verified_operator = operator is True
         authority_connection = _authority_connection(ws, transport, auth_identity, operator)
         # resolve_skin() is sync I/O + CPU; pooled so the read loop can drain the frontend's initial RPC burst.
         skin_payload = await asyncio.to_thread(server.resolve_skin)
