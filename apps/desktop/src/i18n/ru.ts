@@ -26,10 +26,12 @@ import { ruSharedMetrics } from './ru_shared_metrics'
 import { ruThemePicker } from './ru_theme_picker'
 import { ruUpdateChannel } from './ru_update_channel'
 import { ruSessionReview } from './session-review-locales'
+import { ruTaskAnalysis } from './task-analysis-locales'
 
 export const ruOverrides = {
   sessionReview: ruSessionReview,
   taskOverview: {
+    ...ruTaskAnalysis,
     attention: "Внимание",
     attentionEmpty: "Нет задач, требующих внимания",
     addRelated: "Добавить текущий разговор как связанный",

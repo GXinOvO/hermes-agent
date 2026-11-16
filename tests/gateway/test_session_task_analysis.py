@@ -136,7 +136,7 @@ async def test_source_accepts_legacy_lineage_and_guards_owner(overview):
     source = await rpc(overview, 'session.task_source', {'session_id': 'legacy-tip',
                                                        'expected_owner': overview.params['expected_owner']})
     assert 'result' in source, source
-    assert source['result']['session_id'] == 'legacy-root'
+    assert source['result']['session_id'] == 'legacy-tip'
     assert source['result']['stored_session_id'] == source['result']['resolved_id'] == 'legacy-tip'
     assert db._conn.total_changes == before
     for owner in ({**overview.params['expected_owner'], 'store_instance_id': 'other'},

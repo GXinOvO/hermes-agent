@@ -1,3 +1,4 @@
+import { openExactSession } from '@/lib/exact-session'
 import { exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactTaskSource } from '@/lib/exact-session-owner'
 import { parseSessionRefValue } from '@/lib/session-refs'
 import { activeGatewayConnectionId, activeGatewayProfileKey, dialedGatewayModeFor, gatewayRouteState, openGatewayForAgent } from '@/store/gateway'
@@ -44,6 +45,35 @@ export async function resolveTaskSource(value: string): Promise<TaskReference> {
   if (gateway !== gatewayRouteState(connectionId, profile).gateway) { throw new Error('来源连接已变化，请重试。') }
 
   return { connectionId, profile, targetProfile: profile, mode, storedId: result.stored_session_id, expectedOwner: owner }
+}
+
+export async function openTaskSource(reference: TaskReference): Promise<void> {
+  if (reference.unverified || !reference.connectionId || !reference.profile || !reference.targetProfile ||
+      !reference.mode || !isExactSessionOwner(reference.expectedOwner)) {
+    throw new Error('来源尚未核实，请重新关联当前会话后再打开。')
+  }
+
+  await openGatewayForAgent(reference.connectionId, reference.profile)
+  const gateway = gatewayRouteState(reference.connectionId, reference.profile).gateway
+
+  if (!gateway) { throw new Error('来源连接不可用。') }
+
+  const source = await gateway.request<any>('session.task_source', {
+    session_id: reference.storedId, profile: reference.targetProfile, expected_owner: exactSessionOwnerToWire(reference.expectedOwner)
+  })
+
+  requireExactTaskSource(source, reference.storedId, reference.expectedOwner)
+
+  if (gateway !== gatewayRouteState(reference.connectionId, reference.profile).gateway) { throw new Error('来源连接已变化，请重试。') }
+
+  await openExactSession({
+    storedId: source.session_id,
+    connectionId: reference.connectionId,
+    profile: reference.profile,
+    targetProfile: reference.targetProfile,
+    mode: reference.mode,
+    expectedOwner: reference.expectedOwner
+  })
 }
 
 export function cachedTaskAnalysis(task: Task): TaskAnalysis | null {

@@ -28,10 +28,12 @@ import { jaSharedMetrics } from './ja_shared_metrics'
 import { jaThemePicker } from './ja_theme_picker'
 import { jaUpdateChannel } from './ja_update_channel'
 import { jaSessionReview } from './session-review-locales'
+import { jaTaskAnalysis } from './task-analysis-locales'
 
 export const jaOverrides = {
   sessionReview: jaSessionReview,
   taskOverview: {
+    ...jaTaskAnalysis,
     attention: "要確認",
     attentionEmpty: "確認が必要な事項はありません",
     addRelated: "現在の会話を関連付ける",
