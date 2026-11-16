@@ -82,16 +82,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Two slices: on the old free standard runner (3 cores, 3 workers) one lane ran
-          # ~7.5 min and became the slowest required job once the Linux suite split.
-          - name: macOS-only tests (1/2)
+          # Four slices. Measured on PR #70: two slices put 19.2 min of tests on
+          # each 3-core macos-15-intel runner and, with the 5.7 min dependency
+          # lock, made this lane the slowest required job at ~26 min. Four
+          # slices bring the tests to ~10 min; the two extra dependency setups
+          # cost ~12 job-minutes and nothing in wall clock.
+          - name: macOS-only tests (1/4)
             runner: macos-15-intel
             marker: macos
-            slice: 1/2
-          - name: macOS-only tests (2/2)
+            slice: 1/4
+          - name: macOS-only tests (2/4)
             runner: macos-15-intel
             marker: macos
-            slice: 2/2
+            slice: 2/4
+          - name: macOS-only tests (3/4)
+            runner: macos-15-intel
+            marker: macos
+            slice: 3/4
+          - name: macOS-only tests (4/4)
+            runner: macos-15-intel
+            marker: macos
+            slice: 4/4
           - name: Windows-only tests (1/4)
             runner: windows-2025
             marker: windows

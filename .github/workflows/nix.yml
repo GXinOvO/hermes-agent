@@ -11,7 +11,9 @@ name: Nix flake check
 # fast required jobs beside it. A separate run reruns and cancels on its own.
 
 on:
-  pull_request:
+  # No ``pull_request`` trigger: the flake check costs a full toolchain download
+  # per PR and no lane ever publishes from it. Main pushes and the release path
+  # still run it.
   push:
     branches: [main]
   workflow_call:
