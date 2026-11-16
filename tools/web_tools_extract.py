@@ -91,7 +91,7 @@ def _validate_extract_urls(urls: list[Any]):
     """Normalize model-supplied items and block URLs carrying secrets (percent-encoded forms are unquoted
     and checked too). Returns ``(normalized_urls, normalized_indices, invalid_urls, blocked_json)``;
     ``blocked_json`` is a whole-call refusal (exfiltration prevention) or None."""
-    from agent.redact_prefixes import _PREFIX_RE
+    from agent.redact import _PREFIX_RE
     from urllib.parse import unquote
 
     normalized_urls, normalized_indices, invalid_urls = [], [], {}
