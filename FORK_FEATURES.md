@@ -34,7 +34,7 @@
 | F22 | 会话预览过滤模型切换通知 | 新会话先切模型时，侧栏预览跳过 `model_switch` 内部行；后续真实问题正常显示，只有通知时预览为空；不改历史消息 | `hermes_state_common.py`、`tests/hermes_state/test_session_preview.py`；远端 `dev` 基线已复现，补丁通过 SessionDB 相关测试；运行安装待重载 |
 | F23 | 分叉 CI：PR 不自动跑、按需才算 | 开 PR 不再启动任何流水线（原来每次 25–55 分钟、约 280 job-分钟）；验证改在本机 `scripts/run_tests.sh`，需要时 `gh workflow run ci.yaml --ref <branch>` 手动跑。同时把 macOS 检查拆成 4 片（单 job 约 26 → 16 分钟），去掉 Docker/Nix 的 PR 触发，修好两个排队 24 小时后被取消的 blacksmith 残留 | `.github/workflows/ci.yaml`、`tests-os.yml`、`docker.yml`、`nix.yml`、`ci-review-comment.yml`、`js-autofix.yml`、`plugin-catalog-ci.yml`、`pm-bundle.yml`、`sandbox-image.yml`、`termux-verify.yml`、`windows-bundle-sdk.yml`；不变式测试通过；“PR 不再触发”待新 PR 读回 |
 | F24 | Cron 安全安装准入与可恢复发布 | 安装期间以 profile 共享/独占门阻止 claim、execution、jobs/tick 及协作 writer；持久 marker、owner/capability、发布 journal 与 target 身份漂移检查支持中断后安全恢复 | `cron/install_gate.py`、`cron/install_capability.py`、PM publication/recovery；Linux/POSIX 402 项回归及真实控制 socket 安装/恢复验证通过，独审 PASS；待生产采用 |
-| F25 | 内置记忆维护来源与发布门禁 | 对固定每日维护作业绑定来源、运行快照和全部写入口；来源不完整时只允许精确去重，发布失败不得报告成功 | `cron/memory_audit_policy.py`、`tools/memory_tool_store.py`；Linux/POSIX 隔离候选，超时监管、依赖绑定与锁生命周期回归通过，当前基线独审和运行采用待验收 |
+| F25 | 内置记忆维护来源与发布门禁 | 对固定每日维护作业绑定来源、运行快照和全部写入口；来源不完整时只允许精确去重，发布失败不得报告成功。Desktop 输入来源修复在真实接收时记录凭据，不回填历史 | `cron/memory_audit_policy.py`、`tools/memory_tool_store.py`、`tui_gateway/input_provenance.py`；维护作业已合入，Desktop 来源修复仍是隔离候选，最终审查、运行采用及真实新消息验证待完成 |
 
 ## 使用时需要记住的边界
 

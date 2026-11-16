@@ -862,6 +862,8 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    from tui_gateway.input_provenance import bind_input
+    bind_input(session, text, display_kind)
     from tools.bot_relay import DeliveryAuthor
 
     # Only the relay handler can build a DeliveryAuthor. A dict here is a client claiming a sender.
@@ -896,9 +898,10 @@ def _(rid, params: dict) -> dict:
         # A rewind replays what the transcript shows: re-expand a skill invocation or
         # `/work fix it` sends nine literal chars.
         text = _expand_skill_invocation_for_replay(text, str(session.get("session_key") or ""))
-    turn_isolation = _session_uses_compute_host(session, _load_dashboard_process_isolation_config())
-    if internal_hosted_submit and turn_isolation:
+    turn_isolation_requested = _session_uses_compute_host(session, _load_dashboard_process_isolation_config())
+    if internal_hosted_submit and turn_isolation_requested:
         return _err(rid, 4121, "hosted room turns do not support isolated compute workers yet")
+    turn_isolation = turn_isolation_requested and _ensure_session_db_row(session) is not False
     # Re-bind to the current transport: streaming must stay on the active websocket even
     # if a disconnect/fallback moved the session to stdio. Through _rebind_live_transport so a
     # socket that already closed cannot cancel the orphan reap without coming back (#116464).
