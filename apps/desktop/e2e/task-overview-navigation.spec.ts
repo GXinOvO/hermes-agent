@@ -67,7 +67,7 @@ test('captures a real source, reopens it after navigating away, and refuses a re
     await expect(retained.getByRole('button', { name: /Exact source matter/ })).toBeVisible({ timeout: 30_000 })
     await expect(retained.getByRole('button', { name: 'Open source session', exact: true })).toBeDisabled()
     await expect(retained.getByText('Source activity: Source unavailable', { exact: true })).toBeVisible()
-    await expect(retained.getByRole('alert')).toHaveCount(0)
+    await expect(retained.getByRole('alert')).toContainText('session_owner_changed')
   } finally {
     await app?.close().catch(() => undefined)
     await mock.close()
