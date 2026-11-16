@@ -213,12 +213,12 @@ def saved_backend_scope(binding):
         _active.reset(token)
 
 
-def _search_preflight_error(path):
+def _path_preflight_error(path, verb):
     from agent.file_safety import get_nt_namespace_error, get_read_block_error
-    if not isinstance(path, str):
+    if verb is None or not isinstance(path, str):
         return None
-    error = get_nt_namespace_error(path, verb='Search')
-    if not error and os.path.isabs(path):
+    error = get_nt_namespace_error(path, verb=verb)
+    if not error and verb == 'Search' and os.path.isabs(path):
         error = get_read_block_error(path)
     return error
 
@@ -232,10 +232,9 @@ def file_backend_call(fn):
         bound.apply_defaults()
         task_id = bound.arguments.get('task_id', 'default')
         header_paths: list[str] = []
-        if fn.__name__ == 'search_tool':
-            error = _search_preflight_error(bound.arguments['path'])
-            if error:
-                return json.dumps({'error': error})
+        verb = {'search_tool': 'Search', 'write_file_tool': 'Write', 'patch_tool': 'Write'}.get(fn.__name__)
+        if error := _path_preflight_error(bound.arguments.get('path'), verb):
+            return json.dumps({'error': error})
         if fn.__name__ == 'write_file_tool':
             from tools.file_tools_write_guards import _check_sensitive_path, _is_internal_file_tool_content
             path = bound.arguments['path']
