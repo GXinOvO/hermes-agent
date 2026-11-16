@@ -20,6 +20,25 @@ function input(overrides: Record<string, unknown> = {}) {
 }
 
 describe('task overview domain model', () => {
+  it('preserves source-bound analysis separately from manual state and acceptance', () => {
+    const primary = { storedId: 'source', connectionId: 'local', profile: 'default', targetProfile: 'default', mode: 'local' as const }
+
+    const result = {
+      version: 1, title: '核对事项', analyzed_at: at, conversation_revision: [1], stale: false, scope: 'single_conversation',
+      message_count: 2, analyzed_messages: 2, limitations: [], status: 'awaiting_acceptance',
+      goal: { text: '核对结果', evidence: [{ row_id: 1, quote: '核对结果' }] }, completed: [], remaining: [], needs_user: []
+    }
+
+    const analysis = { title: '核对事项', referenceKey: taskReferenceKey(primary), result }
+    const task = createTask(input({ primary, analysis }), at)
+
+    expect(validateTasks([task])[0]).toMatchObject({ analysis, status: 'todo', resolution: { state: 'open' } })
+    expect(applyTaskAction(task, { type: 'accept', note: '人工确认', at: at + 1 })).toMatchObject({ analysis, status: 'done' })
+    const relinked = applyTaskAction(task, { type: 'set_primary', primary: { ...primary, storedId: 'other' }, at: at + 1 })
+    expect(relinked.analysis).toBeUndefined()
+    expect(validateTasks([{ ...task, title: '另一事项' }])[0].analysis).toBeUndefined()
+  })
+
   it('does not allow completion without explicit acceptance', () => {
     const task = createTask(input(), at)
 

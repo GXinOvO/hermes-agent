@@ -347,6 +347,9 @@ class AuthorityConnection:
         handlers.update(stored_read_handlers(self))
         from gateway.session_task_overview import task_overview
         handlers['session.task_overview'] = partial(task_overview, self)
+        from gateway.session_task_analysis import task_analysis, task_source
+        handlers['session.task_source'] = partial(task_source, self)
+        handlers['session.task_analysis'] = partial(task_analysis, self)
         return handlers
 
     async def dispatch(self, request):
@@ -414,7 +417,7 @@ class AuthorityConnection:
             except RuntimeStoreError as exc:
                 return {'jsonrpc': '2.0', 'id': rid, 'error': {
                     'code': 4001, 'message': exc.reason, 'data': _refusal_data(exc)}}
-        if (method != 'session.task_overview'
+        if (method not in {'session.task_overview', 'session.task_source', 'session.task_analysis'}
                 and isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
                 and ref.profile_id == getattr(authority, 'profile_id', None)
                 and ref.session_id not in getattr(authority, 'sessions', {ref.session_id: None})):
@@ -644,7 +647,7 @@ class AuthorityConnection:
                 'store_instance_id': await self._read_store_instance_id(),
                 'capabilities': ['durable-admission-v1', 'event-replay-v1', 'local-cli-create-v1', 'acp-editor-policy-v1',
                                  'acp-session-mcp-v1', 'clarify-batch-v1', 'plugin-rpc-v1', 'session-client-v1', 'session-transcript-v1', 'session-list-picker-v1',
-                                 'session-list-cursor-v1'],
+                                 'session-list-cursor-v1', 'task-analysis-v1'],
                 'session_create': {'sources': sorted(SURFACES),
                                    'parameters': sorted(CREATE_FIELDS | {'title'})},
                 # Main's ``gateway.ready.skin``: the canonical client's own ready carries it.

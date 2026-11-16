@@ -8,11 +8,12 @@ import { startMockServer } from '../../../tests-js/scripts/mock-server'
 
 import { buildAppEnv, createSandbox, launchDesktop, waitForAppReady } from './fixtures'
 import { stopSandboxGatewayDaemons } from './run-tmp-reaper'
+import { taskAnalysisReply } from './task-analysis-fixture'
 
 test('captures a real source, reopens it after navigating away, and refuses a restarted owner', async () => {
   test.setTimeout(180_000)
   const sandbox = createSandbox('exact-task-source')
-  const mock = await startMockServer()
+  const mock = await startMockServer({ replyForPrompt: taskAnalysisReply })
   const root = path.resolve(import.meta.dirname, '../../..')
   const python = process.env.HERMES_DESKTOP_PYTHON
 
@@ -25,11 +26,11 @@ test('captures a real source, reopens it after navigating away, and refuses a re
     'import sys',
     'db = SessionDB(db_path=Path(sys.argv[1]) / "state.db")',
     'for sid, text in [("exact-source-native", "Source conversation preserved"), ("other-source-native", "Other conversation marker")]:',
-    '    db.create_session(sid, source="desktop")',
+    '    db.create_session(sid, source="desktop", model="mock-model", model_config={"gateway_runtime": {"provider": "custom", "base_url": sys.argv[2] + "/v1", "api_mode": "chat_completions"}})',
     '    db.append_message(sid, role="user", content=text)',
     '    db.append_message(sid, role="assistant", content="Stored response for " + sid)',
     'db.close()'
-  ].join('\n'), sandbox.hermesHome], {
+  ].join('\n'), sandbox.hermesHome, mock.url], {
     cwd: root, env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root, PYTHONPATH: root }
   })
   let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined
@@ -46,10 +47,8 @@ test('captures a real source, reopens it after navigating away, and refuses a re
     const panel = page.getByRole('region', { name: 'Task follow-up', exact: true })
     await panel.getByRole('button', { name: 'New task', exact: true }).click()
     await panel.getByLabel('Task name', { exact: true }).fill('Exact source matter')
-    await panel.getByLabel('Remaining steps', { exact: true }).fill('Return to the same source')
-    await panel.getByRole('button', { name: 'Save task', exact: true }).click()
     await panel.getByRole('button', { name: 'Link current conversation', exact: true }).click()
-    await panel.getByRole('button', { name: 'Confirm link', exact: true }).click()
+    await panel.getByRole('button', { name: 'Save task', exact: true }).click()
     await expect(panel.getByText('exact-source-native', { exact: true })).toBeVisible()
     await expect(panel.getByRole('button', { name: 'Open source session', exact: true })).toBeEnabled()
     await sidebar.getByText('Other conversation marker', { exact: true }).click()
@@ -68,7 +67,7 @@ test('captures a real source, reopens it after navigating away, and refuses a re
     await expect(retained.getByRole('button', { name: /Exact source matter/ })).toBeVisible({ timeout: 30_000 })
     await expect(retained.getByRole('button', { name: 'Open source session', exact: true })).toBeDisabled()
     await expect(retained.getByText('Source activity: Source unavailable', { exact: true })).toBeVisible()
-    await expect(retained.getByRole('alert')).toHaveCount(0)
+    await expect(retained.getByRole('alert')).toContainText('session_owner_changed')
   } finally {
     await app?.close().catch(() => undefined)
     await mock.close()

@@ -3,7 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n'
-import type { TaskReference } from '@/lib/task-overview/model'
+import type { TaskAnalysis } from '@/lib/task-overview/analysis-model'
+import type { Task, TaskReference } from '@/lib/task-overview/model'
+import { taskReferenceKey } from '@/lib/task-overview/model'
 import type * as TaskStorage from '@/lib/task-overview/store'
 import { $sessions } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
@@ -14,7 +16,7 @@ import { makeSessionInfo } from '@/test/session-info'
 import { TaskOverviewPane } from './task-overview-pane'
 
 const fixture = vi.hoisted(() => {
-  const task = {
+  const task: Task = {
     version: 1,
     id: 'task-1',
     title: '核对事项',
@@ -31,15 +33,35 @@ const fixture = vi.hoisted(() => {
   }
 
   const store = {
-    list: vi.fn(async () => [{ task, revision: 1 }]),
-    create: vi.fn(() => new Promise(() => {})),
-    replace: vi.fn(async next => ({ task: next, revision: 2 })),
+    list: vi.fn(async (): Promise<TaskStorage.TaskRow[]> => [{ task, revision: 1 }]),
+    create: vi.fn((_input: Record<string, unknown>, _at: number) => new Promise<TaskStorage.TaskRow>(() => {})),
+    replace: vi.fn(async (next: Task, _revision: number) => ({ task: next, revision: 2 })),
     changePrimary: vi.fn(async (_id: string, _revision: number, primary: TaskReference, _at: number) => ({ task: { ...task, primary }, revision: 2 })),
+    saveAnalysis: vi.fn(),
     close: vi.fn()
   }
 
-  return { task, store, open: vi.fn(async () => store) }
+  const primary: TaskReference = {
+    storedId: 'source-session', connectionId: 'source-a', profile: 'default', targetProfile: 'worker', mode: 'remote',
+    expectedOwner: { instanceId: 'owner-a', profileId: '/profiles/worker', authorityEpoch: 3, storeInstanceId: 'store-a' }
+  }
+
+  const result: TaskAnalysis = {
+    version: 1, title: task.title, analyzed_at: 1_700_000_000_000, conversation_revision: 'revision-1', stale: false,
+    scope: 'single_conversation', message_count: 8, analyzed_messages: 6, limitations: ['Earlier tool output omitted'],
+    status: 'awaiting_acceptance', goal: { text: '核对交付结果', evidence: [{ row_id: 12, quote: '请核对交付结果原文' }] },
+    completed: [{ text: '完成候选实现', evidence: [{ row_id: 13, quote: '候选实现已生成' }] }], remaining: [], needs_user: []
+  }
+
+  return { task, store, primary, result, resolve: vi.fn(async (_value: string) => primary), load: vi.fn(async (_task: Task, _refresh?: boolean): Promise<TaskAnalysis | null> => null), open: vi.fn(async () => store) }
 })
+
+vi.mock('@/lib/task-overview/analysis', () => ({
+  resolveTaskSource: fixture.resolve,
+  loadTaskAnalysis: fixture.load,
+  cachedTaskAnalysis: (task: { title: string; primary: TaskReference | null; analysis?: { title: string; referenceKey: string; result: unknown } }) =>
+    task.analysis?.title === task.title && task.analysis.referenceKey === taskReferenceKey(task.primary) ? task.analysis.result : null
+}))
 
 vi.mock('@/lib/task-overview/store', async importOriginal => ({
   ...await importOriginal<typeof TaskStorage>(),
@@ -55,6 +77,9 @@ beforeEach(() => {
   fixture.store.replace.mockClear()
   fixture.store.close.mockClear()
   fixture.store.changePrimary.mockClear()
+  fixture.store.saveAnalysis.mockReset()
+  fixture.resolve.mockReset().mockResolvedValue(fixture.primary)
+  fixture.load.mockReset().mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -67,11 +92,112 @@ afterEach(() => {
 })
 
 describe('task overview acceptance', () => {
+  it('keeps a newer manual edit when an older analysis save returns late', async () => {
+    let release!: (row: TaskStorage.TaskRow) => void
+    fixture.store.list.mockResolvedValueOnce([{ task: { ...fixture.task, primary: fixture.primary }, revision: 1 }])
+    fixture.load.mockResolvedValueOnce(fixture.result)
+    fixture.store.saveAnalysis.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    fixture.store.replace.mockImplementationOnce(async next => ({ task: next, revision: 3 }))
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
+    await waitFor(() => expect(fixture.store.saveAnalysis).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '编辑事项' }))
+    fireEvent.click(screen.getByText('补充或纠正'))
+    fireEvent.change(screen.getByLabelText('说明'), { target: { value: '保留最新人工说明' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存事项' }))
+    await screen.findByText('保留最新人工说明')
+    await act(async () => release({ task: { ...fixture.task, primary: fixture.primary }, revision: 2 }))
+    expect(screen.getByText('保留最新人工说明')).toBeTruthy()
+  })
+
+  it('locks submission while resolving the source and keeps unresolved tasks unsaved', async () => {
+    let reject!: (error: Error) => void
+    fixture.resolve.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
+    await waitFor(() => expect((screen.getByRole('button', { name: '新建事项' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '新建事项' }))
+    fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '解析中的事项' } })
+    fireEvent.change(screen.getByLabelText('会话链接'), { target: { value: 'bad-session' } })
+    const form = screen.getByLabelText('事项名称').closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    expect(fixture.resolve).toHaveBeenCalledTimes(1)
+    await act(async () => reject(new Error('会话不存在')))
+    expect((await screen.findByRole('alert')).textContent).toContain('会话不存在')
+    expect(fixture.store.create).not.toHaveBeenCalled()
+    expect(screen.queryByText('事项存储不可用')).toBeNull()
+  })
+
+  it('creates with a captured current source and keeps the task when analysis fails', async () => {
+    fixture.store.list.mockResolvedValueOnce([])
+    fixture.store.create.mockImplementationOnce(async input => ({ task: { ...fixture.task, ...input }, revision: 1 }))
+    fixture.load.mockRejectedValueOnce(new Error('model offline')).mockResolvedValueOnce(null)
+    const capture = vi.fn(async () => fixture.primary)
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane captureSession={capture} /></I18nProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '新建事项' }))
+    fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '保留的事项' } })
+    fireEvent.click(screen.getByRole('button', { name: '关联当前会话' }))
+    await screen.findByText('已关联会话: worker / source-session')
+    fireEvent.click(screen.getByRole('button', { name: '保存事项' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('model offline')
+    expect(screen.getByRole('button', { name: /保留的事项/ })).toBeTruthy()
+    expect(screen.queryByText('事项存储不可用')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(fixture.load).toHaveBeenCalledTimes(2))
+    expect(fixture.load.mock.calls.map(call => call[1])).toEqual([true, true])
+    expect(fixture.resolve).not.toHaveBeenCalled()
+    expect(fixture.store.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the revision returned by analysis when editing the task', async () => {
+    fixture.store.list.mockResolvedValueOnce([{ task: { ...fixture.task, primary: fixture.primary }, revision: 1 }])
+    fixture.load.mockResolvedValueOnce(fixture.result)
+    fixture.store.saveAnalysis.mockResolvedValueOnce({ task: { ...fixture.task, primary: fixture.primary }, revision: 7 })
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
+    await waitFor(() => expect(fixture.store.saveAnalysis).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '编辑事项' }))
+    fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '人工修改名称' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存事项' }))
+    await waitFor(() => expect(fixture.store.replace).toHaveBeenCalledWith(expect.objectContaining({ title: '人工修改名称' }), 7))
+  })
+
+  it('reads saved analysis without refreshing and exposes the original evidence', async () => {
+    fixture.store.list.mockResolvedValueOnce([{ task: { ...fixture.task, primary: fixture.primary }, revision: 1 }])
+    fixture.load.mockResolvedValueOnce(fixture.result)
+    fixture.store.saveAnalysis.mockResolvedValueOnce({ task: { ...fixture.task, primary: fixture.primary }, revision: 2 })
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
+    expect(await screen.findByText('核对交付结果')).toBeTruthy()
+    expect(fixture.load).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' }), false)
+    expect(fixture.load).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getAllByText('查看依据')[0])
+    expect(screen.getByText('请核对交付结果原文')).toBeTruthy()
+    expect(screen.getByText('消息行 12')).toBeTruthy()
+    expect(screen.getByText('分析判断: 待验收')).toBeTruthy()
+    expect(screen.getByText('状态: 待做 · 优先级: 普通')).toBeTruthy()
+    expect(fixture.store.replace).not.toHaveBeenCalled()
+  })
+
+  it('creates from a name and resolved source then analyzes once', async () => {
+    fixture.store.list.mockResolvedValueOnce([])
+    fixture.store.create.mockImplementationOnce(async input => ({ task: { ...fixture.task, ...input }, revision: 1 }))
+    render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '新建事项' }))
+    fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '新事项' } })
+    expect((screen.getByRole('button', { name: '保存事项' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByLabelText('说明')).toBeNull()
+    fireEvent.change(screen.getByLabelText('会话链接'), { target: { value: '@session:worker/source-session' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存事项' }))
+    await waitFor(() => expect(fixture.store.create).toHaveBeenCalledWith(expect.objectContaining({ title: '新事项', primary: fixture.primary }), expect.any(Number)))
+    await waitFor(() => expect(fixture.load).toHaveBeenCalledWith(expect.objectContaining({ title: '新事项', primary: fixture.primary }), true))
+    expect(fixture.resolve).toHaveBeenCalledWith('@session:worker/source-session')
+    expect(screen.queryByText('事项存储不可用')).toBeNull()
+  })
+
   it('does not submit a second task while the first creation is pending', async () => {
     render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
     await screen.findByRole('button', { name: /核对事项/ })
     fireEvent.click(screen.getByRole('button', { name: '新建事项' }))
     fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '一次提交' } })
+    fireEvent.change(screen.getByLabelText('会话链接'), { target: { value: 'source-session' } })
     const save = screen.getByRole('button', { name: '保存事项' })
     fireEvent.click(save)
     fireEvent.click(save)
@@ -206,6 +332,7 @@ describe('task overview acceptance', () => {
     await screen.findByRole('button', { name: /核对事项/ })
     fireEvent.click(screen.getByRole('button', { name: '编辑事项' }))
     fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '更新后的事项' } })
+    fireEvent.click(screen.getByText('补充或纠正'))
     fireEvent.change(screen.getByLabelText('说明'), { target: { value: '业务目标' } })
     fireEvent.change(screen.getByLabelText('备注'), { target: { value: '需要核对的证据' } })
     fireEvent.change(screen.getByLabelText('剩余步骤'), { target: { value: '核对输出\n完成审查' } })

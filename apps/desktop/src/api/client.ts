@@ -9,7 +9,7 @@ import {
 import { map, type MapStore } from 'nanostores'
 
 import type { HermesApiRequest } from '@/global'
-import { type ExactSessionOwner, exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactSessionSnapshot, sameExactSessionOwner } from '@/lib/exact-session-owner'
+import { type ExactSessionOwner, exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactSessionSnapshot, requireExactTaskSource, sameExactSessionOwner } from '@/lib/exact-session-owner'
 
 import { CanonicalDesktopProtocol, canonicalProfile, canonicalPromptParams, canonicalSessionKey, openGatewaySocket, recordCanonicalOwner, splitRewindSubmit } from './canonical-protocol'
 import { DialReadiness, GATEWAY_NOT_CONNECTED_MESSAGE, remainingRequestBudget } from './dial-readiness'
@@ -147,8 +147,10 @@ export class HermesGateway extends JsonRpcGatewayClient {
 
     if (!owner) { throw new Error('来源身份凭据不完整，请重新绑定来源会话。') }
 
-    if (method === 'session.task_overview') {
-      requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? ''), owner)
+    if (method === 'session.task_source') {
+      requireExactTaskSource(result, String(params.session_id ?? ''), owner)
+    } else if (['session.task_overview', 'session.task_analysis'].includes(method)) {
+      requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? params.session_id ?? ''), owner)
     } else {
       requireExactSessionSnapshot(result, String(params.session_id ?? ''), owner)
     }

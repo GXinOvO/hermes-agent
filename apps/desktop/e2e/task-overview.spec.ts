@@ -1,6 +1,10 @@
+import { execFileSync } from 'node:child_process'
+import path from 'node:path'
+
 import { expect, test } from '@playwright/test'
 
 import { buildAppEnv, launchDesktop, setupMockBackend, waitForAppReady } from './fixtures'
+import { taskAnalysisReply } from './task-analysis-fixture'
 
 const TEST_TITLE = 'E2E task overview'
 
@@ -92,11 +96,24 @@ test.describe('built-in task overview', () => {
   })
 
   test('creates, accepts, re-tracks, and keeps a task after restart', async () => {
-    const fixture = await setupMockBackend()
+    const fixture = await setupMockBackend({ mockServer: { replyForPrompt: taskAnalysisReply } })
     const { sandbox } = fixture
     let app: Awaited<ReturnType<typeof launchDesktop>>['app'] | undefined = fixture.app
 
     try {
+      const python = process.env.HERMES_DESKTOP_PYTHON
+
+      if (!python) { throw new Error('Set HERMES_DESKTOP_PYTHON to the verified interpreter') }
+      execFileSync(python, ['-B', '-c', [
+        'from hermes_state import SessionDB', 'from pathlib import Path', 'import sys',
+        'db = SessionDB(db_path=Path(sys.argv[1]) / "state.db")',
+        'db.create_session("followup-create-source", source="desktop", model="mock-model", model_config={"gateway_runtime": {"provider": "custom", "base_url": sys.argv[2] + "/v1", "api_mode": "chat_completions"}})',
+        'db.append_message("followup-create-source", role="user", content="Verify persistence")',
+        'db.close()'
+      ].join('\n'), sandbox.hermesHome, fixture.mockUrl], {
+        cwd: path.resolve(import.meta.dirname, '../../..'),
+        env: { ...process.env, HERMES_HOME: sandbox.hermesHome, HOME: sandbox.root }
+      })
       await waitForAppReady(fixture)
       const page = fixture.page
 
@@ -106,9 +123,7 @@ test.describe('built-in task overview', () => {
 
       await page.getByRole('button', { name: 'New task' }).click()
       await page.getByLabel('Task name').fill(TEST_TITLE)
-      await page.getByLabel('Description', { exact: true }).fill('Business objective')
-      await page.getByLabel('Notes', { exact: true }).fill('Evidence to verify')
-      await page.getByLabel('Remaining steps').fill('Verify persistence')
+      await page.getByLabel('Session link', { exact: true }).fill('@session:default/followup-create-source')
       await page.getByRole('combobox', { name: 'Status', exact: true }).click()
       await page.getByRole('option', { name: 'Waiting', exact: true }).click()
       await page.getByRole('combobox', { name: 'Priority', exact: true }).click()
@@ -117,10 +132,13 @@ test.describe('built-in task overview', () => {
       await expect(page.getByRole('button', { name: /E2E task overview/ })).toBeVisible()
       await expect(page.getByText('Status: Waiting · Priority: Urgent', { exact: true })).toBeVisible()
       await page.getByRole('button', { name: 'Edit task', exact: true }).click()
+      await page.getByText('Supplement or correct', { exact: true }).click()
+      await page.getByLabel('Description', { exact: true }).fill('Business objective')
+      await page.getByLabel('Notes', { exact: true }).fill('Evidence to verify')
       await page.getByLabel('Remaining steps').fill('Verify persistence\nReview delivery')
       await page.getByRole('button', { name: 'Save task', exact: true }).click()
       const taskPane = page.getByRole('region', { name: 'Task follow-up' })
-      await expect(taskPane.getByRole('listitem')).toHaveText(['Verify persistence', 'Review delivery'])
+      await expect(taskPane.getByText('Review delivery', { exact: true })).toBeVisible()
       await page.getByLabel('Search tasks', { exact: true }).fill('Evidence to verify')
       await expect(page.getByRole('button', { name: /E2E task overview/ })).toBeVisible()
       await page.getByLabel('Search tasks', { exact: true }).fill('no-such-matter')
@@ -161,7 +179,7 @@ test.describe('built-in task overview', () => {
       await restarted.evaluate(() => { window.location.hash = '#/' })
       await restarted.getByRole('button', { name: 'Task follow-up', exact: true }).and(restarted.locator('[data-size="icon-titlebar"]')).click()
       await expect(restarted.getByRole('button', { name: /E2E task overview/ })).toBeVisible({ timeout: 30_000 })
-      await expect(restarted.getByRole('region', { name: 'Task follow-up' }).getByRole('listitem')).toHaveText(['Verify persistence', 'Review delivery'])
+      await expect(restarted.getByRole('region', { name: 'Task follow-up' }).getByText('Review delivery', { exact: true })).toBeVisible()
       await expect(restarted.getByText('Business objective', { exact: true })).toBeVisible()
       await expect(restarted.getByText('Evidence to verify', { exact: true })).toBeVisible()
       await expect(restarted.getByText('Status: To do · Priority: Urgent', { exact: true })).toBeVisible()

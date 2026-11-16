@@ -5,7 +5,7 @@
    "undecided": 346
   },
   "rpc": {
-   "authority": 114,
+   "authority": 116,
    "keep-host-wide": 1,
    "undecided": 179
   },
@@ -610,7 +610,9 @@
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.stats", "kind": "rpc", "ref": ""},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.status", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.steer", "kind": "rpc", "ref": ""},
+  {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.task_analysis", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.task_overview", "kind": "rpc", "ref": ""},
+  {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.task_source", "kind": "rpc", "ref": ""},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.title", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.transcript", "kind": "rpc", "ref": ""},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.undo", "kind": "rpc", "ref": "D3"},

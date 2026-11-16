@@ -45,6 +45,18 @@ export function requireExactSessionOverview(value: any, runtimeId: string, store
   }
 }
 
+export function requireExactTaskSource(value: any, storedId: string, expected?: ExactSessionOwner): ExactSessionOwner {
+  const owner = exactSessionOwnerFromWire(value?.owner)
+
+  if (!owner || !token(value?.session_id) || !token(value.resolved_id) || (expected && !sameExactSessionOwner(owner, expected))) {
+    throw new Error('来源会话身份已变化或返回目标不符，请重新打开来源会话。')
+  }
+
+  requireExactSessionOverview(value, value.session_id, storedId, owner)
+
+  return owner
+}
+
 export function requireExactSessionSnapshot(value: any, storedId: string, expected: ExactSessionOwner): void {
   if (value?.session_id !== storedId || value.stored_session_id !== storedId ||
       !sameExactSessionOwner(exactSessionOwnerFromWire(value.owner), expected) ||
