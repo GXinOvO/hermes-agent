@@ -29,14 +29,18 @@ def _resolve(connection, stored_id, params):
         raise RuntimeStoreError('invalid_params', field='session_id')
     if db.get_session(stored_id) is None:
         raise RuntimeStoreError('not_found')
-    sid = authority.logical_owner(stored_id)
+    tip = db.get_compression_tip(stored_id) or stored_id
+    from hermes_state_local import POLICY_PREFIX, local_lineage_owner
+    with db._read_ctx() as conn:
+        local = local_lineage_owner(conn, tip)
+        bound = conn.execute('SELECT 1 FROM state_meta WHERE key=?', (POLICY_PREFIX + local,)).fetchone()
+    sid = local if bound else (tip if legacy_readable(authority, connection.actor, tip) else authority.logical_owner(stored_id))
     ref = SessionRef(connection.actor.profile_id, sid)
     if _due(authority, sid) is not None:
         raise RuntimeStoreError('storage_unavailable', detail='Session compression recovery is pending')
     try:
         authorize(connection, ref, params, 'session:read', allow_local_adoption=False)
     except RuntimeStoreError as exc:
-        tip = db.get_compression_tip(stored_id) or stored_id
         if exc.reason != 'not_found' or not legacy_readable(authority, connection.actor, tip):
             raise
         return ref, tip, ('legacy', db.get_session(tip))
@@ -111,7 +115,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
             raise RuntimeStoreError('revision_conflict')
     _checked(connection, params, guard, target, binding, revision)
     runtime = runtime_for(authority, ref, target)
-    key = _key(ref.session_id, params['task_id'])
+    cache_id = authority.logical_owner(params['stored_id'])
+    key = _key(cache_id, params['task_id'])
     generations = getattr(authority, '_task_analysis_generations', None)
     if generations is None:
         generations = authority._task_analysis_generations = {}
@@ -162,7 +167,7 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
                 finally:
                     pins.pop(id(db), None)
                 record = {'generation': generation,
-                          'binding': [ref.session_id, params['stored_id'], params['task_id'], params['title']],
+                          'binding': [cache_id, params['stored_id'], params['task_id'], params['title']],
                           'analysis': analysis}
                 conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                              (key, json.dumps(record, ensure_ascii=False)))
@@ -180,9 +185,10 @@ async def task_analysis(connection, ref, params):
     if logical.session_id != ref.session_id:
         raise RuntimeStoreError('session_source_changed')
     db = connection.authority.db
-    raw = db.get_meta(_key(logical.session_id, params['task_id']))
+    cache_id = connection.authority.logical_owner(params['stored_id'])
+    raw = db.get_meta(_key(cache_id, params['task_id']))
     record = json.loads(raw) if raw else None
-    analysis = record['analysis'] if record and record['binding'] == [logical.session_id, params['stored_id'], params['task_id'], params['title']] else None
+    analysis = record['analysis'] if record and record['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']] else None
     revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
     if analysis is not None:
         analysis['stale'] = analysis['conversation_revision'] != revision

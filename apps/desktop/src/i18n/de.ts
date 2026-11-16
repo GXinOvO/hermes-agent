@@ -28,10 +28,12 @@ import { deUpdateChannel } from './de_update_channel'
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introDe } from './intro-de'
 import { deSessionReview } from './session-review-locales'
+import { deTaskAnalysis } from './task-analysis-locales'
 
 export const deOverrides = {
   sessionReview: deSessionReview,
   taskOverview: {
+    ...deTaskAnalysis,
     attention: "Aufmerksamkeit",
     attentionEmpty: "Keine Aufgaben benötigen Aufmerksamkeit",
     addRelated: "Aktuelles Gespräch als zugehörig hinzufügen",

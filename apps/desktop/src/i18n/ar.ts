@@ -12,10 +12,12 @@ import { arFirstRun } from './ar_first_run'
 import { arSettings } from './ar_settings'
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { arSessionReview } from './session-review-locales'
+import { arTaskAnalysis } from './task-analysis-locales'
 
 export const arOverrides = {
   sessionReview: arSessionReview,
   taskOverview: {
+    ...arTaskAnalysis,
     attention: "تحتاج الانتباه",
     attentionEmpty: "لا توجد مهام تحتاج إلى الانتباه",
     addRelated: "إضافة المحادثة الحالية كمصدر ذي صلة",

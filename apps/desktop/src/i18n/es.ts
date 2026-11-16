@@ -28,10 +28,12 @@ import { esThemePicker } from './es_theme_picker'
 import { esUpdateChannel } from './es_update_channel'
 import { introEs } from './intro-es'
 import { esSessionReview } from './session-review-locales'
+import { esTaskAnalysis } from './task-analysis-locales'
 
 export const esOverrides = {
   sessionReview: esSessionReview,
   taskOverview: {
+    ...esTaskAnalysis,
     attention: "Atención",
     attentionEmpty: "No hay tareas que requieran atención",
     addRelated: "Añadir conversación actual como relacionada",

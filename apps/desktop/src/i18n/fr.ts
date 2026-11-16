@@ -28,10 +28,12 @@ import { frThemePicker } from './fr_theme_picker'
 import { frUpdateChannel } from './fr_update_channel'
 import { introFr } from './intro-fr'
 import { frSessionReview } from './session-review-locales'
+import { frTaskAnalysis } from './task-analysis-locales'
 
 export const frOverrides = {
   sessionReview: frSessionReview,
   taskOverview: {
+    ...frTaskAnalysis,
     attention: "À suivre",
     attentionEmpty: "Aucune tâche ne nécessite votre attention",
     addRelated: "Associer la conversation actuelle",

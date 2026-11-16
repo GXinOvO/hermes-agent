@@ -296,7 +296,9 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 
 ### 2026-11-16 第一轮事项跟进
 
-第一轮产品代码已完成本地验证并进入 PR #69；该清单更新记录其实际边界。尚未合入 `dev`、部署或重启运行安装。
+第一轮产品代码已通过 [PR #69](https://github.com/GXinOvO/hermes-agent/pull/69) 合入 `dev`，合入不代表独审或真实客户端验收完成。后续修复补齐阿拉伯语、德语、西班牙语、法语、日语和俄语的分析文案及原始占位符；文案完整性门禁在当前 `dev` 复现 186 处缺口后通过，未放宽已知缺口基线。事项打开来源前重新核实恢复目标：canonical 会话使用 receipt 的 owner，未认领的旧会话使用将被认领的 tip，再按原 owner 执行精确恢复；事项原始压缩 tip 绑定保持不变，分析缓存仍按原压缩谱系根保存。回归覆盖 canonical LOCAL、messaging 及旧 desktop 压缩来源，错误 owner 仍拒绝；引用只证明出处，不等于语义正确或人工验收通过。未在本轮部署或重启运行安装，Windows Desktop＋SSH 仍需真实客户端验收。
+
+### 2026-11-15 上游同步（fd8a6c41ac 候选）
 
 
 本轮固定官方 `fd8a6c41ace59b476193c61002ce6a86d667b18a` 与 fork `0fd85f7b543c584171ff38b3c4ef2ec29c1ab749`，协调七个冲突文件；候选代码、远端合入和运行安装分别验收，不新增个人功能编号。
