@@ -1,3 +1,5 @@
+import { type TaskAnalysis, validateTaskAnalysis } from './analysis-model'
+
 export type TaskStatus = 'in_progress' | 'todo' | 'unspecified' | 'waiting'
 export type TaskPriority = 'high' | 'low' | 'normal' | 'urgent'
 
@@ -24,6 +26,7 @@ export interface TaskResolution {
 }
 
 export interface Task {
+  analysis?: { title: string; referenceKey: string; result: TaskAnalysis }
   createdAt: number
   description: string
   id: string
@@ -207,7 +210,14 @@ function validateTask(task: unknown): Task {
 
   validateTaskResolution(candidate, resolution, status)
 
+  const analysis = candidate.analysis as Task['analysis'] | undefined
+
+  const matchingAnalysis = analysis && analysis.title === candidate.title && analysis.referenceKey === taskReferenceKey(primary)
+    ? { title: analysis.title, referenceKey: analysis.referenceKey, result: validateTaskAnalysis(analysis.result) }
+    : undefined
+
   return {
+    ...(matchingAnalysis ? { analysis: matchingAnalysis } : {}),
     createdAt: candidate.createdAt as number,
     description,
     id: candidate.id as string,

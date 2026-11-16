@@ -46229,6 +46229,247 @@
         "title": "SystemBatteryResult",
         "type": "object"
       },
+      "TaskAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "analyzed_at": {
+            "title": "Analyzed At",
+            "type": "integer"
+          },
+          "conversation_revision": {
+            "title": "Conversation Revision"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "scope": {
+            "const": "single_conversation",
+            "title": "Scope",
+            "type": "string"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "analyzed_messages": {
+            "title": "Analyzed Messages",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "todo",
+              "planning",
+              "in_progress",
+              "waiting",
+              "failed",
+              "awaiting_acceptance"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskAnalysisClaim"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completed": {
+            "items": {
+              "$ref": "#/components/schemas/TaskAnalysisClaim"
+            },
+            "title": "Completed",
+            "type": "array"
+          },
+          "remaining": {
+            "items": {
+              "$ref": "#/components/schemas/TaskAnalysisClaim"
+            },
+            "title": "Remaining",
+            "type": "array"
+          },
+          "needs_user": {
+            "items": {
+              "$ref": "#/components/schemas/TaskAnalysisClaim"
+            },
+            "title": "Needs User",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "title",
+          "analyzed_at",
+          "conversation_revision",
+          "stale",
+          "scope",
+          "message_count",
+          "analyzed_messages",
+          "limitations",
+          "status",
+          "goal",
+          "completed",
+          "remaining",
+          "needs_user"
+        ],
+        "title": "TaskAnalysis",
+        "type": "object"
+      },
+      "TaskAnalysisClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/TaskAnalysisEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text",
+          "evidence"
+        ],
+        "title": "TaskAnalysisClaim",
+        "type": "object"
+      },
+      "TaskAnalysisEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row_id",
+          "quote"
+        ],
+        "title": "TaskAnalysisEvidence",
+        "type": "object"
+      },
+      "TaskAnalysisParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_id": {
+            "title": "Stored Id",
+            "type": "string"
+          },
+          "expected_owner": {
+            "$ref": "#/components/schemas/ExpectedSessionOwner"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "stored_id",
+          "expected_owner",
+          "task_id",
+          "title"
+        ],
+        "title": "TaskAnalysisParams",
+        "type": "object"
+      },
+      "TaskAnalysisResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ExpectedSessionOwner"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskAnalysis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "stored_session_id",
+          "owner",
+          "authority_epoch",
+          "task_id",
+          "analysis"
+        ],
+        "title": "TaskAnalysisResult",
+        "type": "object"
+      },
       "TaskIdResult": {
         "additionalProperties": false,
         "description": "The side agent runs detached; its answer lands on the parent session as an event carrying\nthis ``task_id``.",
@@ -46492,6 +46733,76 @@
           "verification_error"
         ],
         "title": "TaskOverviewResult",
+        "type": "object"
+      },
+      "TaskSourceParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "expected_owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpectedSessionOwner"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "TaskSourceParams",
+        "type": "object"
+      },
+      "TaskSourceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "resolved_id": {
+            "title": "Resolved Id",
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ExpectedSessionOwner"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "stored_session_id",
+          "resolved_id",
+          "owner",
+          "authority_epoch"
+        ],
+        "title": "TaskSourceResult",
         "type": "object"
       },
       "TerminalClosePayload": {
@@ -51635,6 +51946,24 @@
       }
     },
     {
+      "name": "session.task_analysis",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TaskAnalysisParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TaskAnalysisResult"
+        }
+      }
+    },
+    {
       "name": "session.task_overview",
       "summary": "",
       "params": [
@@ -51649,6 +51978,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/TaskOverviewResult"
+        }
+      }
+    },
+    {
+      "name": "session.task_source",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TaskSourceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TaskSourceResult"
         }
       }
     },

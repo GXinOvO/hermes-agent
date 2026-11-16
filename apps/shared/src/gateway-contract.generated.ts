@@ -5701,6 +5701,59 @@ export interface TaskOverviewMessage {
 export interface OmittedTaskOverviewCall {
   type: 'omitted'
 }
+export interface TaskSourceParams {
+  profile?: string | null
+  session_id: string
+  expected_owner?: ExpectedSessionOwner | null
+}
+export interface TaskSourceResult {
+  session_id: string
+  stored_session_id: string
+  resolved_id: string
+  owner: ExpectedSessionOwner
+  authority_epoch: number
+}
+export interface TaskAnalysisParams {
+  profile?: string | null
+  session_id: string
+  stored_id: string
+  expected_owner: ExpectedSessionOwner
+  task_id: string
+  title: string
+  refresh?: boolean
+}
+export interface TaskAnalysisResult {
+  session_id: string
+  stored_session_id: string
+  owner: ExpectedSessionOwner
+  authority_epoch: number
+  task_id: string
+  analysis: TaskAnalysis | null
+}
+export interface TaskAnalysis {
+  version: 1
+  title: string
+  analyzed_at: number
+  conversation_revision: unknown
+  stale: boolean
+  scope: 'single_conversation'
+  message_count: number
+  analyzed_messages: number
+  limitations: string[]
+  status: 'todo' | 'planning' | 'in_progress' | 'waiting' | 'failed' | 'awaiting_acceptance'
+  goal: TaskAnalysisClaim | null
+  completed: TaskAnalysisClaim[]
+  remaining: TaskAnalysisClaim[]
+  needs_user: TaskAnalysisClaim[]
+}
+export interface TaskAnalysisClaim {
+  text: string
+  evidence: TaskAnalysisEvidence[]
+}
+export interface TaskAnalysisEvidence {
+  row_id: number
+  quote: string
+}
 /** Open: the plugin's handler owns every other key. ``session_id`` names the session the call acts in and passes that session's authorization first. */
 export interface PluginRpcParams {
   session_id?: string | null
@@ -7285,7 +7338,9 @@ export interface CanonicalRpcMethods {
   /** The session.usage dict on demand: what main's classic CLI read off its agent. */
   'session.stats': { params: SessionStatsParams; result: SessionStats }
   'session.steer': { params: CanonicalCorrectionParams; result: CanonicalCorrectionResult }
+  'session.task_analysis': { params: TaskAnalysisParams; result: TaskAnalysisResult }
   'session.task_overview': { params: TaskOverviewParams; result: TaskOverviewResult }
+  'session.task_source': { params: TaskSourceParams; result: TaskSourceResult }
   /** One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). With `subagent_id`: a delegated child of the session (running: through the parent's roster; finished: through its stored row, when its ancestry reaches this conversation); a foreign or unknown child is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch. */
   'session.transcript': { params: StoredTranscriptParams; result: StoredTranscriptResult }
   /** Ink ``!cmd`` / ``{!cmd}`` on the shared owner: one safe command for a local session, in its frozen launch cwd (``gateway/session_shell.py``). */
@@ -7349,7 +7404,9 @@ export const CANONICAL_RPC_METHODS = [
   'session.resume',
   'session.stats',
   'session.steer',
+  'session.task_analysis',
   'session.task_overview',
+  'session.task_source',
   'session.transcript',
   'shell.exec',
   'worker.adopt',

@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
 import { deriveTaskActivity, isTaskActivityReferenceVerified, type TaskActivitySnapshot, type TaskActivityStatus } from '@/lib/task-overview/activity'
+import { resolveTaskSource } from '@/lib/task-overview/analysis'
+import { taskReferenceKey } from '@/lib/task-overview/model'
 import type { TaskReference, TaskStatus } from '@/lib/task-overview/model'
 import { openTaskStore, taskChanged, type TaskRow, type TaskStore } from '@/lib/task-overview/store'
 import { $projectTree } from '@/store/project-tree'
@@ -17,6 +19,7 @@ import { $sessionStates } from '@/store/session-states'
 import { $sessionSeenCounts, $unreadFinishedMarkers, isSessionAvailableForProfile, isSessionUnreadForProfile } from '@/store/session-unread'
 import { $taskOverviewEnabled } from '@/store/task-overview'
 
+import { TaskAnalysisPanel } from './task-analysis-panel'
 import { TASK_PRIORITIES, TASK_STATUSES, taskDraft, TaskOverviewForm } from './task-overview-form'
 
 interface TaskOverviewPaneProps {
@@ -51,6 +54,9 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
   const [acceptanceNote, setAcceptanceNote] = useState('')
   const [saving, setSaving] = useState(false)
   const writing = useRef(false)
+  const creatingRequest = useRef(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [analyzeCreatedId, setAnalyzeCreatedId] = useState<string | null>(null)
   const bindingRequest = useRef(0)
   const [opening, setOpening] = useState(false)
   const [sourceError, setSourceError] = useState<{ reference: TaskReference; message: string } | null>(null)
@@ -148,6 +154,12 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
 
   const selected = visibleRows.find(row => row.task.id === selectedId) ?? visibleRows[0] ?? null
 
+  const updated = (next: TaskRow) => {
+    setRows(current => current.some(row => row.task.id === next.task.id)
+      ? current.map(row => row.task.id === next.task.id && row.revision <= next.revision ? next : row) : [...current, next])
+    setEditing(current => current?.task.id === next.task.id && current.revision <= next.revision ? next : current)
+  }
+
   const write = async (operation: (store: TaskStore) => Promise<TaskRow>): Promise<TaskRow | undefined> => {
     if (writing.current) { return }
     writing.current = true
@@ -157,9 +169,7 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
     try {
       store = await openTaskStore()
       const next = await operation(store)
-      setRows(current => current.some(row => row.task.id === next.task.id)
-        ? current.map(row => row.task.id === next.task.id ? next : row)
-        : [...current, next])
+      updated(next)
 
       return next
     } catch (cause) {
@@ -172,20 +182,28 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
   }
 
   const create = async () => {
-    if (!draft.title.trim()) { return }
+    if (!draft.title.trim() || creatingRequest.current || writing.current || (!editing && !draft.primary && !draft.source.trim())) { return }
+    creatingRequest.current = true
+    setSaving(true); setCreateError(null)
 
     const fields = {
       title: draft.title.trim(), description: draft.description, notes: draft.notes, status: draft.status, priority: draft.priority,
       nextSteps: draft.steps.split('\n').map(step => step.trim()).filter(Boolean)
     }
 
-    const next = await write(store => editing
-      ? store.replace({ ...editing.task, ...fields, updatedAt: Math.max(Date.now(), editing.task.updatedAt) }, editing.revision)
-      : store.create({ ...fields, id: `task-${randomUuid()}`, primary: null, related: [] }, Date.now()))
+    try {
+      const primary = editing ? editing.task.primary : draft.primary ?? await resolveTaskSource(draft.source)
 
-    if (next) {
-      setSelectedId(next.task.id); setDraft(taskDraft()); setCreating(false); setEditing(null); setQuery(''); setStatusFilter('all'); setFilter(next.task.resolution.state)
-    }
+      const next = await write(store => editing
+        ? store.replace({ ...editing.task, ...fields, updatedAt: Math.max(Date.now(), editing.task.updatedAt) }, editing.revision)
+        : store.create({ ...fields, id: `task-${randomUuid()}`, primary, related: [] }, Date.now()))
+
+      if (next) {
+        if (!editing) { setAnalyzeCreatedId(next.task.id) }
+        setSelectedId(next.task.id); setDraft(taskDraft()); setCreating(false); setEditing(null); setQuery(''); setStatusFilter('all'); setFilter(next.task.resolution.state)
+      }
+    } catch (cause) { setCreateError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { creatingRequest.current = false; setSaving(false) }
   }
 
   const accept = async (row: TaskRow) => {
@@ -268,7 +286,7 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
       <h2 className="font-medium">{attentionOnly ? copy.attention : copy.title}</h2>
       <div className="flex items-center gap-2">
         <Badge variant="muted">{loading || error ? '—' : attentionOnly ? visibleRows.length : openRows.length} {attentionOnly ? copy.attention : copy.open}</Badge>
-        {!attentionOnly ? <Button disabled={loading || Boolean(error) || saving} onClick={() => { setDraft(taskDraft()); setEditing(null); setCreating(value => !value) }} size="sm" variant="secondary">{copy.newTask}</Button> : null}
+        {!attentionOnly ? <Button disabled={loading || Boolean(error) || saving} onClick={() => { setDraft(taskDraft()); setEditing(null); setCreateError(null); setCreating(value => !value) }} size="sm" variant="secondary">{copy.newTask}</Button> : null}
       </div>
     </div>
   )
@@ -316,6 +334,7 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
       <p className="text-xs text-muted-foreground">{copy.status}: {copy[selected.task.status]} · {copy.priority}: {copy[selected.task.priority]}</p>
       {selected.task.resolution.state === 'accepted' && selected.task.resolution.note ? <p className="text-xs">{selected.task.resolution.note}</p> : null}
       <ul className="list-disc pl-5 text-xs">{selected.task.nextSteps.map((step, index) => <li key={index}>{step}</li>)}</ul>
+      <TaskAnalysisPanel autoAnalyze={analyzeCreatedId === selected.task.id} key={JSON.stringify([selected.task.id, selected.task.title, taskReferenceKey(selected.task.primary)])} onAutoAnalyzeStarted={() => setAnalyzeCreatedId(null)} onUpdated={updated} task={selected.task} />
       <h4 className="text-xs font-medium">{copy.source}</h4>
       {selected.task.primary ? renderReference(selected.task.primary, 'primary') : <p className="text-xs text-muted-foreground">{copy.noSource}</p>}
       {selected.task.related.length ? <h4 className="text-xs font-medium">{copy.related}</h4> : null}
@@ -329,11 +348,16 @@ export function TaskOverviewPane({ attentionOnly = false, captureSession, openSe
     </div>
   )
 
+  const renderForm = () => <>
+    {creating || editing ? <TaskOverviewForm captureSession={captureSession} draft={draft} editing={Boolean(editing)} onCancel={() => { setCreating(false); setEditing(null); setCreateError(null) }} onChange={setDraft} onSave={() => void create()} saving={saving} /> : null}
+    {(creating || editing) && createError ? <p className="text-xs" role="alert">{copy.sourceResolveError}: {createError}</p> : null}
+  </>
+
   return (
     <section aria-label={attentionOnly ? copy.attention : copy.title} className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 text-sm">
       {renderHeader()}
       <p className="text-xs text-muted-foreground">{copy.scope}</p>
-      {creating || editing ? <TaskOverviewForm draft={draft} onCancel={() => { setCreating(false); setEditing(null) }} onChange={setDraft} onSave={() => void create()} saving={saving} /> : null}
+      {renderForm()}
       {renderFilters()}
       {error ? <div className="grid gap-2 text-xs" role="alert"><strong>{copy.storageError}</strong><span>{error.message}</span><Button onClick={() => { setError(null); setLoading(true); setAttempt(value => value + 1) }} size="sm" variant="secondary">{copy.retry}</Button></div> : null}
       {loading ? <p className="text-muted-foreground">{copy.loading}</p> : null}

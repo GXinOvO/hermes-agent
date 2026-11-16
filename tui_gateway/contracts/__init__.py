@@ -23,6 +23,7 @@ from . import (
 )
 from . import canonical
 from . import canonical_task_overview
+from . import canonical_task_analysis
 from .base import JsonValue, Params, Payload, Result, WireEnum
 from .registry import CANONICAL_METHODS, CANONICAL_NAMESPACES, EVENTS, METHODS, SERVER_REQUESTS
 

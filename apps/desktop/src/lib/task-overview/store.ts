@@ -1,3 +1,4 @@
+import { type TaskAnalysis, validateTaskAnalysis } from './analysis-model'
 import { applyTaskAction, createTask, type Task, type TaskAction, type TaskReference, taskReferenceKey, validateTasks } from './model'
 
 const STORE = 'tasks'
@@ -15,6 +16,7 @@ export interface TaskStore {
   createIfAbsent: (input: Record<string, unknown>, at: number, primary: TaskReference, nextStep: string) => Promise<{ created: boolean; row: TaskRow }>
   list: () => Promise<TaskRow[]>
   replace: (task: Task, expectedRevision: number) => Promise<TaskRow>
+  saveAnalysis: (id: string, title: string, primary: TaskReference, result: TaskAnalysis) => Promise<TaskRow>
 }
 
 function checkedRow(value: unknown): TaskRow {
@@ -117,6 +119,31 @@ export function openTaskStore(factory: IDBFactory = globalThis.indexedDB, name =
       db.onversionchange = () => db.close()
 
       resolve({
+        saveAnalysis: (id, title, primary, result) => transaction(db, 'readwrite', (store, finish, fail) => {
+          const get = store.get(id)
+
+          get.onsuccess = () => {
+            try {
+              const current = checkedRow(get.result)
+              const referenceKey = taskReferenceKey(primary)
+
+              if (current.task.title !== title || taskReferenceKey(current.task.primary) !== referenceKey || result.title !== title) {
+                throw new Error('Task analysis source changed')
+              }
+
+              if (current.task.analysis && current.task.analysis.result.analyzed_at > result.analyzed_at) {
+                finish(current)
+
+                return
+              }
+
+              const task = validateTasks([{ ...current.task, analysis: { title, referenceKey, result: validateTaskAnalysis(result) } }])[0]
+              const revision = current.revision + 1
+              const put = store.put({ id, revision, task })
+              put.onsuccess = () => finish({ revision, task })
+            } catch (error) { fail(error) }
+          }
+        }),
         changePrimary: (id, expectedRevision, primary, at) => transaction(db, 'readwrite', (store, finish, fail) => {
           const get = store.get(id)
 
@@ -199,8 +226,9 @@ export function openTaskStore(factory: IDBFactory = globalThis.indexedDB, name =
                 }
 
                 const revision = current.revision + 1
-                const put = store.put({ id: task.id, revision, task: validateTasks([task])[0] })
-                put.onsuccess = () => finish({ revision, task })
+                const normalized = validateTasks([task])[0]
+                const put = store.put({ id: task.id, revision, task: normalized })
+                put.onsuccess = () => finish({ revision, task: normalized })
               } catch (error) { fail(error) }
             }
           })

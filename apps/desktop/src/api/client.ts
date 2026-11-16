@@ -147,8 +147,8 @@ export class HermesGateway extends JsonRpcGatewayClient {
 
     if (!owner) { throw new Error('来源身份凭据不完整，请重新绑定来源会话。') }
 
-    if (method === 'session.task_overview') {
-      requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? ''), owner)
+    if (['session.task_overview', 'session.task_source', 'session.task_analysis'].includes(method)) {
+      requireExactSessionOverview(result, String(params.session_id ?? ''), String(params.stored_id ?? params.session_id ?? ''), owner)
     } else {
       requireExactSessionSnapshot(result, String(params.session_id ?? ''), owner)
     }
