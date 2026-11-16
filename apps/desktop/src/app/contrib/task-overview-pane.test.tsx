@@ -113,7 +113,8 @@ describe('task overview acceptance', () => {
     let reject!: (error: Error) => void
     fixture.resolve.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
     render(<I18nProvider configClient={null} initialLocale="zh"><TaskOverviewPane /></I18nProvider>)
-    fireEvent.click(await screen.findByRole('button', { name: '新建事项' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '新建事项' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '新建事项' }))
     fireEvent.change(screen.getByLabelText('事项名称'), { target: { value: '解析中的事项' } })
     fireEvent.change(screen.getByLabelText('会话链接'), { target: { value: 'bad-session' } })
     const form = screen.getByLabelText('事项名称').closest('form')!
