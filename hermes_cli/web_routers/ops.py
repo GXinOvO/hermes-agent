@@ -558,16 +558,14 @@ async def reset_memory(body: MemoryReset, profile: Optional[str] = None):
     profile = destructive_profile(profile, "POST /api/memory/reset")
 
     def _run():
+        from tools.memory_admin import reset_memory_files
+
         mem_dir = get_hermes_home() / "memories"
-        deleted = []
-        for fname, key in _MEMORY_FILES:
-            path = mem_dir / fname
-            if target in {"all", key} and path.exists():
-                try:
-                    path.unlink()
-                    deleted.append(fname)
-                except OSError as exc:
-                    raise HTTPException(status_code=500, detail=f"Could not delete {fname}: {exc}")
+        try:
+            deleted = reset_memory_files(mem_dir, [fname for fname, key in _MEMORY_FILES if target in {"all", key}])
+        except OSError as exc:
+            status = 409 if str(exc) in ('memory_audit_admin_forbidden', 'memory_audit_admin_busy') else 500
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
         return {"ok": True, "deleted": deleted}
 
     return await config_scoped_to_thread(profile, _run)

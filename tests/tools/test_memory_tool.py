@@ -111,6 +111,21 @@ def store(tmp_path, monkeypatch):
 
 
 class TestMemoryFileLockPermissions:
+    @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
+    def test_memory_write_works_when_hermes_home_is_symlink(self, tmp_path, monkeypatch):
+        real_home = tmp_path / "real-home"
+        real_home.mkdir()
+        linked_home = tmp_path / "linked-home"
+        linked_home.symlink_to(real_home, target_is_directory=True)
+        memories = linked_home / "memories"
+        memories.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(linked_home))
+        monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: memories)
+        store = MemoryStore(memory_char_limit=500, user_char_limit=300)
+        store.load_from_disk()
+        result = store.add("memory", "symlinked home works")
+        assert result["success"] is True
+
     def test_new_lock_file_is_owner_only_under_permissive_umask(self, tmp_path):
         memory_path = tmp_path / "MEMORY.md"
         previous_umask = os.umask(0o002)
@@ -150,6 +165,17 @@ class TestMemoryFileLockPermissions:
 
 
 class TestMemoryStoreAdd:
+    def test_duplicate_add_preserves_existing_bytes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
+        path = tmp_path / "MEMORY.md"
+        original = b"\xef\xbb\xbfalpha\r\n\xc2\xa7\r\nbeta\r\n"
+        path.write_bytes(original)
+        store = MemoryStore(memory_char_limit=500, user_char_limit=300)
+        store.load_from_disk()
+        result = store.add("memory", "alpha")
+        assert result["success"] is True
+        assert path.read_bytes() == original
+
     def test_add_entry(self, store):
         result = store.add("memory", "Python 3.12 project")
         assert result["success"] is True

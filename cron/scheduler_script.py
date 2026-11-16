@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
 import logging
 import os
 import shutil
@@ -24,8 +25,8 @@ from cron.jobs import _ensure_cron_dir
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_cli._startup_fast import project_root_str
+from hermes_cli._subprocess_compat import windows_hide_flags
 
 if TYPE_CHECKING:
     from cron.cancellation import _CancelEventLike
@@ -149,6 +150,27 @@ sys.modules["__main__"] = main
 with open(script, "rb") as f:
     code = compile(f.read(), script, "exec")
 exec(code, main.__dict__)
+"""
+
+_PINNED_PYTHON_BOOTSTRAP = """\
+import hashlib, importlib.machinery, os, site, sys, types
+repo, site_packages, script, expected_sha256, baseline_sha256 = sys.argv[1:6]
+if site_packages:
+    site.addsitedir(site_packages)
+sys.argv = [script] + sys.argv[6:]
+sys.path[0:1] = [os.path.dirname(script), repo]
+main = types.ModuleType("__main__")
+main.__file__ = script
+main.__loader__ = importlib.machinery.SourceFileLoader("__main__", script)
+main.__cached__ = None
+main.__builtins__ = __builtins__
+main.__memory_audit_baseline_sha256__ = baseline_sha256
+sys.modules["__main__"] = main
+with open(script, "rb") as f:
+    source = f.read()
+if hashlib.sha256(source).hexdigest() != expected_sha256:
+    raise RuntimeError('memory_audit_execution_binding_changed')
+exec(compile(source, script, "exec"), main.__dict__)
 """
 
 
@@ -443,9 +465,89 @@ def _script_argv(
     return [python_exe, str(path)], env_overlay, None
 
 
+def resolve_script_interpreter_identity(
+    job: dict, script_path: str,
+) -> tuple[Optional[Path], Optional[str], Optional[str]]:
+    """Resolve the executable selected for a script and return its path and digest."""
+    path, error = _resolve_script_path(script_path)
+    if path is None:
+        return None, None, error
+    argv, _, error = _script_argv(path, job.get("interpreter"))
+    if not argv:
+        return None, None, error or "script interpreter unavailable"
+    try:
+        interpreter = Path(argv[0]).resolve()
+        if interpreter.is_symlink() or not interpreter.is_file():
+            return None, None, "script interpreter is not a regular file"
+        return interpreter, hashlib.sha256(interpreter.read_bytes()).hexdigest(), None
+    except OSError as exc:
+        return None, None, str(exc)
+
+
+def _fd_path(fd: int) -> str:
+    return f"/proc/self/fd/{fd}" if sys.platform.startswith("linux") else f"/dev/fd/{fd}"
+
+
+def _open_verified_fd(path: Path, expected_sha256: str, *, direct: bool = False) -> Optional[int]:
+    """Open a hash-bound regular file without reopening its pathname at launch."""
+    if sys.platform == "win32":
+        return None
+    parent_fd = None
+    fd = None
+    try:
+        if direct:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        else:
+            parts = path.resolve().parts
+            parent_fd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            for component in parts[1:-1]:
+                child_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                    dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = child_fd
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        digest = hashlib.sha256()
+        os.lseek(fd, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        os.lseek(fd, 0, os.SEEK_SET)
+        if digest.hexdigest() != expected_sha256:
+            return None
+        kept, fd = fd, None
+        return kept
+    except (OSError, ValueError):
+        return None
+    finally:
+        if parent_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(parent_fd)
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+def _venv_site_packages(interpreter: str) -> Optional[Path]:
+    """Find the site-packages directory belonging to a selected venv interpreter."""
+    try:
+        venv = Path(interpreter).expanduser().parent.parent
+        candidates = sorted((venv / "lib").glob("python*/site-packages"))
+        return candidates[0] if candidates and candidates[0].is_dir() else None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _run_job_script(
     script_path: str, workdir: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None, interpreter: Optional[str] = None,
+    pinned_script_fd: Optional[int] = None, pinned_interpreter_fd: Optional[int] = None,
+    expected_script_sha256: Optional[str] = None,
+    expected_baseline_sha256: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Execute a cron job's script and return ``(success, output)``; on failure *output* is the
     error message for the LLM to report. Env goes through ``build_subprocess_env`` (SECURITY.md
@@ -461,14 +563,37 @@ def _run_job_script(
     from tools.hosted_tool_policy import host_feature_refusal
     if refusal := host_feature_refusal("cron_scripts", "A cron script"):
         return False, refusal
-    path, err = _resolve_script_path(script_path)
-    if path is None:
-        return False, err
+    if pinned_script_fd is None:
+        path, err = _resolve_script_path(script_path)
+        if path is None:
+            return False, err or "Unable to resolve script path"
+    else:
+        path, err = Path(_fd_path(pinned_script_fd)), None
+    script_is_python = Path(str(script_path)).suffix.lower() == ".py"
     script_timeout = _get_script_timeout()
     try:
         argv, env_overlay, err = _script_argv(path, interpreter)
         if argv is None:
-            return False, err
+            return False, err or "Unable to build script invocation"
+        pass_fds = []
+        if pinned_script_fd is not None:
+            pass_fds.append(pinned_script_fd)
+            argv[-1] = str(path) if argv[-1] == str(path) else argv[-1]
+        if pinned_interpreter_fd is not None:
+            pass_fds.append(pinned_interpreter_fd)
+            selected_interpreter = argv[0]
+            if script_is_python and pinned_script_fd is not None:
+                if not expected_script_sha256:
+                    return False, "memory_audit_execution_binding_changed"
+                site_packages = _venv_site_packages(selected_interpreter)
+                argv = [
+                    _fd_path(pinned_interpreter_fd), "-c", _PINNED_PYTHON_BOOTSTRAP,
+                    str(Path(project_root_str())),
+                    str(site_packages) if site_packages is not None else "",
+                    _fd_path(pinned_script_fd), expected_script_sha256, expected_baseline_sha256 or '',
+                ]
+            else:
+                argv[0] = _fd_path(pinned_interpreter_fd)
         from tools.environments.local import build_subprocess_env
         # Lossy decode only: keep the platform-default (locale) encoding — gating ``encoding=``
         # to win32 was deliberate (#66566: unconditional UTF-8 leaked into POSIX) — but
@@ -490,6 +615,8 @@ def _run_job_script(
                 # reader threads on non-UTF-8 Windows (#45099).
                 "encoding": "utf-8",
                 "errors": "replace"}
+        elif pass_fds:
+            popen_kwargs["pass_fds"] = tuple(pass_fds)
         # The process env is the LAUNCH profile's. For a job owned by a routed profile, drop that
         # profile's .env residue from the base first (no-op for the launch profile's own jobs), then
         # overlay the routed profile's own scope (which never enters os.environ under multiplex
@@ -572,14 +699,55 @@ def _start_heartbeat_thread(loop_fn, name: str, fail_log) -> Optional[threading.
 def _run_job_script_with_claim_heartbeat(
     job: dict, script_path: str, workdir: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None,
+    expected_script_sha256: Optional[str] = None,
+    expected_interpreter_path: Optional[str] = None,
+    expected_interpreter_sha256: Optional[str] = None,
+    expected_baseline_sha256: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Run a cron script while heartbeating its owned one-shot claim. A long script can outlive
     the stale-claim TTL; without a heartbeat another scheduler would re-dispatch the one-shot.
     Recurring/unclaimed runs have no durable claim → no thread. The owner is captured from the
     dispatched job, never re-read, so a stale runner cannot extend a replacement owner's claim."""
     def run() -> tuple[bool, str]:
-        return _run_job_script(script_path, workdir=workdir, cancel_event=cancel_event,
-                               interpreter=job.get("interpreter"))
+        pinned_script_fd = None
+        pinned_interpreter_fd = None
+        if expected_script_sha256 is not None:
+            path, _script_error = _resolve_script_path(script_path)
+            if (path is None or path.is_symlink()
+                    or len(expected_script_sha256) != 64):
+                return False, "memory_audit_execution_binding_changed"
+            pinned_script_fd = _open_verified_fd(path, expected_script_sha256)
+            if pinned_script_fd is None:
+                return False, "memory_audit_execution_binding_changed"
+        if expected_interpreter_sha256 is not None:
+            interpreter_path, interpreter_sha256, interpreter_error = resolve_script_interpreter_identity(job, script_path)
+            if (interpreter_error is not None or interpreter_sha256 != expected_interpreter_sha256
+                    or (expected_interpreter_path is not None and str(interpreter_path) != expected_interpreter_path)):
+                if pinned_script_fd is not None:
+                    os.close(pinned_script_fd)
+                return False, "memory_audit_execution_binding_changed"
+            if interpreter_path is None:
+                if pinned_script_fd is not None:
+                    os.close(pinned_script_fd)
+                return False, "memory_audit_execution_binding_changed"
+            pinned_interpreter_fd = _open_verified_fd(
+                interpreter_path, expected_interpreter_sha256, direct=True)
+            if pinned_interpreter_fd is None:
+                if pinned_script_fd is not None:
+                    os.close(pinned_script_fd)
+                return False, "memory_audit_execution_binding_changed"
+        try:
+            return _run_job_script(
+                script_path, workdir=workdir, cancel_event=cancel_event,
+                interpreter=job.get("interpreter"), pinned_script_fd=pinned_script_fd,
+                pinned_interpreter_fd=pinned_interpreter_fd,
+                expected_script_sha256=expected_script_sha256,
+                expected_baseline_sha256=expected_baseline_sha256)
+        finally:
+            for fd in (pinned_script_fd, pinned_interpreter_fd):
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
 
     schedule = job.get("schedule")
     claim = job.get("run_claim")

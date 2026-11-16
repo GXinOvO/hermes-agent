@@ -7,6 +7,7 @@ helpers used by ``hermes import`` and ``/snapshot restore``.  Backup
 which composes these helpers.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ import tempfile
 import zipfile
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, cast
 
 from hermes_state_holders import read_only_db_uri
 from hermes_cli.backup_sqlite import _safe_copy_db
@@ -169,6 +170,7 @@ def _safe_restore_db(src: Path, dst: Path, *, expected_generation: list[int] | N
     """
     from gateway.runtime_ownership import OwnershipConflict, exclusive_maintenance
     from hermes_cli.backup import verify_sqlite_integrity
+    from tools.memory_admin import memory_file_writer
 
     # backup() copies pages without validating their contents; its fallback
     # copies bytes even when SQLite rejected the source. Neither may touch the
@@ -178,7 +180,11 @@ def _safe_restore_db(src: Path, dst: Path, *, expected_generation: list[int] | N
         logger.error("Refusing SQLite restore from %s: %s", src, source_check["message"])
         return False
     try:
-        with exclusive_maintenance([dst.absolute().parent, dst.resolve().parent]):
+        with memory_file_writer(dst) as memory_write, exclusive_maintenance([dst.absolute().parent, dst.resolve().parent]):
+            if memory_write:
+                raise OSError('memory_audit_admin_database_target')
+            if dst.exists() and dst.is_file() and dst.stat().st_nlink > 1:
+                raise OSError('snapshot_restore_hardlink_target')
             with _restore_epoch_source(src, dst) as prepared:
                 if expected_generation is not None:
                     from hermes_cli.state_integrity import database_generation
@@ -377,7 +383,24 @@ def _restore_db_pages(src: Path, dst: Path) -> bool:
             return False
 
 
-def _restore_snapshot_entry(rel: str, src: Path, dst: Path) -> bool:
+def _restore_snapshot_entry(rel: str, src: Path, dst: Path, *, preserve_mode: bool = False) -> bool:
+    from pm.plugin_target_lock import p1_target_file_writer
+    from tools.memory_admin import memory_file_writer
+
+    with memory_file_writer(dst) as memory_write, p1_target_file_writer(dst):
+        expected = None
+        if memory_write:
+            with src.open('rb') as stream:
+                expected = hashlib.file_digest(stream, 'sha256').hexdigest()
+        result = _restore_snapshot_entry_target_locked(rel, src, dst, preserve_mode=preserve_mode)
+        if result and expected is not None:
+            with dst.open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != expected:
+                    raise OSError('memory_audit_admin_restore_readback_failed')
+        return result
+
+
+def _restore_snapshot_entry_target_locked(rel: str, src: Path, dst: Path, *, preserve_mode: bool = False) -> bool:
     """Publish one quick-snapshot file over ``dst``; False (logged) when refused or failed."""
     try:
         if dst.suffix == ".db":
@@ -399,10 +422,14 @@ def _restore_snapshot_entry(rel: str, src: Path, dst: Path) -> bool:
                 logger.error("Failed to restore %s safely", rel)
                 return False
         else:
+            if dst.is_dir():
+                raise OSError('snapshot_restore_directory_target')
+            if dst.exists() and dst.is_file() and dst.stat().st_nlink > 1:
+                raise OSError('snapshot_restore_hardlink_target')
             shutil.copy2(src, dst)
-            if dst.name == "config.yaml":  # the snapshot copy carries the mode it was taken with
+            if not preserve_mode and dst.name == "config.yaml":  # the snapshot copy carries the mode it was taken with
                 drop_other_access(dst)
-            elif dst.name == ".env":  # secrets file: owner-only, as `hermes import` leaves it
+            elif not preserve_mode and dst.name == ".env":  # secrets file: owner-only, as `hermes import` leaves it
                 os.chmod(dst, 0o600)
         return True
     except (OSError, PermissionError) as exc:
@@ -483,6 +510,27 @@ def _default_new_file_mode() -> Optional[int]:
 
 
 def _extract_member_atomically(
+    zf: zipfile.ZipFile,
+    member: str,
+    target: Path,
+    new_file_mode: Optional[int] = None,
+) -> None:
+    from pm.plugin_target_lock import p1_target_file_writer
+    from tools.memory_admin import memory_file_writer
+
+    with memory_file_writer(target) as memory_write, p1_target_file_writer(target):
+        expected = None
+        if memory_write:
+            with zf.open(member) as stream:
+                expected = hashlib.file_digest(cast(Any, stream), 'sha256').hexdigest()
+        _extract_member_target_locked(zf, member, target, new_file_mode)
+        if expected is not None:
+            with target.open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != expected:
+                    raise OSError('memory_audit_admin_restore_readback_failed')
+
+
+def _extract_member_target_locked(
     zf: zipfile.ZipFile,
     member: str,
     target: Path,

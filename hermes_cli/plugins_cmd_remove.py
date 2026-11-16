@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,12 @@ def _discard_tree(tree: Path) -> None:
 
 
 def _remove_plugin_core(target: Path) -> None:
+    from pm.plugin_target_lock import target_writer_lock
+    with target_writer_lock(target) if os.name == "posix" else nullcontext():
+        _remove_plugin_core_locked(target)
+
+
+def _remove_plugin_core_locked(target: Path) -> None:
     """Remove one plugin and its metadata without splitting their state."""
     if target.name not in _pc()._read_install_metadata():
         _discard_tree(target)

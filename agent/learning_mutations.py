@@ -96,13 +96,34 @@ def _mutate_memory(node_id: str, replacement: str | None) -> dict[str, Any]:
     name = _MEMORY_FILES[source]
     message = f"deleted memory from {name}" if replacement is None else f"updated memory in {name}"
 
+    resolved_entry = None
+
+    def _resolve_entry(entries):
+        nonlocal resolved_entry
+        source, gidx, fingerprint = _parse_memory_id(node_id)
+        if fingerprint:
+            local = _resolve_fingerprint(entries, fingerprint)
+        else:
+            from agent.learning_graph import _memory_cards
+            cards = _memory_cards()
+            if not 0 <= gidx < len(cards) or cards[gidx].get("source") != source:
+                local = None
+            else:
+                local = gidx if source == "memory" else gidx - sum(
+                    1 for card in cards if card.get("source") == "memory")
+                if not 0 <= local < len(entries):
+                    local = None
+        if local is None:
+            return None
+        resolved_entry = entries[local].strip()
+        return resolved_entry
+
     def _apply(entries, limit):
         from tools.memory_tool import ENTRY_DELIMITER
         from tools.memory_tool_store import _error
 
-        _, chunks, local = _locate_memory(node_id)
-        text = chunks[local].strip()
-        if text not in entries:
+        text = resolved_entry
+        if text is None or text not in entries:
             return {"success": False, "error": "memory node id is stale — refresh the graph"}
         idx = entries.index(text)
         new_entries = entries[:idx] + ([] if replacement is None else [replacement]) + entries[idx + 1:]
@@ -113,7 +134,10 @@ def _mutate_memory(node_id: str, replacement: str | None) -> dict[str, Any]:
                           "over_budget")
         return new_entries, message
 
-    result = load_on_disk_store()._mutate(_STORE_TARGETS[source], _apply)
+    result = load_on_disk_store()._mutate(
+        _STORE_TARGETS[source], _apply,
+        audit_action="remove" if replacement is None else "replace",
+        audit_matcher=_resolve_entry, lock_all_targets=True)
     if not result.get("success"):
         return {"ok": False, "message": result.get("error", f"{name} write failed")}
     return {"ok": True, "message": message}

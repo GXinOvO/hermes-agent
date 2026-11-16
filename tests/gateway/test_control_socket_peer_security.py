@@ -170,9 +170,11 @@ def test_long_home_survives_a_squatted_shared_fallback_directory(tmp_path, monke
 
 def test_long_home_prefers_the_private_runtime_dir(tmp_path, monkeypatch):
     import tempfile
+    from gateway import control_socket
     from gateway.control_socket import resolve_server_socket_path
     runtime = Path(tempfile.mkdtemp(prefix="xr-"))
     try:
+        monkeypatch.setattr(control_socket, "_fits_sun_path", lambda path: path.name == "control.sock")
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
         home = tmp_path / ("p" * 90) / ".hermes"
         home.mkdir(parents=True, mode=0o700)

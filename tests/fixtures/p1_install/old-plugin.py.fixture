@@ -1,0 +1,298 @@
+"""Bounded output hook for the read-only Cron supervisor."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import stat
+import tempfile
+import unicodedata
+from pathlib import Path
+
+from cron.execution_identity import current_cron_execution
+from hermes_constants import get_hermes_home
+
+_SILENT_MARKERS = frozenset({
+    "[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "[静默]", "静默", "[沉默]", "沉默",
+})
+
+
+def _is_edge_punctuation(ch: str) -> bool:
+    """Same rule as the native matcher: brackets stay structural, other punctuation is stripped."""
+    return ch not in "[]" and unicodedata.category(ch).startswith("P")
+
+
+def _strip_edge_punctuation(text: str) -> str:
+    start, end = 0, len(text)
+    while start < end and _is_edge_punctuation(text[start]):
+        start += 1
+    while end > start and _is_edge_punctuation(text[end - 1]):
+        end -= 1
+    return text[start:end].strip()
+
+
+def _fallback_is_silence(text: str) -> bool:
+    """Conservative native-free check: a marker alone on the first or last line."""
+    stripped = text.strip() if isinstance(text, str) else ""
+    if not stripped:
+        return False
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if stripped.upper().startswith("[SILENT]"):
+        return True
+    for line in (lines[0], lines[-1]):
+        for form in (line, _strip_edge_punctuation(line)):
+            if " ".join(form.upper().split()) in _SILENT_MARKERS:
+                return True
+    return False
+
+
+try:
+    from gateway.response_filters import is_autonomous_silence_response as _is_silence
+except Exception:  # pragma: no cover - only when that module moves or is unavailable
+    _is_silence = _fallback_is_silence
+
+LIMIT = 700
+FOOTER = "CRON_SUPERVISOR_V1 status=read_only"
+FAILURE = "[CRON_FAILURE]"
+JOB_ID = "341bad758066"
+ARCHIVE_DIRNAME = "report-archive"
+
+
+def _shared_root(home: Path) -> Path:
+    return home.parent.parent if home.parent.name == "profiles" else home
+
+
+def _home() -> Path:
+    """Resolve the home that actually owns JOB_ID.
+
+    ``get_hermes_home()`` and the cron identity's ``profile`` can both resolve to
+    the shared root (no bound identity, or a ``default`` label), whose
+    ``cron/jobs.json`` has no ``341bad758066`` entry. Locate the owning home by
+    the job record itself so coverage and archives stay bound to this job.
+    """
+    root = get_hermes_home().expanduser().resolve()
+    shared = _shared_root(root)
+    candidates = []
+    identity = current_cron_execution()
+    if identity is not None and isinstance(identity.profile, str) and identity.profile:
+        candidates.append(shared if identity.profile == "default"
+                          else shared / "profiles" / identity.profile)
+    candidates.append(root)
+    profiles = shared / "profiles"
+    if profiles.is_dir():
+        candidates.extend(sorted(profiles.iterdir()))
+    for home in candidates:
+        try:
+            home = home.resolve()
+            jobs = json.loads((home / "cron" / "jobs.json").read_text(encoding="utf-8"))["jobs"]
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+        if any(isinstance(job, dict) and job.get("id") == JOB_ID for job in jobs):
+            return home
+    return root
+
+
+def _safe_execution_id(value: str) -> str:
+    if not value or any(ch not in "0123456789abcdef" for ch in value.lower()):
+        raise ValueError("invalid cron execution identity")
+    return value
+
+
+def _archive_data(data: bytes, execution_id: str, suffix: str) -> str:
+    archive_dir = _home() / "cron" / ARCHIVE_DIRNAME / JOB_ID
+    archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = archive_dir / f"{_safe_execution_id(execution_id)}{suffix}"
+    digest = hashlib.sha256(data).hexdigest()
+    fd, temp_name = tempfile.mkstemp(prefix=f".{execution_id}.", dir=archive_dir)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, 0o600)
+        try:
+            os.link(temp_name, path, follow_symlinks=False)
+        except FileExistsError:
+            existing_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(existing_fd, "rb") as existing:
+                if not stat.S_ISREG(os.fstat(existing.fileno()).st_mode) or existing.read() != data:
+                    raise ValueError("report archive identity changed")
+        else:
+            directory_fd = os.open(archive_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return f"{path} sha256={digest}"
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def _archive_original(text: str, execution_id: str) -> str:
+    return _archive_data(text.encode("utf-8"), execution_id, ".txt")
+
+
+def _record_fallback(execution_id: str, error: BaseException) -> None:
+    """Record why coverage could not be verified; never raise, never touch the report."""
+    try:
+        path = _home() / "runtime" / "report-budget-fallback.log"
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(f"{_safe_execution_id(execution_id)} "
+                         f"{type(error).__name__}: {error}\n")
+    except Exception:
+        pass
+
+
+def _coverage_snapshot(execution_id: str):
+    cron = _home() / "cron"
+    jobs = json.loads((cron / "jobs.json").read_text(encoding="utf-8"))["jobs"]
+    matched = [job for job in jobs if job.get("id") == JOB_ID]
+    if len(matched) != 1:
+        raise ValueError("ambiguous monitor job")
+    state = matched[0].get("monitor_state") or {}
+    observation = (state.get("observations") or {}).get(execution_id) or state.get("observation") or {}
+    if observation.get("execution_id") != execution_id:
+        raise ValueError("monitor observation is not this execution")
+    data = (cron / "output" / JOB_ID / "monitor_last_output.txt").read_bytes()
+    if hashlib.sha256(data).hexdigest() != observation.get("output_hash"):
+        raise ValueError("monitor snapshot hash mismatch")
+    snapshot = json.loads(data)
+    if snapshot.get("schema_version") != 1:
+        raise ValueError("unknown monitor schema")
+    rows = snapshot["anomalies"]
+    summary = snapshot["summary"]
+    total = summary.get("anomaly_total", summary.get("total_anomalies"))
+    shown = summary.get("anomaly_displayed", summary.get("anomalies"))
+    report_omitted = summary.get("report_omitted_anomalies", summary.get("omitted_anomalies"))
+    snapshot_omitted = summary.get("snapshot_omitted_anomalies", 0)
+    values = (total, shown, report_omitted, snapshot_omitted)
+    if (not isinstance(rows, list) or
+            any(type(value) is not int or value < 0 for value in values) or
+            shown != len(rows) or total != shown + report_omitted + snapshot_omitted):
+        raise ValueError("inconsistent anomaly coverage counts")
+    groups = {}
+    seen = set()
+    for row in rows:
+        profile, job, category = (row.get(k) for k in ("profile", "job_id", "category"))
+        event_id = row.get("event_id") or row.get("fingerprint")
+        if (not all(isinstance(x, str) and re.fullmatch(r"[\w.*-]{1,120}", x)
+                    for x in (profile, job, category))
+                or not isinstance(event_id, str) or not event_id or len(event_id) > 512):
+            raise ValueError("invalid anomaly identity")
+        key = (profile, job, category, event_id)
+        if key in seen:
+            raise ValueError("duplicate anomaly")
+        seen.add(key)
+        groups.setdefault((profile, job), []).append(row)
+    _archive_data(data, execution_id, ".snapshot.json")
+    return groups, total, report_omitted, snapshot_omitted
+
+
+def _render(text: str, reference: str, coverage=None) -> str:
+    lines = text.splitlines()
+    failure = bool(lines and lines[0].rstrip() == FAILURE)
+    body = lines[1:] if failure else lines[:]
+    while body and not body[-1].strip():
+        body.pop()
+    if body and body[-1].strip() == FOOTER:
+        body.pop()
+
+    if coverage is None:
+        def render(count: int) -> str:
+            notice = (f"原文保留前{count}/{len(body)}行；"
+                      f"本次快照未核验，遗漏异常数未知；完整原文：{reference}")
+            return "\n".join(([FAILURE] if failure else []) + body[:count] + [notice, FOOTER])
+
+        result = render(0)
+        if len(result) > LIMIT:
+            raise ValueError("archive reference exceeds output limit")
+        for count in range(1, len(body) + 1):
+            candidate = render(count)
+            if len(candidate) > LIMIT:
+                break
+            result = candidate
+        return result
+
+    groups, total, report_omitted, snapshot_omitted = coverage
+    entries = []
+    for (profile, job), rows in groups.items():
+        categories = {}
+        for row in rows:
+            category = row["category"]
+            categories[category] = categories.get(category, 0) + 1
+        labels = ",".join(f"{category}({count})" for category, count in categories.items())
+        entries.append((f"{profile}/{job}: {labels}", len(rows)))
+    indexed_total = sum(count for _, count in entries)
+
+    def render_index(selected, count):
+        indexed = sum(size for _, size in selected)
+        object_omitted = ("未知" if report_omitted or snapshot_omitted
+                          else f"{len(entries) - len(selected)}/{len(entries)}")
+        notice = (f"总异常{total}；快照已展示{indexed_total}、监控输出另略{report_omitted}、快照另略{snapshot_omitted}；"
+                  f"对象索引未列{object_omitted}、已展示行索引未列{indexed_total - indexed}/{indexed_total}；"
+                  f"报告未覆盖未知；来源可能不完整，索引仅列身份与类别；"
+                  f"原文保留前{count}/{len(body)}行；"
+                  f"原文：{reference}；同名.snapshot.json为本次快照。")
+        index = ["异常对象索引："] + [label for label, _ in selected]
+        return "\n".join(([FAILURE] if failure else []) + body[:count] + index + [notice, FOOTER])
+
+    selected = []
+    body_count = 0
+    result = render_index(selected, body_count)
+    if len(result) > LIMIT:
+        raise ValueError("archive reference exceeds output limit")
+    for count in range(1, len(body) + 1):
+        if count > 1 and len("\n".join(body[:count])) > 300:
+            break
+        candidate = render_index(selected, count)
+        if len(candidate) > LIMIT:
+            break
+        body_count = count
+        result = candidate
+    for entry in entries:
+        candidate = render_index(selected + [entry], body_count)
+        if len(candidate) <= LIMIT:
+            selected.append(entry)
+            result = candidate
+    for count in range(body_count + 1, len(body) + 1):
+        candidate = render_index(selected, count)
+        if len(candidate) > LIMIT:
+            break
+        result = candidate
+    return result
+
+
+def _failure_report(error: Exception) -> str:
+    return (f"{FAILURE}\n监督报告处理失败，原文归档状态未知；错误类型：{type(error).__name__}。\n"
+            f"{FOOTER}")
+
+
+def transform(response_text: str, platform: str, **kwargs):
+    identity = current_cron_execution()
+    if not identity or identity.job_id != JOB_ID or platform != "cron":
+        return None
+    if not isinstance(response_text, str) or len(response_text) <= LIMIT:
+        return None
+    lines = response_text.splitlines()
+    failure = bool(lines and lines[0].rstrip() == FAILURE)
+    if not failure and _is_silence(response_text):
+        return None
+    try:
+        reference = _archive_original(response_text, identity.execution_id)
+        try:
+            coverage = _coverage_snapshot(identity.execution_id)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+            _record_fallback(identity.execution_id, error)
+            coverage = None
+        return _render(response_text, reference, coverage)
+    except Exception as error:
+        _record_fallback(identity.execution_id, error)
+        return _failure_report(error)
+
+
+def register(ctx):
+    ctx.register_hook("transform_llm_output", transform, hold_stream=True)

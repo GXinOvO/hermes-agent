@@ -53,11 +53,14 @@ def _backup_existing(paths: Iterable[Path]) -> dict:
 
 
 def _restore_backups(backups: dict) -> list:
+    from hermes_cli.backup_restore import _restore_snapshot_entry
+
     restored = []
     for original, backup in backups.items():
         if not backup.is_file():
             continue
-        shutil.copy2(backup, original)
+        if not _restore_snapshot_entry(original.name, backup, original, preserve_mode=True):
+            raise OSError(f'Post-update restore failed: {original}')
         restored.append(original)
     return restored
 
@@ -72,12 +75,15 @@ def step_migrate_config() -> dict:
     the result carries ``failed_step`` so boot retries it on the next start.
     No-op when the on-disk version is current (the 99% case).
     """
-    from hermes_cli.config import (
-        check_config_version,
-        get_config_path,
-        get_env_path,
-        migrate_config,
-    )
+    from hermes_cli.config import get_config_path, get_env_path
+    from tools.memory_admin import memory_file_writer
+
+    with memory_file_writer(get_config_path(), get_env_path()):
+        return _migrate_config()
+
+
+def _migrate_config():
+    from hermes_cli.config import check_config_version, get_config_path, get_env_path, migrate_config
     from hermes_cli.config_migrations import (
         SUPPORT_FLOOR_VERSION,
         support_floor_message,

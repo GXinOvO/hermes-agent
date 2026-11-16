@@ -9,7 +9,9 @@ import base64
 import hashlib
 import io
 import json
+import os
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 from pm.environments import dependency_home_root, install_state_dir, runtime_facts_path
@@ -175,18 +177,19 @@ class StagedPlugin:
                             if _admitted(source, new=source == self.staged) and _is_member_candidate(source)}
 
     def publish(self, project: Path) -> None:
-        import os
         import uuid
         from hermes_cli.auth import _file_lock
         from pm.store import tree_digest
+        from pm.plugin_target_lock import target_writer_lock
 
         if selection_snapshot() != self.configs:
             raise ValueError("Plugin enablement changed while preparing the update; retry.")
         if tree_digest(self.staged) != self.staged_digest:
             raise ValueError("Staged plugin files changed while preparing the update; retry.")
         lock = self.metadata.with_name(f"{self.metadata.name}.lock")
-        with _file_lock(lock, _METADATA_LOCK_HOLDER, 10.0,
-                        "Timed out waiting for the plugin install metadata lock"):
+        with (target_writer_lock(self.target) if os.name == "posix" else nullcontext()), _file_lock(
+                lock, _METADATA_LOCK_HOLDER, 10.0,
+                "Timed out waiting for the plugin install metadata lock"):
             previous = read_bytes_or_none(self.metadata)
             metadata = _metadata_records(previous)
             if metadata.get(self.target.name) != self.old_record:
@@ -202,6 +205,8 @@ class StagedPlugin:
                 "target_existed": self.target.exists(), "facts_before": file_digest(runtime_facts_path(project)),
                 "metadata_before": base64.b64encode(previous).decode() if previous is not None else None,
                 "metadata_after": base64.b64encode(proposed).decode(),
+                "target_digest_before": self.target_digest,
+                "target_digest_after": self.staged_digest,
             }
             durable_write_bytes(install_state_dir(project) / "publication.json", json.dumps(row).encode())
             if self.target.exists():

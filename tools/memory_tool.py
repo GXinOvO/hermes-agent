@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 # dynamic target schema: the check_fn result flows to the immediately following
 # dynamic_schema_overrides call; ContextVar isolates concurrent profile builds.
 _memory_surface_flags: ContextVar[Optional[tuple[bool, bool]]] = ContextVar("memory_surface_flags", default=None)
+_AUDIT_POLICY: ContextVar[Any] = ContextVar("memory_audit_policy", default=None)
+
+
+def bind_memory_audit_policy(policy):
+    return _AUDIT_POLICY.set(policy)
+
+
+def reset_memory_audit_policy(token) -> None:
+    _AUDIT_POLICY.reset(token)
+
+
+def current_memory_audit_policy():
+    return _AUDIT_POLICY.get()
 
 
 def get_memory_dir() -> Path:
@@ -58,6 +71,9 @@ def load_on_disk_store() -> MemoryStore:
     except Exception:
         store = MemoryStore()  # config optional — fall back to defaults rather than break /memory
     store.load_from_disk()
+    policy = _AUDIT_POLICY.get()
+    if policy is not None:
+        store._memory_audit_policy = policy
     return store
 
 
@@ -94,6 +110,11 @@ def _gate_or_stage(store: MemoryStore, summary: str, detail: str, payload: dict[
     if decision.blocked:
         FAILURE_CLASS.set("gate_refused")
         return tool_error(decision.message, success=False)
+    audit_policy = getattr(store, '_memory_audit_policy', None) or _AUDIT_POLICY.get()
+    if audit_policy is not None:
+        store._memory_audit_policy = audit_policy
+        FAILURE_CLASS.set('gate_refused')
+        return tool_error('memory audit writes cannot be staged beyond this run', success=False)
     if (unmatched := _pin_matched_entries(store, payload)) is not None:
         return unmatched
     FAILURE_CLASS.set("staged")
@@ -252,6 +273,13 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
     # An omitted optional string can arrive as "" (#90468): let the new_text alias fill it.
     if not content and new_text:
         content = new_text
+    audit_policy = getattr(store, '_memory_audit_policy', None) or _AUDIT_POLICY.get()
+    if audit_policy is not None:
+        store._memory_audit_policy = audit_policy
+    if audit_policy is not None and not audit_policy.admits_request({
+            'action': action, 'target': target, 'content': content, 'old_text': old_text,
+            'new_text': new_text, 'operations': operations}):
+        return _invalid(audit_policy.request_refusal())
     target_error = _memory_target_error(store, target, operations)
     if target_error is not None:
         return "rejected", json.dumps(target_error)
@@ -420,6 +448,13 @@ MEMORY_SCHEMA = {
                             "type": "string",
                             "description": ("Required for 'add' and 'patch'. For 'add', the new entry. For 'patch', "
                                             "the text that replaces old_text; the rest of the entry is kept."),
+                        },
+                        "matched_entry": {
+                            "type": "string",
+                            "description": (
+                                "For patch/remove, the COMPLETE entry as reviewed. The write is refused "
+                                "under the file lock if that exact entry changed."
+                            ),
                         },
                         "old_text": {
                             "type": "string",

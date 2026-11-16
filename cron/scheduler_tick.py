@@ -39,8 +39,14 @@ def tick(verbose=True, adapters=None, loop=None, sync=True, *, can_dispatch=None
     with retirement.work() as admitted:
         if not admitted:
             return 0
-        return _tick_admitted(verbose, adapters, loop, sync, can_dispatch=can_dispatch,
-                              headless=headless)
+        from cron.install_gate import InstallInProgress, install_gate
+        from cron.jobs import _current_cron_store
+        try:
+            with install_gate(_current_cron_store().cron_dir.parent):
+                return _tick_admitted(verbose, adapters, loop, sync, can_dispatch=can_dispatch,
+                                      headless=headless)
+        except InstallInProgress:
+            return 0
 
 
 def _acquire_tick_lock_or_degrade(_sched):

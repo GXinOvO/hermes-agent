@@ -106,6 +106,38 @@ def reload_plugins_verb(runner: Any, loop: asyncio.AbstractEventLoop) -> Callabl
                 profile_name = None
         scope = (_profile_runtime_scope(requested, hydrate_secrets=False) if profile_name
                  else contextlib.nullcontext())
+        from pm.filesystem import lock_fd, unlock_fd
+        from hermes_constants import mkdir_under_hermes_home
+        from contextlib import ExitStack
+        stack = ExitStack()
+        try:
+            mkdir_under_hermes_home(requested / "cron")
+            handle = stack.enter_context((requested / "cron/.plugins-reload.lock").open("a+b"))
+            if not lock_fd(handle.fileno(), wait=False):
+                return {"reloaded": False, "home": str(requested), "error": "plugin reload is in progress"}
+            stack.callback(unlock_fd, handle.fileno())
+            return _reload_in_scope(scope, requested, profile_name, params)
+        finally:
+            stack.close()
+
+    def _reload_in_scope(scope, requested, profile_name, params):
+        import json
+        from hermes_cli.plugins import discover_plugins, get_plugin_manager
+        from hermes_cli.plugins_activation import activation_summaries, dependency_blocked_summaries
+        from gateway.control_socket import build_identify_payload
+        marker = requested / "cron/.install-pending.json"
+        marker_data = json.loads(marker.read_text(encoding="utf-8-sig")) if marker.exists() else {}
+        actual_owner = None
+        owner_fields = ("hermes_home", "pid", "start_time", "code_sha",
+                        "cron_install_gate", "cron_install_capability")
+        if marker_data:
+            if marker_data.get("token") != params.get("install_token"):
+                return {"reloaded": False, "home": str(requested), "error": "Cron installation requires reconciliation"}
+            from cron.install_capability import owner_digest
+            identity = build_identify_payload()
+            actual_owner = {key: identity.get(key) for key in owner_fields}
+            if params.get("owner_sha256") != owner_digest(actual_owner):
+                return {"reloaded": False, "home": str(requested), "error": "serving gateway owner changed"}
         with scope:
             discover_plugins(force=True)
             manager = get_plugin_manager()
@@ -113,13 +145,18 @@ def reload_plugins_verb(runner: Any, loop: asyncio.AbstractEventLoop) -> Callabl
             # enabling caller asks for the restart that loads it.
             names = sorted(manager._plugins)
             activations = activation_summaries(manager) + dependency_blocked_summaries(manager)
+            loaded_sources = {key: getattr(loaded.module, "__hermes_entry_sha256__", None)
+                              for key, loaded in manager._plugins.items() if loaded.enabled}
         _reconcile_plugin_mcp_servers(runner, requested)
         try:
             rewired = asyncio.run_coroutine_threadsafe(_count_adapters(runner, profile_name), loop).result(timeout=5.0)
-        except Exception:
+        except (TimeoutError, RuntimeError, asyncio.CancelledError):
             rewired = None
-        return {"reloaded": True, "home": str(requested), "plugins": names, "activations": activations,
-                "adapters_rewired": rewired}
+        answer = {"reloaded": True, "home": str(requested), "plugins": names, "activations": activations,
+                  "adapters_rewired": rewired, "loaded_sources": loaded_sources}
+        if marker_data and actual_owner is not None:
+            answer["owner"] = {key: actual_owner.get(key) for key in owner_fields}
+        return answer
 
     return _handler
 
