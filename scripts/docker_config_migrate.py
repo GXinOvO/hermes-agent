@@ -2,7 +2,6 @@
 """Run Docker boot-time config migrations safely."""
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -34,13 +33,9 @@ def _backup_existing(paths: Iterable[Path]) -> dict[Path, Path]:
 
 
 def _restore_backups(backups: dict[Path, Path]) -> list[Path]:
-    restored: list[Path] = []
-    for original, backup in backups.items():
-        if not backup.is_file():
-            continue
-        shutil.copy2(backup, original)
-        restored.append(original)
-    return restored
+    from hermes_cli.post_update import _restore_backups as restore
+
+    return restore(backups)
 
 
 def main() -> int:

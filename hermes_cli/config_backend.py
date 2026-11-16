@@ -219,14 +219,16 @@ class FileBackend:
 
     @staticmethod
     def write_path(path: Path, changes: Changes) -> None:
+        from tools.memory_admin import memory_file_writer
         from utils import atomic_roundtrip_yaml_save, atomic_roundtrip_yaml_update
-        if changes.document is not None:
-            atomic_roundtrip_yaml_save(path, changes.document, extra_content_on_create=changes.extra_content_on_create)
-        for key, value in changes.set.items():
-            atomic_roundtrip_yaml_update(path, key, value)
-        for key in changes.unset:
-            atomic_roundtrip_yaml_update(path, key, None)
-        drop_other_access(path)
+        with memory_file_writer(path):
+            if changes.document is not None:
+                atomic_roundtrip_yaml_save(path, changes.document, extra_content_on_create=changes.extra_content_on_create)
+            for key, value in changes.set.items():
+                atomic_roundtrip_yaml_update(path, key, value)
+            for key in changes.unset:
+                atomic_roundtrip_yaml_update(path, key, None)
+            drop_other_access(path)
 
     def config_path(self, home: Path) -> Path:
         return Path(home) / CONFIG_FILENAME

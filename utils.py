@@ -269,6 +269,8 @@ def atomic_replace(tmp_path: str | Path, target: str | Path) -> str:
                         break
                     if not _is_contended_windows_replace_error(retry_exc):
                         raise
+        if os.path.isfile(real_path) and os.stat(real_path).st_nlink > 1:
+            raise OSError('atomic_replace_hardlink_target') from exc
         logger.debug("atomic_replace: %s -> %s failed with %s; falling back to %s", tmp_str, real_path,
                      getattr(exc, "winerror", None) or errno.errorcode.get(exc.errno or 0, exc.errno),
                      "in-place rewrite" if contended else "copy")

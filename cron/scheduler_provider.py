@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Cap for exponential tick backoff during fd exhaustion (interval doubled per failure).
 _EMFILE_BACKOFF_MAX_SECONDS = 15 * 60
 DEFAULT_MISFIRE_GRACE_MINUTES = 10
+_install_runtime_provider = None
 
 
 # Cap for the exponential tick backoff applied while consecutive ticks fail with fd exhaustion
@@ -200,6 +201,16 @@ class CronScheduler(ABC):
     def claim_fire(self, job_id: str, *, force: bool = False, manual: bool = False) -> dict | None:
         """Durably claim one fire + create its audit attempt. Transports call this synchronously
         before acknowledging, then pass the exact snapshot to ``fire_claimed`` off-thread."""
+        from cron.install_gate import InstallInProgress, install_gate
+        from cron.jobs import _current_cron_store
+
+        try:
+            with install_gate(_current_cron_store().cron_dir.parent):
+                return self._claim_fire_admitted(job_id, force=force, manual=manual)
+        except InstallInProgress:
+            return None
+
+    def _claim_fire_admitted(self, job_id: str, *, force: bool, manual: bool) -> dict | None:
         from cron.executions import create_execution, finish_execution, set_execution_occurrence
         from cron.jobs import claim_job_for_fire
 
@@ -384,18 +395,27 @@ def fire_overdue_jobs(
     return fired
 
 
-def resolve_cron_scheduler() -> CronScheduler:
+def resolve_cron_scheduler(*, capability_probe=False) -> CronScheduler:
     """Resolve ``cron.provider``; missing/failing/unavailable providers fall back to the built-in
     with a warning — cron must never be left without a trigger."""
     name = ""
     try:
-        from hermes_cli.config import cfg_get, load_config
-        name = (cfg_get(load_config(), "cron", "provider", default="") or "").strip()
+        if capability_probe:
+            from cron.install_capability import probe_provider_name
+            name = probe_provider_name()
+        else:
+            from hermes_cli.config import cfg_get, load_config
+            name = (cfg_get(load_config(), "cron", "provider", default="") or "").strip()
     except Exception:
-        pass
+        if capability_probe:
+            raise
 
     if not name or name in ("builtin", "in-process", "inprocess"):
         return InProcessCronScheduler()
+
+    if capability_probe:
+        from cron.install_capability import CapabilityUnavailable
+        raise CapabilityUnavailable("external provider probe would load plugin code; installation refused")
 
     try:
         from plugins.cron_providers import load_cron_scheduler
@@ -442,6 +462,7 @@ class InProcessCronScheduler(CronScheduler):
     ):
         from cron.scheduler import CronTickYielded
         from cron.scheduler import tick as cron_tick
+        self._install_tick = cron_tick
         from cron.jobs import clear_ticker_error, record_ticker_error, record_ticker_heartbeat
         from cron.scheduler_ownership import register_ticked_homes
         from hermes_constants import get_process_hermes_home
@@ -495,7 +516,7 @@ class InProcessCronScheduler(CronScheduler):
                     note_held()
                 else:
                     note_dispatching()
-                    cron_tick(
+                    self._install_tick(
                         verbose=False, adapters=adapters, loop=loop, sync=False,
                         can_dispatch=can_dispatch,
                     )
@@ -545,9 +566,10 @@ class InProcessCronScheduler(CronScheduler):
         home)``, when given, is consulted every cycle; a rejected profile is neither ticked nor
         heartbeated."""
         from cron.scheduler import tick as cron_tick
+        self._install_tick = cron_tick
         from cron.scheduler import CronTickYielded, _is_fd_exhaustion
         from cron.scheduler_preflight import (
-            has_credential_platform, shared_route_adapters_for_current_home,
+            SharedRouteAdapters, _primary_profile_routes_for_current_home, has_credential_platform,
         )
         from cron.jobs import clear_ticker_error, record_ticker_error, record_ticker_heartbeat
         from cron.scheduler_ownership import register_ticked_homes
@@ -571,7 +593,7 @@ class InProcessCronScheduler(CronScheduler):
             tick_adapters = (profile_adapters or {}).get(profile_name) or {}
             owned = (profile_bot_platforms or {}).get(profile_name)
             if not has_credential_platform(tick_adapters, owned) and adapters:
-                return shared_route_adapters_for_current_home(adapters)
+                return SharedRouteAdapters(adapters, _primary_profile_routes_for_current_home())
             return tick_adapters
 
         # Recovery + heartbeat per profile; one broken store must not abort startup for the others.
@@ -629,7 +651,7 @@ class InProcessCronScheduler(CronScheduler):
                         try:
                             with _profile_cron_scope(home):
                                 note_dispatching()
-                                cron_tick(
+                                self._install_tick(
                                     verbose=False, adapters=tick_adapters_for(_pname), loop=loop,
                                     sync=False, can_dispatch=can_dispatch,
                                 )

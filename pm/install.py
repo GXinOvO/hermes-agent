@@ -830,6 +830,14 @@ def _publication(plugins: PluginInput | None):
 
 
 def _publish_inactive(change) -> None:
+    from pm.plugin_target_lock import target_writer_lock
+    from contextlib import nullcontext
+    target = getattr(change, "target", None)
+    with target_writer_lock(target) if target is not None and os.name == "posix" else nullcontext():
+        _publish_inactive_locked(change)
+
+
+def _publish_inactive_locked(change) -> None:
     """A disabled plugin's code changes without touching the dependency environment."""
     from pm import receipt
     from hermes_cli.runtime_state import finish_publication, recover_publication
@@ -867,6 +875,17 @@ def _target_selection(package, fact: dict, *, extras, inputs: dict, repair: bool
 
 def _commit_selection(package, facts: Facts, change, *, enabled: list[str], stamp: str, inputs: dict,
                       current: bool, repair: bool, explicit: bool, skip_invalid_secondary: bool = False) -> None:
+    from pm.plugin_target_lock import target_writer_lock
+    from contextlib import nullcontext
+    target = getattr(change, "target", None)
+    with target_writer_lock(target) if target is not None and os.name == "posix" else nullcontext():
+        _commit_selection_locked(package, facts, change, enabled=enabled, stamp=stamp, inputs=inputs,
+                                 current=current, repair=repair, explicit=explicit,
+                                 skip_invalid_secondary=skip_invalid_secondary)
+
+
+def _commit_selection_locked(package, facts: Facts, change, *, enabled: list[str], stamp: str, inputs: dict,
+                             current: bool, repair: bool, explicit: bool, skip_invalid_secondary: bool = False) -> None:
     """Build (unless current), publish the plugin change, then record the selection."""
     from pm import receipt
     from hermes_cli.runtime_state import finish_publication, recover_publication

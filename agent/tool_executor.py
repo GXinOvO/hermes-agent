@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- sequential and concurrent dispatch stay in one middleware facade
 """Tool-call execution: sequential and concurrent dispatch, extracted from AIAgent.
 
 Functions take the parent ``AIAgent`` first; ``run_agent`` keeps thin wrappers and is
@@ -715,6 +716,22 @@ def _dispatch_authorized_once(
         block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
         state.args = ref.args
     block_body = None if block_message is None else {"error": block_message}
+    _audit_policy = getattr(agent, '_memory_audit_policy', None)
+    if _audit_policy is None:
+        from tools.memory_tool import current_memory_audit_policy
+        _audit_policy = current_memory_audit_policy()
+        if _audit_policy is not None:
+            agent._memory_audit_policy = _audit_policy
+    _audit_report_action = None
+    if block_body is None and _audit_policy is not None:
+        if ref.name == 'memory' and not _audit_policy.admits_request(ref.args):
+            block_error_type = _audit_policy.request_refusal()
+            block_body = {'error': block_error_type, 'success': False}
+        elif ref.name != 'memory':
+            _audit_report_action = _audit_policy.report_action(ref.name, ref.args)
+            if _audit_report_action is None:
+                block_body = {'error': 'memory_audit_tool_scope_blocked', 'success': False}
+                block_error_type = 'memory_audit_tool_scope_blocked'
 
     # Checked once, after plugin modify hooks (which may replace arguments) and
     # before guardrails or real dispatch: a copied compression marker in an
@@ -748,8 +765,14 @@ def _dispatch_authorized_once(
     elif ref.name == "skill_manage":
         agent._iters_since_skill = 0
 
-    from agent.terminal_approval_batch import prepare_current_terminal
-    prepare_current_terminal(ref)
+    if _audit_report_action is None:
+        from agent.terminal_approval_batch import prepare_current_terminal
+        prepare_current_terminal(ref)
+    else:
+        audit_policy = _audit_policy
+        if audit_policy is None:
+            raise RuntimeError("memory audit policy disappeared before report dispatch")
+        execute = lambda args: audit_policy.run_report_action(_audit_report_action, args)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
     from agent.tool_progress_relay import bound_tool_progress
     from tools.connectors.data_use import collect_data_use

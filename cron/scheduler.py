@@ -2202,6 +2202,7 @@ _RunResult = tuple[bool, str, str, Optional[str]]
 
 def _prepare_job_prompt(
     job: dict, job_id: str, job_name: str, extra_prompt: Optional[str], cancel_event,
+    audit_capture: Optional[dict] = None,
 ) -> tuple[Optional[_RunResult], Optional[str]]:
     """Run every pre-agent gate and build the prompt. Returns ``(early_result, prompt)``: an early
     result short-circuits ``run_job`` (no_agent job, empty payload, monitor gate, wake gate,
@@ -2241,14 +2242,27 @@ def _prepare_job_prompt(
     prerun_script = None
     script_path = job.get("script")
     if script_path:
+        script_kwargs = {
+            'workdir': _resolve_job_workdir(job, job_id),
+            'cancel_event': cancel_event,
+        }
+        if audit_capture is not None:
+            binding = audit_capture.get('execution_binding', {})
+            script_kwargs.update(
+                expected_script_sha256=binding.get('collector_sha256'),
+                expected_interpreter_path=binding.get('interpreter_path'),
+                expected_interpreter_sha256=binding.get('interpreter_sha256'),
+                expected_baseline_sha256=binding.get('baseline_sha256'))
         prerun_script = _run_job_script_with_claim_heartbeat(
-            job,
-            script_path,
-            workdir=_resolve_job_workdir(job, job_id),
-            cancel_event=cancel_event,
-        )
+            job, script_path, **script_kwargs)
+        if audit_capture is not None:
+            audit_capture['prerun'] = prerun_script
         _ran_ok, _script_output = prerun_script
         if _ran_ok and not _parse_wake_gate(_script_output):
+            if audit_capture is not None:
+                error = 'memory_audit_collection_error'
+                response = '[CRON_FAILURE]\n' + error
+                return (False, response, response, error), None
             logger.info("Job '%s' (ID: %s): wakeAgent=false, skipping agent run", job_name, job_id)
             note_cron_skipped(job)
             silent_doc = (
@@ -2260,6 +2274,14 @@ def _prepare_job_prompt(
             return (True, silent_doc, SILENT_MARKER, None), None
 
     try:
+        if audit_capture is not None and prerun_script is not None and prerun_script[0]:
+            from cron import memory_audit_policy
+            from tools.cronjob_prompt_scan import _scan_cron_skill_assembled
+
+            _, scan_error = _scan_cron_skill_assembled(prerun_script[1])
+            if scan_error:
+                raise CronPromptInjectionBlocked(scan_error)
+            prerun_script = (True, memory_audit_policy.prompt_output(prerun_script[1]))
         prompt = _build_job_prompt(
             job, prerun_script=prerun_script, extra_prompt=extra_prompt,
             runtime_data_prompt=monitor_context,
@@ -2284,6 +2306,10 @@ def _prepare_job_prompt(
         )
         return (False, blocked_doc, "", str(block_exc)), None
     if prompt is None:
+        if audit_capture is not None:
+            error = 'memory_audit_collection_error'
+            response = '[CRON_FAILURE]\n' + error
+            return (False, response, response, error), None
         logger.info("Job '%s': script produced no output, skipping AI call.", job_name)
         note_cron_skipped(job)
         return (True, "", SILENT_MARKER, None), None
@@ -2450,6 +2476,7 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
 
 def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup, *, workdir, session_id,
                           session_db, event_callback=None):
+    from cron.memory_audit_policy import JOB_ID as MEMORY_AUDIT_JOB_ID
     runtime = setup.runtime
     pr = _cfg.get("provider_routing") or {}
     return AIAgent(
@@ -2478,7 +2505,7 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
         # Project context files only with a configured workdir; SOUL.md always.
         skip_context_files=not bool(workdir),
         load_soul_identity=True,
-        skip_memory=False,
+        skip_memory=job.get('id') == MEMORY_AUDIT_JOB_ID,
         skip_background_review=True,  # Cron has no human-in-the-loop need for skill/memory review forks (~30K tok/event)
         platform="cron",
         session_id=session_id,
@@ -2490,6 +2517,7 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
 
 
 
+# health: allow CC -- audit binding and live execution must remain one fail-closed scheduler transition
 def run_job(
     job: dict, *, defer_agent_teardown: Optional[list] = None, extra_prompt: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None, execution_id: Optional[str] = None,
@@ -2513,6 +2541,30 @@ def run_job(
     owner_execution = current_execution()
     if owner_execution is not None and owner_execution[2:] != (job['id'], execution_id):
         owner_execution = None
+    from cron import memory_audit_policy
+    job_id = job['id']
+    _audit_binding = None
+    _audit_interpreter_sha256 = None
+    _audit_interpreter_path = None
+    if job_id == memory_audit_policy.JOB_ID:
+        _audit_interpreter_path, _audit_interpreter_sha256, _interpreter_error = resolve_script_interpreter_identity(
+            job, job.get('script') or '')
+        if _interpreter_error is not None:
+            error = 'memory_audit_invalid_execution_binding'
+            response = '[CRON_FAILURE]\n' + error
+            return False, response, response, error
+    if job_id == memory_audit_policy.JOB_ID and (
+            job.get('no_agent') or not memory_audit_policy.matches(job_id, _get_hermes_home())):
+        error = 'memory_audit_invalid_execution_scope'
+        response = '[CRON_FAILURE]\n' + error
+        return False, response, response, error
+    if job_id == memory_audit_policy.JOB_ID:
+        _audit_binding = memory_audit_policy.execution_binding(
+            job, _get_hermes_home(), _audit_interpreter_sha256, _audit_interpreter_path)
+        if _audit_binding is None:
+            error = 'memory_audit_invalid_execution_binding'
+            response = '[CRON_FAILURE]\n' + error
+            return False, response, response, error
     if job.get("no_agent"):
         from cron.scheduler_results import run_script_job
         return run_script_job(job, execution_id=execution_id, cancel_event=cancel_event)
@@ -2520,16 +2572,61 @@ def run_job(
         from cron.scheduler_authority import run_canonical_job
         return run_canonical_job(job, extra_prompt=extra_prompt, cancel_event=cancel_event,
                                  execution_id=execution_id)
-    job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
-    early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
-    if early is not None:
-        return early
-    from run_agent import AIAgent
+    _memory_audit = _audit_binding is not None
+    _audit_capture = {'execution_binding': _audit_binding} if _memory_audit else None
+    _audit_lock_context = None
 
-    _cron_session_id = (owner_execution[1] if owner_execution is not None else
-                        f"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}")
+    def _release_audit_lock(exc_info=None):
+        nonlocal _audit_lock_context
+        if _audit_lock_context is None:
+            return
+        if exc_info is None:
+            _audit_lock_context.__exit__(None, None, None)
+        else:
+            _audit_lock_context.__exit__(*exc_info)
+        _audit_lock_context = None
+
+    try:
+        if _memory_audit:
+            _audit_lock_context = memory_audit_policy.hold_audit_run_lock(_get_hermes_home())
+            _audit_lock_context.__enter__()
+        early, prompt = _prepare_job_prompt(
+            job, job_id, job_name, extra_prompt, cancel_event, _audit_capture)
+    except BaseException:
+        _release_audit_lock(sys.exc_info())
+        raise
+    _release_audit_lock()
+    if early is not None:
+        if _memory_audit and early[0]:
+            error = 'memory_audit_collection_error'
+            response = '[CRON_FAILURE]\n' + error
+            return False, response, response, error
+        return early
+    if _memory_audit:
+        _current_binding = memory_audit_policy.execution_binding(
+            job, _get_hermes_home(), _audit_interpreter_sha256, _audit_interpreter_path)
+        if (_current_binding is None
+                or _current_binding['collector_sha256'] != _audit_binding['collector_sha256']
+                or _current_binding['publisher_sha256'] != _audit_binding['publisher_sha256']
+                or _current_binding['interpreter_sha256'] != _audit_binding['interpreter_sha256']):
+            error = 'memory_audit_execution_binding_changed'
+            response = '[CRON_FAILURE]\n' + error
+            _release_audit_lock()
+            return False, response, response, error
+    try:
+        from run_agent import AIAgent
+    except BaseException:
+        _release_audit_lock(sys.exc_info())
+        raise
+
+    try:
+        _cron_session_id = (owner_execution[1] if owner_execution is not None else
+                            f"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}")
+    except BaseException:
+        _release_audit_lock(sys.exc_info())
+        raise
     logger.info("Running job '%s' (ID: %s)", job_name, job_id)
     logger.info("Prompt: %s", prompt[:100])
 
@@ -2538,7 +2635,12 @@ def run_job(
     _session_db = None
     _audit: Optional[FireAudit] = None
     _worker_state: dict = {}
-    scope = _CronRunScope(job, job_id, execution_id)
+    _audit_policy_token = None
+    try:
+        scope = _CronRunScope(job, job_id, execution_id)
+    except BaseException:
+        _release_audit_lock(sys.exc_info())
+        raise
     try:
         scope.enter()
         if scope.workdir:
@@ -2569,11 +2671,75 @@ def run_job(
         agent._cron_requested_model = _audit.requested_model
         agent._cron_requested_provider = _audit.requested_provider
         agent._cron_requested_api_mode = _audit.requested_api_mode
+        _policy = None
+        if _memory_audit:
+            _prerun = _audit_capture.get('prerun') if _audit_capture is not None else None
+            _status = 'error' if job.get('script') != memory_audit_policy.SCRIPT_NAME else (
+                memory_audit_policy.collection_status(_prerun, prompt, _get_hermes_home()))
+            _hashes = {}
+            _failure = 'memory_audit_collection_error' if _status == 'error' else None
+            _data = None
+            if _status != 'error':
+                if not isinstance(_prerun, tuple) or len(_prerun) != 2 or not isinstance(_prerun[1], str):
+                    _failure = 'memory_audit_collection_error'
+                else:
+                    try:
+                        _data = json.loads(_prerun[1])
+                        _hashes = {'memory': _data['files']['MEMORY.md']['sha256'],
+                                   'user': _data['files']['USER.md']['sha256']}
+                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                        _failure = 'memory_audit_collection_error'
+            _policy = memory_audit_policy.RunPolicy(_status, _hashes, cancel_event)
+            _audit_home = Path(_get_hermes_home()).resolve()
+            _policy.audit_lock_path = _audit_home / 'cron' / '.memory-audit.lock'
+            _policy.run_lock_held = False
+            if _failure is None and _data is not None:
+                _binding = memory_audit_policy.publication_binding(_data, _audit_home)
+                if _binding is None:
+                    _failure = 'memory_audit_invalid_publication_binding'
+                else:
+                    _policy.report_source, _policy.publisher, _policy.run_time = _binding
+                    _policy.collector = _audit_binding['collector']
+                    _policy.creation_baseline = _data['creation_baseline']
+                    if agent._memory_store is None or not _policy.bind_store_identity(agent._memory_store):
+                        _failure = 'memory_audit_invalid_store_binding'
+                    _policy.collector_sha256 = _audit_binding['collector_sha256']
+                    _policy.publisher_sha256 = _audit_binding['publisher_sha256']
+                    _policy.publisher_dependencies = _audit_binding['publisher_dependencies']
+                    _policy.interpreter_path = Path(_audit_binding['interpreter_path'])
+                    _policy.interpreter_sha256 = _audit_binding['interpreter_sha256']
+                    _policy.read_paths = {
+                        _audit_home / 'memories' / 'MEMORY.md',
+                        _audit_home / 'memories' / 'USER.md',
+                        Path(_data['verified_backup']) / 'manifest.json',
+                        _policy.report_source,
+                        memory_audit_policy.report_html_path(_policy.run_time),
+                        _policy.report_source.parent / f'publication-{_policy.report_source.stem.removeprefix("maintenance-")}.json',
+                    }
+            if _failure:
+                _target, _report_error = memory_audit_policy.failure_report(_audit_home, _failure)
+                _detail = _failure + (f'; {_report_error}' if _report_error else '')
+                _response = '[CRON_FAILURE]\n' + _detail + (f'\n{_target}' if _target else '')
+                return False, _response, _response, _detail
+            if _policy is not None:
+                agent._memory_audit_policy = _policy
+                if agent._memory_store is not None:
+                    agent._memory_store._memory_audit_policy = _policy
+                from tools.memory_tool import bind_memory_audit_policy
+                _audit_policy_token = bind_memory_audit_policy(_policy)
 
         result = _run_agent_with_watchdog(
             agent, prompt, job, job_id, job_name, scope.task_id, cancel_event,
             worker_state=_worker_state)
         final_response = _final_response_from_result(result, job_id, job_name, AIAgent)
+        if _memory_audit and (
+                _policy is None
+                or agent._memory_store is None
+                or not _policy.report_verified(agent._memory_store)):
+            error = 'memory_audit_report_not_verified'
+            response = '[CRON_FAILURE]\n' + error
+            _audit.write(result, error)
+            return False, response, response, error
         if (setup.fallback_notice and final_response.strip() and not _is_cron_silence_response(final_response)
                 and _cron_failure_marker_error(final_response) is None):
             # Pre-agent provider switch (#74349) rides with the delivered report; silence and the
@@ -2623,6 +2789,14 @@ def run_job(
         return False, output, "", error_msg
 
     finally:
+        if _memory_audit and agent is not None:
+            _policy = getattr(agent, '_memory_audit_policy', None)
+            if _policy is not None:
+                _policy.revoke()
+        if _audit_policy_token is not None:
+            from tools.memory_tool import reset_memory_audit_policy
+            reset_memory_audit_policy(_audit_policy_token)
+        _release_audit_lock()
         from cron.scheduler_detached_worker import defer_teardown_to_running_worker
         _worker_teardown_deferred = defer_teardown_to_running_worker(
             _worker_state.get("future"), _session_db, agent, job_id, job_name, _cron_session_id,
@@ -4353,7 +4527,8 @@ from cron.scheduler_delivery import (
     _resolve_delivery_targets,
 )
 from cron.scheduler_script import (
-    _get_session_db_timeout, _run_job_script_with_claim_heartbeat, _start_heartbeat_thread,
+    _get_session_db_timeout, _run_job_script_with_claim_heartbeat,
+    _start_heartbeat_thread, resolve_script_interpreter_identity,
 )
 from cron.scheduler_prompt import (
     _PROMPT_FRAME, _PROMPT_HEADING, _PROMPT_SEPARATOR, _RESPONSE_FRAME, _RESPONSE_HEADING,

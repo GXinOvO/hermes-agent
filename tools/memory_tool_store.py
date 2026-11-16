@@ -7,8 +7,11 @@ import itertools
 import logging
 import os
 import re
+import stat
+import tempfile
 import time
-from contextlib import contextmanager, suppress
+import uuid
+from contextlib import contextmanager, suppress, ExitStack
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +39,29 @@ def _scan_memory_content(content: str) -> Optional[str]:
 # shared_metrics_contract.MEMORY_OP_FAILURE_CLASSES); never part of the result the model sees.
 FAILURE_CLASS: ContextVar[str] = ContextVar("memory_failure_class", default="other")
 _BACKUP_FAILED = " (BACKUP FAILED — file unchanged on disk)"
+_RENAME_EXCHANGE = 2
+class MemoryAuditUnsupportedPlatform(RuntimeError):
+    pass
+
+
+def _rename_exchange_at(parent_fd: int, source_name: str, target_name: str) -> bool:
+    if os.name == "nt" or not hasattr(os, "O_DIRECTORY"):
+        raise MemoryAuditUnsupportedPlatform("memory_audit_platform_unsupported")
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError):
+        raise MemoryAuditUnsupportedPlatform("memory_audit_platform_unsupported")
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(parent_fd, os.fsencode(source_name), parent_fd, os.fsencode(target_name), _RENAME_EXCHANGE)
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error in (38, 22, 95):
+        raise MemoryAuditUnsupportedPlatform("memory_audit_platform_unsupported")
+    raise OSError(error, os.strerror(error))
 
 
 def _error(message: str, failure_class: str, **extra) -> dict[str, Any]:
@@ -245,6 +271,8 @@ class MemoryStore:
             from hermes_constants import mkdir_under_hermes_home
 
             mkdir_under_hermes_home(path.parent)
+            if path.parent.is_symlink():
+                raise RuntimeError(f"Refusing memory path under symlinked directory: {path.parent}")
             # Deduplicate (order-preserving, first occurrence wins).
             entries = list(dict.fromkeys(self._read_file(path)))
             self._set_entries(target, entries)
@@ -259,7 +287,7 @@ class MemoryStore:
 
     @staticmethod
     @contextmanager
-    def _file_lock(path: Path):
+    def _file_lock(path: Path, *, blocking: bool = True):
         """Exclusive lock on a separate .lock file so the memory file itself can
         still be atomically replaced."""
         from tools import memory_tool as _mt  # fcntl/msvcrt live (and are patched) there
@@ -269,12 +297,34 @@ class MemoryStore:
 
         mkdir_under_hermes_home(lock_path.parent)
         if fcntl is None and msvcrt is None:
-            yield
+            yield None
             return
         flags = os.O_RDWR | os.O_CREAT
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        raw_fd = os.open(lock_path, flags, 0o600)
+        parent_fd = None
+        raw_fd = None
+        try:
+            if os.name != "nt" and hasattr(os, "O_DIRECTORY"):
+                try:
+                    parts = Path(os.path.abspath(lock_path.parent)).parts
+                    parent_fd = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    for component in parts[1:]:
+                        child_fd = os.open(
+                            component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                        os.close(parent_fd)
+                        parent_fd = child_fd
+                    raw_fd = os.open(lock_path.name, flags, 0o600, dir_fd=parent_fd)
+                except OSError:
+                    if parent_fd is not None:
+                        os.close(parent_fd)
+                        parent_fd = None
+                    raw_fd = os.open(lock_path, flags, 0o600)
+            else:
+                raw_fd = os.open(lock_path, flags, 0o600)
+        finally:
+            if parent_fd is not None:
+                os.close(parent_fd)
         try:
             # The creation mode is filtered through the process umask and does
             # not repair a lock left loose by an older Hermes process. Tighten
@@ -289,16 +339,20 @@ class MemoryStore:
         with fd:
             def _flock(unlock: bool):
                 if fcntl:
-                    fcntl.flock(fd, fcntl.LOCK_UN if unlock else fcntl.LOCK_EX)
+                    mode = fcntl.LOCK_UN if unlock else fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+                    fcntl.flock(fd, mode)
                 else:
+                    assert msvcrt is not None
                     fd.seek(0)
-                    msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK if unlock else msvcrt.LK_LOCK, 1)
+                    mode = msvcrt.LK_UNLCK if unlock else (msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK)
+                    msvcrt.locking(fd.fileno(), mode, 1)
             _flock(False)
             try:
-                yield
+                yield fd.fileno()
             finally:
-                with suppress(OSError):
-                    _flock(True)
+                if not fcntl:
+                    with suppress(OSError):
+                        _flock(True)
 
     @staticmethod
     def _path_for(target: str) -> Path:
@@ -310,6 +364,33 @@ class MemoryStore:
 
     def _set_entries(self, target: str, entries: list[str]):
         setattr(self, "user_entries" if target == "user" else "memory_entries", entries)
+
+    @staticmethod
+    def _open_directory_fd(path: Path) -> int:
+        parts = Path(path).resolve().parts
+        fd = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for component in parts[1:]:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def _open_temp_file_at(parent_fd: int) -> tuple[int, str]:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        for _ in range(20):
+            name = f".mem_{uuid.uuid4().hex}"
+            try:
+                return os.open(name, flags, 0o600, dir_fd=parent_fd), name
+            except FileExistsError:
+                continue
+        raise FileExistsError("unable to create a unique memory temporary file")
 
     def _char_count(self, target: str) -> int:
         return len(ENTRY_DELIMITER.join(self._entries_for(target)))
@@ -350,7 +431,14 @@ class MemoryStore:
                    usage=self._usage(target),
                    **({"closest_entries": closest_entries} if closest_entries else {})))
 
-    def _mutate(self, target: str, mutate, *, skip_drift: bool = False) -> dict[str, Any]:
+    # health: allow CC -- memory mutation preserves the complete lock and snapshot protocol
+    def _mutate(self, target: str, mutate, *, skip_drift: bool = False,
+                audit_action: Optional[str] = None,
+                audit_matched_entry: Optional[str] = None,
+                audit_operations: Optional[list[dict[str, Any]]] = None,
+                audit_read_only: bool = False,
+                audit_matcher=None,
+                lock_all_targets: bool = False) -> dict[str, Any]:
         """Lock, re-read from disk, run ``mutate(entries, limit)`` -> ``(new_entries, message)``
         or an error dict, then persist and return the success response. The reload aborts
         on an existing-but-unreadable file (even append-only ``add`` rewrites the whole
@@ -364,13 +452,69 @@ class MemoryStore:
         from tools.hosted_tool_policy import host_feature_enabled
         if not host_feature_enabled("builtin_memory"):
             return {"success": False, "error": "Memory is not available to a hosted agent."}
+        if target not in ("memory", "user"):
+            return _error("Unknown memory target.", "invalid_args")
+        if not self.target_enabled(target):
+            label = "USER.md" if target == "user" else "MEMORY.md"
+            return _error(f"Built-in {label} writes are disabled in memory config.", "disabled", target=target)
         path = self._path_for(target)
-        with self._file_lock(path):
-            raw, read_ok = self._read_raw_checked(path)
-            if not read_ok:
-                return _read_failed_error(path)
+        policy = getattr(self, '_memory_audit_policy', None)
+        if policy is None:
+            from tools.memory_tool import current_memory_audit_policy
+            policy = current_memory_audit_policy()
+            if policy is not None:
+                self._memory_audit_policy = policy
+        source = b''
+        with ExitStack() as locks:
+            if policy is not None:
+                if not getattr(policy, 'run_lock_held', False):
+                    from hermes_constants import get_hermes_home
+                    locks.enter_context(self._file_lock(get_hermes_home() / 'cron' / '.memory-audit.lock'))
+                locks.enter_context(policy.lock)
+                for name in ('memory', 'user'):
+                    locks.enter_context(self._file_lock(self._path_for(name)))
+                if not policy.live() or not policy.matches_store(self):
+                    return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+                if audit_action is None and not audit_read_only:
+                    return _error('memory_audit_unclassified_mutation', 'gate_refused')
+
+            else:
+                from hermes_constants import get_hermes_home
+                locks.enter_context(self._file_lock(get_hermes_home() / 'cron' / '.memory-audit.lock'))
+                if lock_all_targets:
+                    for name in ('memory', 'user'):
+                        locks.enter_context(self._file_lock(self._path_for(name)))
+                else:
+                    locks.enter_context(self._file_lock(path))
+            if policy is not None:
+                try:
+                    source = path.read_bytes()
+                    if not policy.matches_source(target, source):
+                        return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+                    if policy.status == 'complete' and policy.has_nonidentical_duplicates(source):
+                        return _error('memory_audit_nonidentical_duplicates', 'gate_refused')
+                    raw = source.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n')
+                except (OSError, UnicodeDecodeError):
+                    return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+            else:
+                raw, read_ok = self._read_raw_checked(path)
+                if not read_ok:
+                    return _read_failed_error(path)
             oversized = not skip_drift and self._has_oversized_entry(target, raw)
             before = list(dict.fromkeys(self._parse_entries(raw)))
+            if (audit_action in ('patch', 'remove', 'replace')
+                    and audit_matched_entry is None and audit_matcher is not None):
+                try:
+                    audit_matched_entry = audit_matcher(before)
+                except (IndexError, KeyError, TypeError, ValueError):
+                    audit_matched_entry = None
+            if (policy is not None and audit_action is not None
+                    and not policy.admits_direct_mutation(
+                        target, audit_action, audit_matched_entry, audit_operations)):
+                return _error(policy.request_refusal(), 'gate_refused')
+            if (policy is not None and audit_action in ('patch', 'remove', 'replace')
+                    and audit_matched_entry not in before):
+                return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
             self._set_entries(target, before)
             FAILURE_CLASS.set("other")  # read below: only this closure's refusal counts
             result = mutate(self._entries_for(target), self._char_limit(target))
@@ -381,6 +525,8 @@ class MemoryStore:
                     return _drift_error(path, self._drift_backup(target, raw))
                 return result
             extra_fields = dict(result[2]) if len(result) > 2 else {}
+            if policy is not None and before and not result[0]:
+                return _error('memory_audit_cannot_empty_store', 'gate_refused')
             # An oversized entry is either free text appended without a delimiter or an entry written before the limit was lowered. Pruning is the way
             # back under a lowered limit, so a write that only deletes entries proceeds; one that
             # drops an oversized entry keeps the snapshot first, as it may hold appended text.
@@ -393,11 +539,58 @@ class MemoryStore:
                     if bak.endswith(_BACKUP_FAILED):  # no copy, no delete of possibly glued text
                         return _drift_error(path, bak)
                     extra_fields["drift_backup"] = bak
-            self._set_entries(target, result[0])
+            if result[0] == before and (policy is None or policy.status != 'partial'):
+                self._set_entries(target, before)
+                return self._success_response(target, result[1], **extra_fields)
+            preserved = None
+            if policy is not None:
+                if policy.status == 'partial':
+                    try:
+                        preserved = policy.lossless_dedup(target, source, result[0])
+                    except OSError:
+                        return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+                    if preserved is None:
+                        return _error('memory_audit_lossless_result_required', 'gate_refused')
+                elif not policy.admits_result(target, raw, result[0]):
+                    return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
             from hermes_constants import mkdir_under_hermes_home
 
             mkdir_under_hermes_home(path.parent)
-            self._write_file(path, result[0])
+            if policy is not None and (not policy.live() or not policy.matches_store(self)):
+                return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+            if preserved is None:
+                if policy is not None:
+                    try:
+                        written = self._write_file_verified(
+                            path, result[0], lambda: policy.matches_store(self),
+                            post_commit=lambda: policy.matches_store_after_write(
+                                self, target, ENTRY_DELIMITER.join(result[0]).encode('utf-8')),
+                            expected_bytes=source)
+                    except MemoryAuditUnsupportedPlatform:
+                        return _error('memory_audit_platform_unsupported', 'gate_refused')
+                    if not written:
+                        return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+                else:
+                    self._write_file(path, result[0])
+            else:
+                from utils import atomic_write_bytes
+                active_policy = policy
+                assert active_policy is not None
+                try:
+                    written = self._write_bytes_verified(
+                            path, preserved, lambda: active_policy is not None and active_policy.matches_store(self),
+                            post_commit=lambda: active_policy.matches_store_after_write(self, target, preserved),
+                            expected_bytes=source)
+                except MemoryAuditUnsupportedPlatform:
+                    return _error('memory_audit_platform_unsupported', 'gate_refused')
+                if not written:
+                    return _error('memory_audit_snapshot_or_run_changed', 'gate_refused')
+            self._set_entries(target, result[0])
+            if policy is not None:
+                policy.note_write(
+                    target,
+                    (preserved if preserved is not None
+                     else ENTRY_DELIMITER.join(result[0]).encode('utf-8')))
             return self._success_response(target, result[1], **extra_fields)
 
     def add(self, target: str, content: str) -> dict[str, Any]:
@@ -410,13 +603,11 @@ class MemoryStore:
 
         def _add(entries, limit):
             if content in entries:
-                return self._success_response(target, "Entry already exists (no duplicate added).")
+                return entries, "Entry already exists (no duplicate added)."
             if len(ENTRY_DELIMITER.join(entries + [content])) > limit:
                 return self._add_overflow(target, content, limit)
             return entries + [content], "Entry added."
-        # Append-only: skip the drift guard (appending never clobbers foreign
-        # content) but still refuse a failed read — add rewrites the WHOLE file.
-        return self._mutate(target, _add, skip_drift=True)
+        return self._mutate(target, _add, skip_drift=True, audit_action='add')
 
     def replace(self, target: str, old_text: str, new_content: str,
                 matched_entry: Optional[str] = None) -> dict[str, Any]:
@@ -465,7 +656,8 @@ class MemoryStore:
                     f"(see current_entries below), then retry — all in this turn."))
             return patched, "Entry patched.", {
                 "patched_entry_before": before, "patched_entry_after": after}
-        return self._mutate(target, _apply)
+        return self._mutate(
+            target, _apply, audit_action="patch", audit_matched_entry=matched_entry)
 
     def remove(self, target: str, old_text: str, matched_entry: Optional[str] = None) -> dict[str, Any]:
         """Remove the entry containing old_text substring."""
@@ -496,7 +688,7 @@ class MemoryStore:
         def _resolve(entries, limit):
             idx = self._locate(entries, old_text.strip(), verb)
             return idx if isinstance(idx, dict) else {"success": True, "matched_entry": entries[idx]}
-        return self._mutate(target, _resolve, skip_drift=True)
+        return self._mutate(target, _resolve, skip_drift=True, audit_read_only=True)
 
     def _edit(self, target: str, old_text: str, new_content: Optional[str],
               matched_entry: Optional[str] = None) -> dict[str, Any]:
@@ -515,7 +707,10 @@ class MemoryStore:
                     f"'operations' batch with this replace plus removes/shortenings of other stale entries "
                     f"(see current_entries below) — the limit is checked only on the batch result."))
             return replaced, "Entry replaced.", {"replaced_entry": entries[idx]}
-        return self._mutate(target, _apply)
+        return self._mutate(
+            target, _apply,
+            audit_action="replace" if new_content is not None else "remove",
+            audit_matched_entry=matched_entry)
 
     @staticmethod
     def _apply_batch_op(working: list[str], act: str, content: str, old_text: str, pos: str,
@@ -610,17 +805,15 @@ class MemoryStore:
                 if after is not None:
                     produced[i + 1] = after
             if entries and not working and not (len(ops) == 1 and ops[0].get("action") == "remove"):
-                # #103419: a consolidation batch that removes the last entry would
-                # commit an empty file as a normal successful write. Refuse; a batch of
-                # exactly one remove is the deliberate single delete (operations[] is the
-                # memory tool's only advertised shape), and unattended forks never get
-                # that far: the #105921 delete gate stages their removes.
+                # A consolidation batch that removes the last entry would commit an empty file.
+                # The audit mutation gate rejects every empty result, including a lone remove;
+                # the exception here preserves the interactive tool's existing behavior.
                 label = self._path_for(target).name
                 return self._batch_failure(target, (
                     f"Refusing to empty {label}: this batch would remove every entry from a "
                     f"previously non-empty store. Keep at least one entry — merge overlapping "
-                    f"entries into a shorter one instead of removing the last one. To delete the "
-                    f"final entry deliberately, remove it alone in a one-item batch."), "would_empty")
+                    f"entries into a shorter one. To delete the final entry interactively, "
+                    f"remove it alone in a one-item batch."), "would_empty")
             new_total = len(ENTRY_DELIMITER.join(working))  # budget check against the FINAL state only
             # A remove-only batch or a lone duplicate add never grows the store, so like the
             # legacy remove/add it is not refused for excess left by a lowered cap.
@@ -650,7 +843,11 @@ class MemoryStore:
             if removed:
                 replaced_fields["removed_entries"] = removed
             return working, f"Applied {len(operations)} operation(s).", replaced_fields
-        return self._mutate(target, _apply, skip_drift=not commit)
+        return self._mutate(
+            target, _apply, skip_drift=not commit,
+            audit_action="batch" if commit else None,
+            audit_operations=ops if commit else None,
+            audit_read_only=not commit)
 
     def format_for_system_prompt(self, target: str) -> Optional[str]:
         """Frozen load-time snapshot (NOT live state — mid-session writes don't touch
@@ -718,6 +915,161 @@ class MemoryStore:
             atomic_write_text(path, ENTRY_DELIMITER.join(entries), tmp_prefix=".mem_")
         except OSError as e:
             raise RuntimeError(f"Failed to write memory file {path}: {e}")
+
+    @staticmethod
+# health: allow CC -- exchange, identity, rollback, and post-commit checks are one atomic safety boundary
+    def _write_payload_verified(path: Path, payload: bytes, unchanged, post_commit=None,
+                                expected_bytes: bytes | None = None) -> bool:
+        """Publish a verified payload while retaining an inode-checkable rollback target."""
+        from utils import atomic_replace
+
+        real = path.resolve() if path.is_symlink() else path
+        parent_fd = None
+        fd = None
+        temporary_name = None
+        tmp = None
+        expected_identity = None
+        temporary_identity = None
+        exchanged = False
+
+        def rollback_exchange():
+            nonlocal temporary_name, exchanged
+            if not exchanged or parent_fd is None or temporary_name is None:
+                return False
+            try:
+                current_stat = os.stat(real.name, dir_fd=parent_fd, follow_symlinks=False)
+                if (current_stat.st_dev, current_stat.st_ino) != temporary_identity:
+                    return False
+                _rename_exchange_at(parent_fd, temporary_name, real.name)
+                os.unlink(temporary_name, dir_fd=parent_fd)
+                temporary_name = None
+                exchanged = False
+                os.fsync(parent_fd)
+                return True
+            except (OSError, MemoryAuditUnsupportedPlatform):
+                return False
+
+        try:
+            if os.name != "nt" and hasattr(os, "O_DIRECTORY"):
+                parent_fd = MemoryStore._open_directory_fd(real.parent)
+                try:
+                    target_stat = os.stat(real.name, dir_fd=parent_fd, follow_symlinks=False)
+                except OSError:
+                    return False
+                if not stat.S_ISREG(target_stat.st_mode):
+                    return False
+                expected_identity = (target_stat.st_dev, target_stat.st_ino)
+                mode = stat.S_IMODE(target_stat.st_mode)
+                fd, temporary_name = MemoryStore._open_temp_file_at(parent_fd)
+                os.fchmod(fd, mode)
+            else:
+                if post_commit is not None:
+                    return False
+                try:
+                    mode = stat.S_IMODE(real.stat().st_mode)
+                except OSError:
+                    mode = 0o644
+                fd, tmp = tempfile.mkstemp(dir=str(real.parent), prefix='.mem_')
+                os.chmod(tmp, mode)
+            with os.fdopen(fd, 'wb') as out:
+                fd = None
+                out.write(payload)
+                out.flush()
+                os.fsync(out.fileno())
+            if not unchanged():
+                return False
+            if parent_fd is not None:
+                temp_name = temporary_name
+                if temp_name is None:
+                    return False
+                temp_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+                temporary_identity = (temp_stat.st_dev, temp_stat.st_ino)
+                if post_commit is None:
+                    os.replace(temp_name, real.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    temporary_name = None
+                    os.fsync(parent_fd)
+                    actual = payload
+                else:
+                    if not _rename_exchange_at(parent_fd, temp_name, real.name):
+                        return False
+                    exchanged = True
+                    target_stat = os.stat(real.name, dir_fd=parent_fd, follow_symlinks=False)
+                    displaced_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+                    target_identity = (target_stat.st_dev, target_stat.st_ino)
+                    displaced_identity = (displaced_stat.st_dev, displaced_stat.st_ino)
+                    read_fd = os.open(real.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                    try:
+                        actual = os.read(read_fd, len(payload) + 1)
+                    finally:
+                        os.close(read_fd)
+                    displaced = None
+                    if expected_bytes is not None:
+                        displaced_fd = os.open(temp_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                        try:
+                            displaced = os.read(displaced_fd, len(expected_bytes) + 1)
+                        finally:
+                            os.close(displaced_fd)
+                    valid = (target_identity == temporary_identity
+                             and displaced_identity == expected_identity
+                             and actual == payload
+                             and (expected_bytes is None or displaced == expected_bytes))
+                    if valid and post_commit is not None:
+                        valid = bool(post_commit())
+                    if valid:
+                        try:
+                            current_stat = os.stat(real.name, dir_fd=parent_fd, follow_symlinks=False)
+                            valid = ((current_stat.st_dev, current_stat.st_ino) == temporary_identity)
+                        except OSError:
+                            valid = False
+                    if not valid:
+                        rollback_exchange()
+                        return False
+                    os.fsync(parent_fd)
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                    temporary_name = None
+                    exchanged = False
+            else:
+                atomic_replace(tmp, real)
+                tmp = None
+                actual = real.read_bytes()
+            return actual == payload
+        except MemoryAuditUnsupportedPlatform:
+            rollback_exchange()
+            raise
+        except OSError as exc:
+            rollback_exchange()
+            raise RuntimeError(f"Failed to write memory file {path}: {exc}")
+        except BaseException:
+            rollback_exchange()
+            raise
+        finally:
+            if fd is not None:
+                with suppress(OSError):
+                    os.close(fd)
+            if parent_fd is not None:
+                if temporary_name is not None and not exchanged:
+                    with suppress(OSError):
+                        os.unlink(temporary_name, dir_fd=parent_fd)
+                with suppress(OSError):
+                    os.close(parent_fd)
+            elif tmp is not None:
+                with suppress(OSError):
+                    os.unlink(tmp)
+
+    @staticmethod
+    def _write_file_verified(path: Path, entries: list[str], unchanged, post_commit=None,
+                             expected_bytes: bytes | None = None) -> bool:
+        """Build and fsync a payload, then publish it through the verified writer."""
+        return MemoryStore._write_payload_verified(
+            path, ENTRY_DELIMITER.join(entries).encode('utf-8'), unchanged,
+            post_commit=post_commit, expected_bytes=expected_bytes)
+
+    @staticmethod
+    def _write_bytes_verified(path: Path, content: bytes, unchanged, post_commit=None,
+                              expected_bytes: bytes | None = None) -> bool:
+        """Publish already byte-preserved content through the verified writer."""
+        return MemoryStore._write_payload_verified(
+            path, content, unchanged, post_commit=post_commit, expected_bytes=expected_bytes)
 
     def _has_oversized_entry(self, target: str, raw: str) -> bool:
         """True when one entry in *raw* is longer than the whole-file limit. A tool write

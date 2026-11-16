@@ -1687,8 +1687,8 @@ def restore_cron_jobs_if_emptied(
         return None
 
     try:
-        live_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(snap_path, live_path)
+        if not _restore_snapshot_entry(_CRON_JOBS_REL, snap_path, live_path):
+            return None
     except (OSError, PermissionError) as exc:
         logger.error(
             "Cron jobs were emptied during update but auto-restore failed: %s", exc

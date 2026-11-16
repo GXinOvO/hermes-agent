@@ -2422,8 +2422,8 @@ def _env_write_lock(env_path: Path):
     (same behavior as auth's locks), never to a crash.
     """
     from hermes_cli.auth import _file_lock
-
-    with _file_lock(
+    from tools.memory_admin import memory_file_writer
+    with memory_file_writer(env_path), _file_lock(
         env_path.with_name(env_path.name + ".lock"),
         _env_write_lock_holder(env_path),
         15.0,

@@ -100,8 +100,9 @@ def _restore_under_cron_lock(home: Path, snap_prompts: dict[str, str]) -> list[s
     Raises ``RuntimeError`` on an unreadable store and ``OSError`` on a failed write.
     """
     from cron import jobs as cron_jobs
+    from tools.memory_admin import memory_file_writer
 
-    with cron_jobs.use_cron_store(home), cron_jobs._jobs_lock():
+    with memory_file_writer(home / 'cron' / 'jobs.json'), cron_jobs.use_cron_store(home), cron_jobs._jobs_lock():
         jobs = cron_jobs.load_jobs()
         restored_ids = _restore_degraded_prompts(jobs, snap_prompts, apply=True)
         if restored_ids:

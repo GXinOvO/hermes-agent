@@ -49,9 +49,11 @@ def _cmd_memory_reset(args):
             print("  Cancelled.\n")
             return
 
+    from tools.memory_admin import reset_memory_files
+    deleted = reset_memory_files(mem_dir, [f for f, _ in existing])
     for f, desc in existing:
-        (mem_dir / f).unlink()
-        print(f"  ✓ Deleted {f} ({desc})")
+        if f in deleted:
+            print(f"  ✓ Deleted {f} ({desc})")
 
     print("\n  Memory reset complete. New sessions will start with a blank slate.")
     print(f"  Files were in: {display_hermes_home()}/memories/\n")

@@ -840,7 +840,9 @@ class PluginLoaderMixin:
         module.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
         sys.modules[module_name] = module
         try:
-            spec.loader.exec_module(module)
+            source = init_file.read_bytes()
+            exec(compile(source, str(init_file), "exec"), module.__dict__)
+            module.__dict__["__hermes_entry_sha256__"] = hashlib.sha256(source).hexdigest()
         except BaseException:
             # Don't leave a half-initialized module (or its partially imported relative submodules) cached — a
             # retry or a same-slug plugin in another profile would inherit broken state.
