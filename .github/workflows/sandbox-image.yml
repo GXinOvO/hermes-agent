@@ -15,11 +15,8 @@ name: Sandbox desktop image
 # builds without layer cache and re-pulls the base.
 
 on:
-  pull_request:
-    paths:
-      - docker/sandbox-desktop.Dockerfile
-      - docker/sandbox-desktop-smoke.sh
-      - .github/workflows/sandbox-image.yml
+  # No `pull_request` trigger on this fork (see ci.yaml): the weekly schedule,
+  # the post-release run and the dispatch still build and smoke the image.
   # Not `release: published`: release automation creates releases with
   # GITHUB_TOKEN, which starts no workflows, so it has not fired since v0.21.7.
   workflow_run:

@@ -2,6 +2,7 @@ import json
 from collections import deque
 from pathlib import Path
 
+import pytest
 from ruamel.yaml import YAML
 
 
@@ -151,16 +152,16 @@ def test_contributor_guard_uses_dev_for_fork_dispatch_and_preserves_pr_base():
         assert gha.render(expression, context) == expected
 
 
-def test_windows_x64_and_arm_slices_cover_the_same_files_once():
+@pytest.mark.parametrize("runner", ["windows-2025", "windows-11-arm", "macos-15-intel"])
+def test_os_slices_cover_the_same_files_once(runner):
     from scripts.run_tests_parallel import _slice_files
 
     job = _workflows()["tests-os.yml"]["jobs"]["os-tests"]
     cells = job["strategy"]["matrix"]["include"]
     files = [Path("/repo/tests") / f"test_{n}.py" for n in range(101)]
-    for runner in ("windows-2025", "windows-11-arm"):
-        specs = [cell["slice"] for cell in cells if cell["runner"] == runner]
-        indexes, counts = zip(*(map(int, spec.split("/")) for spec in specs))
-        assert len(set(counts)) == 1
-        assert sorted(indexes) == list(range(1, counts[0] + 1))
-        chosen = [path for index in indexes for path in _slice_files(files, index, counts[0], {}, Path("/repo"))]
-        assert sorted(chosen) == sorted(files)
+    specs = [cell["slice"] for cell in cells if cell["runner"] == runner]
+    indexes, counts = zip(*(map(int, spec.split("/")) for spec in specs))
+    assert len(set(counts)) == 1
+    assert sorted(indexes) == list(range(1, counts[0] + 1))
+    chosen = [path for index in indexes for path in _slice_files(files, index, counts[0], {}, Path("/repo"))]
+    assert sorted(chosen) == sorted(files)

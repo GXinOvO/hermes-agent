@@ -32,6 +32,7 @@
 | F20 | Cron provider 请求审计 | 记录每次 Cron 请求的初始/实际路由、重试、推理参数、SDK 调用与响应身份，敏感值不入账；app-server 只观测子进程接口参数，子 Agent、ACP 与 MoA 下游未覆盖 | `cron/usage_audit.jsonl`；隔离验证，待部署后的自然运行读回 |
 | F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
 | F22 | 会话预览过滤模型切换通知 | 新会话先切模型时，侧栏预览跳过 `model_switch` 内部行；后续真实问题正常显示，只有通知时预览为空；不改历史消息 | `hermes_state_common.py`、`tests/hermes_state/test_session_preview.py`；远端 `dev` 基线已复现，补丁通过 SessionDB 相关测试；运行安装待重载 |
+| F23 | 分叉 CI：PR 不自动跑、按需才算 | 开 PR 不再启动任何流水线（原来每次 25–55 分钟、约 280 job-分钟）；验证改在本机 `scripts/run_tests.sh`，需要时 `gh workflow run ci.yaml --ref <branch>` 手动跑。同时把 macOS 检查拆成 4 片（单 job 约 26 → 16 分钟），去掉 Docker/Nix 的 PR 触发，修好两个排队 24 小时后被取消的 blacksmith 残留 | `.github/workflows/ci.yaml`、`tests-os.yml`、`docker.yml`、`nix.yml`、`ci-review-comment.yml`、`js-autofix.yml`、`plugin-catalog-ci.yml`、`pm-bundle.yml`、`sandbox-image.yml`、`termux-verify.yml`、`windows-bundle-sdk.yml`；不变式测试通过；“PR 不再触发”待新 PR 读回 |
 
 ## 使用时需要记住的边界
 
@@ -126,6 +127,7 @@
 | --- | --- |
 | F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f1](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
 | F22 | 本次修复的 [会话预览过滤](hermes_state_common.py) · [回归测试](tests/hermes_state/test_hermes_state.py)；远端 `dev` 基线两条用例均失败，修复后 SessionDB 相关测试通过，提交和运行安装状态随 PR 读回 |
+| F23 | [ci.yaml 触发](.github/workflows/ci.yaml) · [tests-os 分片](.github/workflows/tests-os.yml) · [不变式测试](tests/ci/test_personal_fork_runners.py)；改造前 23 次 PR CI 合计 6156 job-分钟（常态 280/次，墙钟 25–55 分钟），macOS 单 job 19.2 分钟测试 + 5.7 分钟装依赖。曾尝试用导入冒烟门禁（单进程 `pytest --collect-only`）：实测 4 分 43 秒，失败后 12 个测试分片被整体跳过、PR 没有 Python 测试结果，已撤回。现在只有 `label-rerun.yml` 仍响应 `pull_request: labeled`（加 `run-e2e` 标签才触发），其余工作流在 PR 上零触发 |
 
 ### 2026-11-10 上游同步兼容
 

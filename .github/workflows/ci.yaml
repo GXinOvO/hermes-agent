@@ -38,7 +38,14 @@ on:
         required: false
         type: boolean
         default: false
-  pull_request:
+  # No `pull_request` trigger on this fork. Pull-request CI cost 25–55 minutes
+  # per run (280 job-minutes) and nothing blocks a merge: there is no branch
+  # protection, so the run only delayed the merge it could not prevent. Verify
+  # locally with `scripts/run_tests.sh`, or dispatch on a branch when a PR
+  # genuinely needs the matrix:
+  #   gh workflow run ci.yaml --ref <branch>
+  # `label-rerun.yml` keeps the per-PR opt-in: add the `run-e2e` label to rerun
+  # an already-dispatched run with every slow lane on.
   push:
     branches: [main]
 

@@ -1,6 +1,6 @@
 # GitHub Actions workflows
 
-This directory has 57 workflow files. Most of them are **reusable workflows**
+This directory has 46 workflow files. Most of them are **reusable workflows**
 (`on: workflow_call`). They never start on their own; an entry-point workflow
 calls them. This README covers what starts each workflow, which jobs it skips
 and why, how to run it by hand, and how a regular CI run differs from a
@@ -26,7 +26,7 @@ workflow wins. Fix this file in the same PR.
 ## Map
 
 ```
-pull_request / push main
+push main
  ├─ ci.yaml  (CI)  ── detect ──┬─ tests.yml ─────────────── (e2e jobs: release/dispatch only)
  │                             ├─ tests-os.yml ──────────── windows-install-update-e2e.yml
  │                             ├─ lint.yml, js-tests.yml, rust-tests.yml, catalog-tests.yml
@@ -36,10 +36,13 @@ pull_request / push main
  │                             ├─ repo-guards.yml (one job: every cheap guard as a lane-gated step)
  │                             └─ all-checks-pass  ← the ONLY required branch-protection check
  │                                                   (+ the CI timing report steps)
- ├─ docker.yml   (own run; build/test, push :main on main)
- ├─ nix.yml      (own run; nix flake check)
- └─ path-filtered: pm-bundle, termux-verify, plugin-catalog-ci, sandbox-image, windows-bundle-sdk
+ └─ path-filtered: termux-verify (main paths); dispatch-only: pm-bundle, plugin-catalog-ci, sandbox-image, windows-bundle-sdk
 
+push main only
+ ├─ docker.yml   (own run; build/test, push :main on main)
+ └─ nix.yml      (own run; nix flake check)
+
+# This fork runs no workflow on `pull_request` except label-rerun (opt-in).
 workflow_run CI started  → ci-review-comment.yml (live PR comment)
 PR labeled run-e2e       → label-rerun.yml (reruns CI, Docker, Nix)
 
@@ -327,13 +330,13 @@ branch protection.
 
 | Workflow | Triggers | Runs / skips | Manual trigger |
 |---|---|---|---|
-| `docker.yml`, **Docker Build, Test, and Publish** | `pull_request`, `push: main`, `workflow_call` (stable) | **PR:** `mode` (phase + classification, one job) → `build` only when the `docker` slow lane is on (Docker meta, dependency manifests, `pm/`, `tests/docker/`, webapp build recipe, or the `run-e2e` label). Builds slim+desktop × amd64+arm64 and runs the docker integration tests. Never pushes. **Push to `main` on the upstream repo:** always builds, then `publish` (env `container-publish`) and `merge` push `:main` / `:main-desktop` only (never `:latest`). **Stable `release-phase: test`:** builds the claim commit, tests it (unless the claim has no `docker-tests` lane), and archives the exact image. **`release-phase: publish`:** pushes the archived bytes under the attempt ref and returns the manifest digest. No `release: published` trigger, on purpose. | none (`gh run rerun`) |
-| `nix.yml`, **Nix flake check** | `pull_request`, `push: main`, `workflow_call` | `flake-check` runs when the `nix` lane is on (`nix/`, `flake.*`, dependency/npm manifests, `.github/`, `run-e2e` label). Every push to `main` turns it on. `release: true` forces it. | none |
-| `pm-bundle.yml`, **PM Bundle** | `pull_request` on `pm/**` (not `*.md`), `scripts/bundles/**`, the Windows build deps, `uv.lock`, `pyproject.toml`, itself; `workflow_dispatch`; `workflow_call` (stable) | Stages and smoke-tests `hermes pm bundle` on darwin-arm64, win32-x64, win32-arm64. Linux targets are commented out; there is no Intel macOS leg. The darwin-arm64 leg uses the GitHub-hosted ARM `xcode-27` label. | `gh workflow run pm-bundle.yml [-f ref=<sha>]` |
-| `termux-verify.yml`, **Termux verification** | `push: main` / `pull_request` on `scripts/termux/**`, `pm/**` (not `*.md`), `tests/scripts/test_termux*`, itself; `workflow_dispatch`; `workflow_call` (stable) | `contracts` and `tui` always run. `r2-provisioned` is skipped on PRs. `native-runtime` (arm64) runs only when R2 secrets exist or `release: true`. A release run fails loudly without R2. | `gh workflow run termux-verify.yml` |
-| `plugin-catalog-ci.yml`, **Plugin Catalog CI** | `pull_request` on `plugin-catalog/**` | `structural` (schema) and `pinned-source-validate` (the pinned SHA is reachable and the plugin passes `hermes plugins validate`; inner steps skip when no entry file changed). | none |
-| `sandbox-image.yml`, **Sandbox desktop image** | `pull_request` on its Dockerfile and smoke script; `workflow_run` of a successful Stable Release; weekly `schedule`; `workflow_dispatch` (`publish`) | `build`+smoke on the upstream repo only. `publish`/`merge` (push `nousresearch/hermes-sandbox:desktop`, plus `:v<version>-desktop` after a stable release) on those three, a dispatch only with `publish=true`; publishing builds skip the layer cache to pick up base and apt fixes. The weekly run rolls `:desktop` from main's Dockerfile, so a Dockerfile change reaches users within a week. Never on `main` pushes. | `gh workflow run sandbox-image.yml -f publish=true` |
-| `windows-bundle-sdk.yml`, **Windows bundle SDK** | `pull_request` on the Windows bundle and signing scripts plus their tests; `workflow_dispatch` | Runs the real Windows SDK downloader on cold Windows runners. | `gh workflow run windows-bundle-sdk.yml --ref <branch>` |
+| `docker.yml`, **Docker Build, Test, and Publish** | `push: main`, `workflow_call` (stable) | **No `pull_request` trigger on this fork:** publishing needs environment secrets a PR run never receives, so the lane skipped every PR and only added a check to the page. **Push to `main` on the upstream repo:** always builds, then `publish` (env `container-publish`) and `merge` push `:main` / `:main-desktop` only (never `:latest`). **Stable `release-phase: test`:** builds the claim commit, tests it (unless the claim has no `docker-tests` lane), and archives the exact image. **`release-phase: publish`:** pushes the archived bytes under the attempt ref and returns the manifest digest. No `release: published` trigger, on purpose. | none (`gh run rerun`) |
+| `nix.yml`, **Nix flake check** | `push: main`, `workflow_call` | **No `pull_request` trigger on this fork:** a full toolchain download per PR for a lane that never publishes. `flake-check` runs when the `nix` lane is on (`nix/`, `flake.*`, dependency/npm manifests, `.github/`, `run-e2e` label). Every push to `main` turns it on. `release: true` forces it. | none |
+| `pm-bundle.yml`, **PM Bundle** | `workflow_dispatch`; `workflow_call` (stable). No `pull_request` on this fork | Stages and smoke-tests `hermes pm bundle` on darwin-arm64, win32-x64, win32-arm64. Linux targets are commented out; there is no Intel macOS leg. The darwin-arm64 leg uses the GitHub-hosted ARM `xcode-27` label. | `gh workflow run pm-bundle.yml [-f ref=<sha>]` |
+| `termux-verify.yml`, **Termux verification** | `push: main` on `scripts/termux/**`, `pm/**` (not `*.md`), `tests/scripts/test_termux*`, itself; `workflow_dispatch`; `workflow_call` (stable). No `pull_request` on this fork | `contracts` and `tui` always run. `r2-provisioned` is skipped on PRs. `native-runtime` (arm64) runs only when R2 secrets exist or `release: true`. A release run fails loudly without R2. | `gh workflow run termux-verify.yml` |
+| `plugin-catalog-ci.yml`, **Plugin Catalog CI** | `workflow_dispatch`. No `pull_request` on this fork | `structural` (schema) and `pinned-source-validate` (the pinned SHA is reachable and the plugin passes `hermes plugins validate`; inner steps skip when no entry file changed). | `gh workflow run plugin-catalog-ci.yml --ref <branch>` |
+| `sandbox-image.yml`, **Sandbox desktop image** | `workflow_run` of a successful Stable Release; weekly `schedule`; `workflow_dispatch` (`publish`). No `pull_request` on this fork | `build`+smoke on the upstream repo only. `publish`/`merge` (push `nousresearch/hermes-sandbox:desktop`, plus `:v<version>-desktop` after a stable release) on those three, a dispatch only with `publish=true`; publishing builds skip the layer cache to pick up base and apt fixes. The weekly run rolls `:desktop` from main's Dockerfile, so a Dockerfile change reaches users within a week. Never on `main` pushes. | `gh workflow run sandbox-image.yml -f publish=true` |
+| `windows-bundle-sdk.yml`, **Windows bundle SDK** | `workflow_dispatch`. No `pull_request` on this fork | Runs the real Windows SDK downloader on cold Windows runners. | `gh workflow run windows-bundle-sdk.yml --ref <branch>` |
 
 ---
 
@@ -342,7 +345,7 @@ branch protection.
 | Workflow | Trigger | What it does / skip conditions |
 |---|---|---|
 | `ci-review-comment.yml`, **CI review comment** | `workflow_run` of `CI`, `types: [in_progress]` | Polls the CI run and the sibling Docker run for up to ~50 min. Keeps one live review comment on the PR up to date. Always runs scripts from the default branch. **Skips** non-PR runs and PRs from forks. A first-time contributor's run starts it only after a maintainer approves it, because `in_progress` fires then. One poller per head repo+branch; a newer CI run cancels the old poller. |
-| `label-rerun.yml`, **Label rerun** | `pull_request: labeled` | Only for the `run-e2e` label. Cancels the head commit's `ci.yaml`, `docker.yml` and `nix.yml` runs if they are still going, then reruns them. Their `detect` reads the live labels, so Docker and Nix build. Exits if the PR head moved. The E2E suites stay off. |
+| `label-rerun.yml`, **Label rerun** | `pull_request: labeled` | Only for the `run-e2e` label. Cancels the head commit's `ci.yaml` run if it is still going, then reruns it. (`docker.yml` and `nix.yml` have no PR trigger on this fork, so there is nothing to cancel or rerun for them.) Exits if the PR head moved. The E2E suites stay off. |
 
 ---
 
@@ -366,7 +369,7 @@ branch protection.
 | `skills-index-freshness.yml` | every 4 h | dispatch | Upstream only. Opens an issue if `/docs/api/skills-index.json` is more than 26 h stale, missing, or a source collapsed. Also checks CORS on `/docs/api/plugins.json`. |
 | `docs-search-monitor.yml` | every 6 h at :17 | `workflow_run` after every **Deploy Site**; dispatch | Upstream only. Live Algolia and headless-browser probe of docs search. A red run is the alert. |
 | `osv-scanner.yml` | Mondays 09:00 | dispatch | OSV scan of `uv.lock`, `pnpm-lock.yaml` and the nested `package-lock.json` files. Results go to the Security tab. Advisory (does not fail on vulnerabilities). Intentionally not per-PR. |
-| `sandbox-image.yml` | Mondays 04:23 | PR (paths), `workflow_run` after Stable Release, dispatch | Upstream only. Rebuilds `nousresearch/hermes-sandbox:desktop` without layer cache so base-image and apt security fixes land between releases. See [standalone](#standalone-pr--main-checks). |
+| `sandbox-image.yml` | Mondays 04:23 | `workflow_run` after Stable Release, dispatch | Upstream only. Rebuilds `nousresearch/hermes-sandbox:desktop` without layer cache so base-image and apt security fixes land between releases. See [standalone](#standalone-pr--main-checks). |
 
 ---
 
@@ -558,11 +561,11 @@ gh workflow run windows-install-update-e2e.yml --ref <branch> -f strict_acceptan
 | `canary-release.yml` | Canary Release | cron daily 06:41, dispatch | none |
 | `catalog-tests.yml` | Catalog tests | R | ci |
 | `ci-review-comment.yml` | CI review comment | workflow_run(CI in_progress) | none |
-| `ci.yaml` | CI | PR, main, dispatch, call | stable |
+| `ci.yaml` | CI | main, dispatch, call | stable |
 | `deploy-site.yml` | Deploy Site | main (paths), release published, dispatch | skills-index (dispatch) |
 | `desktop-bundled-release.yml` | Desktop Bundled Release | dispatch, call | stable; canary/release.py (dispatch) |
 | `desktop-bundle-smoke.yml` | Desktop bundle smoke | dispatch, call | desktop-bundled-release |
-| `docker.yml` | Docker Build, Test, and Publish | PR, main, call | stable |
+| `docker.yml` | Docker Build, Test, and Publish | main, call | stable |
 | `docs-search-monitor.yml` | Docs Search Monitor | cron 6 h, workflow_run(Deploy Site), dispatch | none |
 | `docs-site-checks.yml` | Docs Site Checks | R | ci |
 | `e2e-desktop-core.yml` | E2E Desktop core | R | ci |
@@ -578,22 +581,22 @@ gh workflow run windows-install-update-e2e.yml --ref <branch> -f strict_acceptan
 | `label-rerun.yml` | Label rerun | PR labeled | none |
 | `lint.yml` | Lint (ruff + ty) | R | ci |
 | `live-providers.yml` | Live provider canaries | tags `v*`, dispatch | none |
-| `nix.yml` | Nix flake check | PR, main, call | stable |
+| `nix.yml` | Nix flake check | main, call | stable |
 | `osv-scanner.yml` | OSV-Scanner | cron Mon 09:00, dispatch | none |
-| `plugin-catalog-ci.yml` | Plugin Catalog CI | PR (paths) | none |
-| `pm-bundle.yml` | PM Bundle | PR (paths), dispatch, call | stable |
+| `plugin-catalog-ci.yml` | Plugin Catalog CI | dispatch | none |
+| `pm-bundle.yml` | PM Bundle | dispatch, call | stable |
 | `remote-backends.yml` | Remote terminal backends | R | ci |
 | `repo-guards.yml` | Repository guards | R | ci |
 | `rust-tests.yml` | Rust tests | R | ci |
-| `sandbox-image.yml` | Sandbox desktop image | PR (paths), workflow_run(Stable Release completed), cron weekly, dispatch | none |
+| `sandbox-image.yml` | Sandbox desktop image | workflow_run(Stable Release completed), cron weekly, dispatch | none |
 | `skills-index-freshness.yml` | Skills Index Freshness Check | cron 4 h, dispatch | none |
 | `skills-index.yml` | Build Skills Index | cron 06:00/18:00, main (paths), dispatch | none |
 | `stable-release-publication.yml` | Stable Release Publication | workflow_run(Stable Release completed), dispatch | none |
 | `stable-release.yml` | Stable Release | dispatch | release.py |
-| `termux-verify.yml` | Termux verification | PR/main (paths), dispatch, call | stable |
+| `termux-verify.yml` | Termux verification | main (paths), dispatch, call | stable |
 | `tests-os.yml` | OS-specific tests | R | ci |
 | `tests.yml` | Tests | R | ci |
-| `windows-bundle-sdk.yml` | Windows bundle SDK | PR (paths), dispatch | none |
+| `windows-bundle-sdk.yml` | Windows bundle SDK | dispatch | none |
 | `windows-desktop-attach-e2e.yml` | Windows Desktop attach E2E | push `wine2e-desktop/**`, dispatch | none |
 | `windows-install-update-e2e.yml` | Windows install + update E2E | push `wine2e-install/**`, dispatch, call | tests-os |
 | `windows-venv-e2e.yml` | Windows venv-holder live E2E | push `wine2e/**`, call | stable |

@@ -9,13 +9,8 @@ on:
       - '!pm/**/*.md'
       - 'tests/scripts/test_termux*'
       - '.github/workflows/termux-verify.yml'
-  pull_request:
-    paths:
-      - 'scripts/termux/**'
-      - 'pm/**'
-      - '!pm/**/*.md'
-      - 'tests/scripts/test_termux*'
-      - '.github/workflows/termux-verify.yml'
+  # No `pull_request` trigger on this fork (see ci.yaml): the release path and
+  # `push: main` still run it.
   workflow_dispatch:
   workflow_call:
     inputs:

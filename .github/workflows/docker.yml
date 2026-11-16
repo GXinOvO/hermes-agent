@@ -14,7 +14,9 @@ on:
   # event must never rebuild or rewrite the stable Docker channel. This staged
   # path publishes only immutable version tags; the ordered stable publication
   # controller moves stable/latest from the receipt-bound registry digest.
-  pull_request:
+  # No ``pull_request`` trigger on this fork: publishing needs the environment
+  # secrets a PR run never receives, so the lane skipped every PR and only left
+  # a check on the PR page. Real image builds stay on main and the release path.
   push:
     branches: [main]
   workflow_call:
