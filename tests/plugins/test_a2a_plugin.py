@@ -277,7 +277,7 @@ class TestOutboundRedaction:
         """Invariant: redact_outbound masks everything redact_sensitive_text masks. A2A ships text to a
         REMOTE peer, so a private subset here silently drops every prefix later added to agent/redact.py.
         Corpus: one synthetic token per registered prefix pattern, built from the pattern's literal prefix."""
-        import agent.redact_prefixes as R
+        import agent.redact as R
 
         bodies = ("Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0", "QQ7ZP2MX9VLK4NRT", "b-Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0",
                   ".Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0", "1-Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0",
