@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -122,7 +123,16 @@ def parse_response(response, model):
     choices = response.get("choices", [])
     if len(choices) != 1 or choices[0].get("finish_reason") != "stop":
         raise IncompleteModelResponse("model response was incomplete")
-    return json.loads(choices[0]["message"]["content"])
+    content = choices[0]["message"]["content"]
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as error:
+        if "Invalid \\escape" not in error.msg:
+            raise
+        repaired = re.sub(r'\\(\\|[^\\])',
+                          lambda match: match[0] if match[1] in '\\"/bfnrtu' else "\\" + match[0],
+                          content)
+        return json.loads(repaired)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -173,10 +183,15 @@ def pull_requests(root, commits):
         f"https://api.github.com/repos/{repository}/pulls?state=closed&base=dev&sort=updated&direction=desc&per_page=30",
         headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        rows = json.load(response)
-    return [{"number": p["number"], "title": p["title"], "body": bounded(p.get("body") or "", 4000),
-             "url": p["html_url"]} for p in rows if p.get("merged_at") and p.get("merge_commit_sha") in commits]
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                rows = json.load(response)
+            return [{"number": p["number"], "title": p["title"], "body": bounded(p.get("body") or "", 4000),
+                     "url": p["html_url"]} for p in rows if p.get("merged_at") and p.get("merge_commit_sha") in commits]
+        except http.client.IncompleteRead:
+            if attempt == 1:
+                raise RuntimeError("GitHub PR response was incomplete after one retry") from None
 
 
 def _evidence_sizes(root, base, head, paths):
@@ -323,6 +338,8 @@ def update(root, key, base_url, model):
     if path.is_symlink():
         raise ValueError("catalog must be a regular repository file")
     source = path.read_text(encoding="utf-8-sig")
+    if git(root, "diff", "HEAD", "--", "FORK_FEATURES.md"):
+        raise ValueError("working catalog differs from the checked-out HEAD; reconcile it before review")
     base, head = checkpoint(source), git(root, "rev-parse", "HEAD")
     git(root, "merge-base", "--is-ancestor", base, head)
     cache_dir = os.environ.get("FORK_CATALOG_CACHE_DIR")
