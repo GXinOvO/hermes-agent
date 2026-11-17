@@ -23195,6 +23195,171 @@
         "title": "LegacyPluginRow",
         "type": "object"
       },
+      "LinkedTaskAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 2,
+            "title": "Version",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "analyzed_at": {
+            "title": "Analyzed At",
+            "type": "integer"
+          },
+          "conversation_revision": {
+            "title": "Conversation Revision"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "scope": {
+            "const": "linked_conversations",
+            "title": "Scope",
+            "type": "string"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "analyzed_messages": {
+            "title": "Analyzed Messages",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "todo",
+              "planning",
+              "in_progress",
+              "waiting",
+              "failed",
+              "awaiting_acceptance"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/TaskAnalysisSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinkedTaskClaim"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completed": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedTaskClaim"
+            },
+            "title": "Completed",
+            "type": "array"
+          },
+          "remaining": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedTaskClaim"
+            },
+            "title": "Remaining",
+            "type": "array"
+          },
+          "needs_user": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedTaskClaim"
+            },
+            "title": "Needs User",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "title",
+          "analyzed_at",
+          "conversation_revision",
+          "stale",
+          "scope",
+          "message_count",
+          "analyzed_messages",
+          "limitations",
+          "status",
+          "complete",
+          "sources",
+          "goal",
+          "completed",
+          "remaining",
+          "needs_user"
+        ],
+        "title": "LinkedTaskAnalysis",
+        "type": "object"
+      },
+      "LinkedTaskClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedTaskEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text",
+          "evidence"
+        ],
+        "title": "LinkedTaskClaim",
+        "type": "object"
+      },
+      "LinkedTaskEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row_id",
+          "quote",
+          "source_id"
+        ],
+        "title": "LinkedTaskEvidence",
+        "type": "object"
+      },
       "LiveSessionStatus": {
         "enum": [
           "idle",
@@ -46414,6 +46579,11 @@
             "default": false,
             "title": "Refresh",
             "type": "boolean"
+          },
+          "follow_sources": {
+            "default": false,
+            "title": "Follow Sources",
+            "type": "boolean"
           }
         },
         "required": [
@@ -46454,9 +46624,13 @@
                 "$ref": "#/components/schemas/TaskAnalysis"
               },
               {
+                "$ref": "#/components/schemas/LinkedTaskAnalysis"
+              },
+              {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Analysis"
           }
         },
         "required": [
@@ -46468,6 +46642,120 @@
           "analysis"
         ],
         "title": "TaskAnalysisResult",
+        "type": "object"
+      },
+      "TaskAnalysisSource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "resolved_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpectedSessionOwner"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relation": {
+            "enum": [
+              "primary",
+              "reference",
+              "read",
+              "delegate",
+              "continuation"
+            ],
+            "title": "Relation",
+            "type": "string"
+          },
+          "via_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via Source Id"
+          },
+          "via_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via Row Id"
+          },
+          "status": {
+            "enum": [
+              "read",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "session_id",
+          "stored_session_id",
+          "resolved_id",
+          "owner",
+          "relation",
+          "via_source_id",
+          "via_row_id",
+          "status",
+          "complete",
+          "reason"
+        ],
+        "title": "TaskAnalysisSource",
         "type": "object"
       },
       "TaskIdResult": {

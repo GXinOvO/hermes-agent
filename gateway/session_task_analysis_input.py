@@ -42,7 +42,7 @@ def _text(content):
                      and isinstance(part.get('text'), str))
 
 
-def messages(db, target):
+def stored_rows(db, target):
     ids = db._resume_lineage_ids(target)
     columns = ('session_id,id,role,content,timestamp,tool_call_id,tool_calls,tool_name,display_kind,'
                'display_metadata,message_uid,absorbed_message_uids,display_identity,active,compacted,'
@@ -54,7 +54,11 @@ def messages(db, target):
             raise RuntimeStoreError('analysis_too_large', detail='Conversation exceeds the 20000 row limit')
         raw = conn.execute(f"SELECT {columns} FROM messages WHERE session_id IN ({marks}) "
                            "AND role IN ('user','assistant','tool') AND COALESCE(display_kind,'') != 'hidden' ORDER BY id", ids).fetchall()
-    rows = db._dedupe_display_generations(raw, drop_removed=True)
+    return db._dedupe_display_generations(raw, drop_removed=True)
+
+
+def messages(db, target):
+    rows = stored_rows(db, target)
     projected = []
     for row in rows:
         if row['role'] not in ('user', 'assistant', 'tool') or row['display_kind'] == 'hidden':

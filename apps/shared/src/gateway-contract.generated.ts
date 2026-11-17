@@ -5721,6 +5721,7 @@ export interface TaskAnalysisParams {
   task_id: string
   title: string
   refresh?: boolean
+  follow_sources?: boolean
 }
 export interface TaskAnalysisResult {
   session_id: string
@@ -5728,7 +5729,7 @@ export interface TaskAnalysisResult {
   owner: ExpectedSessionOwner
   authority_epoch: number
   task_id: string
-  analysis: TaskAnalysis | null
+  analysis: TaskAnalysis | LinkedTaskAnalysis | null
 }
 export interface TaskAnalysis {
   version: 1
@@ -5753,6 +5754,47 @@ export interface TaskAnalysisClaim {
 export interface TaskAnalysisEvidence {
   row_id: number
   quote: string
+}
+export interface LinkedTaskAnalysis {
+  version: 2
+  title: string
+  analyzed_at: number
+  conversation_revision: unknown
+  stale: boolean
+  scope: 'linked_conversations'
+  message_count: number
+  analyzed_messages: number
+  limitations: string[]
+  status: 'todo' | 'planning' | 'in_progress' | 'waiting' | 'failed' | 'awaiting_acceptance'
+  complete: boolean
+  sources: TaskAnalysisSource[]
+  goal: LinkedTaskClaim | null
+  completed: LinkedTaskClaim[]
+  remaining: LinkedTaskClaim[]
+  needs_user: LinkedTaskClaim[]
+}
+export interface TaskAnalysisSource {
+  id: string
+  profile: string
+  session_id: string
+  stored_session_id: string
+  resolved_id: string | null
+  owner: ExpectedSessionOwner | null
+  relation: 'primary' | 'reference' | 'read' | 'delegate' | 'continuation'
+  via_source_id: string | null
+  via_row_id: number | null
+  status: 'read' | 'unavailable'
+  complete: boolean
+  reason: string | null
+}
+export interface LinkedTaskClaim {
+  text: string
+  evidence: LinkedTaskEvidence[]
+}
+export interface LinkedTaskEvidence {
+  row_id: number
+  quote: string
+  source_id: string
 }
 /** Open: the plugin's handler owns every other key. ``session_id`` names the session the call acts in and passes that session's authorization first. */
 export interface PluginRpcParams {

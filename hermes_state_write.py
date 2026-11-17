@@ -109,6 +109,26 @@ def _log_writer_owner(db, waiter_site) -> None:
     )
 
 
+def begin_write(conn, *, no_wait):
+    if not no_wait:
+        conn.execute("BEGIN IMMEDIATE")
+        return
+    timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    try:
+        conn.execute("PRAGMA busy_timeout=0")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        finally:
+            conn.execute(f"PRAGMA busy_timeout={int(timeout_ms)}")
+    except BaseException:
+        try:
+            if conn.in_transaction:
+                conn.rollback()
+        finally:
+            conn.execute(f"PRAGMA busy_timeout={int(timeout_ms)}")
+        raise
+
+
 def maintain_after_commit(db):
     """Count committed writes and run due maintenance after releasing the writer mutex."""
     db._write_count += 1

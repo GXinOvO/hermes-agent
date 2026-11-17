@@ -30,7 +30,10 @@ const result = () => ({
 
 const source = () => ({ session_id: 'session-a', stored_session_id: 'session-a', resolved_id: 'session-a', authority_epoch: 3, owner: fixture.owner })
 const envelope = () => ({ ...source(), task_id: 'matter', analysis: result() })
-const respond = (analysis: unknown) => fixture.request.mockImplementation(async method => method === 'session.task_source' ? source() : analysis)
+const respond = (analysis: unknown) => fixture.request.mockImplementation(async method => {
+  if (method === 'runtime.describe') { return { capabilities: [] } }
+  return method === 'session.task_source' ? source() : analysis
+})
 
 beforeEach(() => { fixture.request.mockReset(); fixture.open.mockClear(); respond(envelope()) })
 
@@ -48,7 +51,10 @@ test('resolves on the explicit profile using its own source witness without rest
 
 test('resolves and analyzes a compressed tip on its returned logical source', async () => {
   const resolved = { ...source(), session_id: 'root-a', resolved_id: 'tip-b', stored_session_id: 'tip-a' }
-  fixture.request.mockImplementation(async method => method === 'session.task_source' ? resolved : { ...resolved, task_id: 'matter', analysis: result() })
+  fixture.request.mockImplementation(async method => {
+    if (method === 'runtime.describe') { return { capabilities: [] } }
+    return method === 'session.task_source' ? resolved : { ...resolved, task_id: 'matter', analysis: result() }
+  })
   const reference = await resolveTaskSource('@session:work/tip-a')
   expect(reference).toEqual({ ...primary, storedId: 'tip-a' })
   const compressed = createTask({ ...task(), primary: reference }, 1700000000000)
@@ -68,22 +74,25 @@ test('refuses a wrong echoed id, incomplete witness and an unsupported source me
 })
 
 test('refuses a replaced source witness before analysis and does not silently rebind', async () => {
+  fixture.request.mockResolvedValueOnce({ capabilities: [] })
   fixture.request.mockResolvedValueOnce({ ...source(), owner: { ...fixture.owner, store_instance_id: 'replacement' } })
   await expect(loadTaskAnalysis(task(), true)).rejects.toThrow('来源会话身份')
-  expect(fixture.request.mock.calls.map(call => call[0])).toEqual(['session.task_source'])
+  expect(fixture.request.mock.calls.map(call => call[0])).toEqual(['runtime.describe', 'session.task_source'])
 })
 
 test('reads saved analysis without generation or manual task mutation', async () => {
   const original = task()
   expect(await loadTaskAnalysis(original)).toEqual(result())
-  expect(fixture.request.mock.calls[1][1]).toMatchObject({ refresh: false, task_id: 'matter', title: '检查发布' })
+  const analysisCall = fixture.request.mock.calls.find(call => call[0] === 'session.task_analysis')
+  expect(analysisCall?.[1]).toMatchObject({ refresh: false, task_id: 'matter', title: '检查发布' })
+  expect(analysisCall?.[1]).not.toHaveProperty('follow_sources')
   expect(original).toMatchObject({ status: 'unspecified', resolution: { state: 'open' } })
   expect(cachedTaskAnalysis(original)).toBeNull()
 })
 
 test('refreshes explicitly and rejects wrong tasks, names and unsupported completion', async () => {
   await loadTaskAnalysis(task(), true)
-  expect(fixture.request.mock.calls[1][1].refresh).toBe(true)
+  expect(fixture.request.mock.calls.find(call => call[0] === 'session.task_analysis')?.[1].refresh).toBe(true)
   respond({ ...envelope(), task_id: 'other' })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('来源已变化')
   respond({ ...envelope(), analysis: { ...result(), title: '其他事项' } })
@@ -97,4 +106,30 @@ test('rejects claims without evidence and inconsistent coverage', async () => {
   await expect(loadTaskAnalysis(task())).rejects.toThrow('Invalid task analysis')
   respond({ ...envelope(), analysis: { ...result(), analyzed_messages: 3 } })
   await expect(loadTaskAnalysis(task())).rejects.toThrow('Invalid task analysis')
+})
+
+test('negotiates task-analysis-v2 before requesting linked sources and keeps v1 parameters on old runtimes', async () => {
+  const v2 = {
+    ...result(), version: 2 as const, scope: 'linked_conversations' as const, complete: true,
+    sources: [
+      { id: 's0', profile: 'work', session_id: 'root-a', stored_session_id: 'session-a', resolved_id: 'root-a',
+        owner: fixture.owner, relation: 'primary' as const, via_source_id: null, via_row_id: null, status: 'read' as const, complete: true, reason: null },
+      { id: 's1', profile: 'other', session_id: 'root-b', stored_session_id: 'session-b', resolved_id: 'root-b',
+        owner: { ...fixture.owner, profile_id: '/profiles/other' }, relation: 'reference' as const, via_source_id: 's0', via_row_id: 7,
+        status: 'read' as const, complete: true, reason: null }
+    ],
+    goal: { text: '检查发布', evidence: [
+      { source_id: 's0', row_id: 7, quote: '主来源记录' },
+      { source_id: 's1', row_id: 7, quote: '关联来源记录' }
+    ] }
+  }
+  fixture.request.mockImplementation(async method => {
+    if (method === 'runtime.describe') { return { capabilities: ['task-analysis-v2'] } }
+    if (method === 'session.task_source') { return source() }
+    return { ...source(), task_id: 'matter', analysis: v2 }
+  })
+
+  await expect(loadTaskAnalysis(task(), true)).resolves.toEqual(v2)
+  expect(fixture.request.mock.calls.map(call => call[0])).toEqual(['runtime.describe', 'session.task_source', 'session.task_analysis'])
+  expect(fixture.request).toHaveBeenLastCalledWith('session.task_analysis', expect.objectContaining({ follow_sources: true }), 180000)
 })

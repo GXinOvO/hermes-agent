@@ -60,7 +60,7 @@ from hermes_state_schema import SessionSchemaMixin
 import hermes_state_holders as _state_holders
 import hermes_state_lockguard as _lockguard
 from hermes_state_lockowners import log_write_lock_holders
-from hermes_state_write import WriterMutexTimeout, maintain_after_commit, write_site, writer_mutex_until
+from hermes_state_write import WriterMutexTimeout, begin_write, maintain_after_commit, write_site, writer_mutex_until
 from hermes_state_dbfile import (
     _chmod_pinned_inode, _connect_tracked_db, _fd_is_truly_unlinked, _is_operator_store_link,
     _prepare_connection_retirement,
@@ -1057,7 +1057,7 @@ class SessionDB(
                     self._raise_if_db_replaced()
                     if self._conn is None:  # close() raced this writer
                         self._reopen_after_close_locked(context="write")
-                    self._conn.execute("BEGIN IMMEDIATE")
+                    begin_write(self._conn, no_wait=patience_s == 0)
                     try:
                         fn_started = True
                         result = fn(self._conn)
