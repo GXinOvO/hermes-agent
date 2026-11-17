@@ -13,7 +13,7 @@
 | F01 | 文件树彩色类型图标 | 按文件类型和常见文件名区分图标，更容易扫读目录 | Desktop → Files；已合入 |
 | F02 | 鼠标跟随会话焦点开关 | 经过其他会话去 Files 时，可以选择不切走当前会话 | 设置 → 外观 → 鼠标经过时自动切换会话；默认开启，可关闭；已合入 |
 | F03 | 文件名与内容搜索、结果跳转 | 在当前项目或子目录搜文件／正文，逐步显示结果并跳到匹配行列 | Files 顶部搜索按钮；支持大小写、正则、范围；已合入 |
-| F04 | 内置事项跟进与单会话有据分析 | 只填事项名称和会话链接，系统读取当前会话及其压缩沿袭，分析目标、进展、剩余工作和需要本人处理的内容；结果持久化并保留原文证据，人工状态、优先级和验收独立控制 | Desktop 标题栏 → 事项跟进，默认开启，可在设置 → 外观 → 窗口布局关闭；第一轮代码路径见 PR #69；当前为单会话分析，跨会话回溯、后台持续更新、Windows＋SSH 真实验收和旧插件迁移仍待完成 |
+| F04 | 内置事项跟进与有据分析 | 只填事项名称和会话链接，系统分析目标、进展、剩余工作和需要本人处理的内容，并回溯记录中的关联会话；结果保留来源和原文证据，人工状态、优先级和验收独立控制 | Desktop 标题栏 → 事项跟进，默认开启，可在设置 → 外观 → 窗口布局关闭；后台持续更新、Windows＋SSH 真实验收和旧插件迁移仍待完成 |
 | F05 | 子 Agent 交付检查与结果找回 | 核对真实产物，复用有效验证证据；错过回调后读取原结果 | `delegate_task(action="result", delegation_id=...)`；结构化交付按需用检查脚本；已合入 |
 | F06 | 后台通知降噪与未完成工作提示 | 已消费的心跳和子任务内部进程退出不反复打断主任务；子任务未做完仍保留进展并提示 | 后台进程／委派自动路径；已合入 |
 | F07 | `execute_code` 显式只读并行批次 | 一次组织多个独立文件读取、搜索或网页读取，保留预算、取消和调用身份 | 本地 transport 的 `hermes_tools.parallel`；需 Agent 显式使用；已合入 |
@@ -39,9 +39,9 @@
 ## 使用时需要记住的边界
 
 - **F03 文件搜索：** 搜索绑定发起时的连接、profile、会话和目录；宿主侧执行有界搜索，支持取消。达到范围、数量或预览上限时会显示不完整，不能把返回片段当成全项目搜尽。
-- **F04 事项跟进：** 第一轮创建只需要名称和会话链接；系统对关联会话及其压缩沿袭做单会话分析，显示目标、已完成、剩余和需要本人处理的内容，并为结论保留消息行号和原文引用。结果持久化，重新打开不重复调用模型；分析不执行工具、不发消息、不改 todo、不自动验收或标记完成。当前未沿会话引用扩展到其他会话，也没有后台持续维护。实现入口：[事项表单](apps/desktop/src/app/contrib/task-overview-form.tsx)、[分析面板](apps/desktop/src/app/contrib/task-analysis-panel.tsx)、[分析 RPC](gateway/session_task_analysis.py)、[来源身份](apps/desktop/src/lib/exact-session-owner.ts)；验证入口：[分析单测](apps/desktop/src/lib/task-overview/analysis.test.ts)、[Linux Desktop E2E](apps/desktop/e2e/task-analysis.spec.ts)。
+- **F04 事项跟进：** 创建只需要名称和会话链接；分析沿主会话记录中的引用、读取、续接和委派关系回溯相关会话，逐个按来源权限回读，并为结论保留来源与原文引用。来源不可访问或超出读取上限时显示覆盖不完整；关联会话只作证据和背景，不将其全部历史事项加入当前目标。旧运行时保留单会话分析；结果持久化，分析不执行工具、不发消息、不改 todo、不自动验收或标记完成。后台持续维护仍待实现。实现入口：[事项表单](apps/desktop/src/app/contrib/task-overview-form.tsx)、[分析面板](apps/desktop/src/app/contrib/task-analysis-panel.tsx)、[分析 RPC](gateway/session_task_analysis.py)、[来源身份](apps/desktop/src/lib/exact-session-owner.ts)；验证入口：[关联分析测试](tests/gateway/test_task_analysis_discovery.py)、[Linux Desktop E2E](apps/desktop/e2e/task-analysis-linked.spec.ts)。
 
-- **F04 状态边界：** 状态、优先级和人工验收由本人控制，分析结果不覆盖；回复结束、todo 勾选、停止运行或合并 PR 都不等于事项完成。来源保存 connection、profile、stored session ID 和 authority owner 四元组，读取时再次核验；压缩续接同时保留逻辑根 ID 与原始 tip ID。Linux 隔离 Desktop 已覆盖普通会话和压缩 tip；Windows＋SSH 真实客户端、后台更新、跨会话回溯、旧插件退役和数据迁移仍待验收，不把合入源码算作这些验收通过。
+- **F04 状态边界：** 状态、优先级和人工验收由本人控制，分析结果不覆盖；回复结束、todo 勾选、停止运行或合并 PR 都不等于事项完成。来源保存 connection、profile、stored session ID 和 authority owner 四元组，读取时再次核验；压缩续接同时保留逻辑根 ID 与原始 tip ID。Linux 隔离 Desktop 已覆盖普通会话和压缩 tip；Windows＋SSH 真实客户端、后台更新、跨会话真实使用验收、旧插件退役和数据迁移仍待完成，不把合入源码算作这些验收通过。
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
 - **F07 并行：** 只开放 `read_file`、`search_files`、`web_search`、`web_extract`，一次最多 16 项、最多 4 个工作线程，结果按输入顺序返回；写入和终端命令不在该并行入口内。格式是 `parallel([{"tool": "read_file", "args": {"path": "..."}}, ...])`，只适用于本地 transport；取消返回时，已开始的读取可能仍在收尾。
 - **F08 工具白名单：** 名称必须是父 Agent 已有且当前启用的精确原生／MCP 工具名；不接收别名和通配符。受限子 Agent 的工具名修复保持 fail-closed，不会把未授权近似名自动改名到允许工具；无限制会话仍保留自动修复路径。限制覆盖工具发现、调用和恢复；显式限制不支持的外部 Agent 路由会被拒绝。它限制 Hermes 工具调用，不代表任意代码的文件系统、网络或凭据隔离，详见[委派说明](website/docs/user-guide/features/delegation.md)。

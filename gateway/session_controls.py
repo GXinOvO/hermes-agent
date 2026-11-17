@@ -647,7 +647,7 @@ class AuthorityConnection:
                 'store_instance_id': await self._read_store_instance_id(),
                 'capabilities': ['durable-admission-v1', 'event-replay-v1', 'local-cli-create-v1', 'acp-editor-policy-v1',
                                  'acp-session-mcp-v1', 'clarify-batch-v1', 'plugin-rpc-v1', 'session-client-v1', 'session-transcript-v1', 'session-list-picker-v1',
-                                 'session-list-cursor-v1', 'task-analysis-v1'],
+                                 'session-list-cursor-v1', 'task-analysis-v1', 'task-analysis-v2'],
                 'session_create': {'sources': sorted(SURFACES),
                                    'parameters': sorted(CREATE_FIELDS | {'title'})},
                 # Main's ``gateway.ready.skin``: the canonical client's own ready carries it.

@@ -77,8 +77,8 @@ async def task_source(connection, ref, params):
             'owner': owner, 'authority_epoch': connection.authority.epoch}
 
 
-def _key(sid, task_id):
-    return 'gateway.task_analysis.v1:' + hashlib.sha256(json.dumps([sid, task_id]).encode()).hexdigest()
+def _key(sid, task_id, version=1):
+    return f'gateway.task_analysis.v{version}:' + hashlib.sha256(json.dumps([sid, task_id]).encode()).hexdigest()
 
 
 def _validate(params):
@@ -86,7 +86,8 @@ def _validate(params):
         value = params.get(field)
         if not isinstance(value, str) or not value or value != value.strip() or len(value) > limit:
             raise RuntimeStoreError('invalid_params', field=field)
-    if params.get('expected_owner') is None or type(params.get('refresh', False)) is not bool:
+    if (params.get('expected_owner') is None or type(params.get('refresh', False)) is not bool
+            or type(params.get('follow_sources', False)) is not bool):
         raise RuntimeStoreError('invalid_params')
 
 
@@ -103,7 +104,7 @@ def _checked(connection, params, guard, target, binding, revision):
         raise RuntimeStoreError('revision_conflict')
 
 
-def _refresh(connection, ref, params, target, binding, guard, result, previous):
+def _refresh(connection, ref, params, target, binding, guard, result, previous, graph=None):
     from gateway.session_task_analysis_runtime import runtime_for
     from gateway.session_task_analysis_input import INSTRUCTIONS, messages, validate_output
     from gateway.session_task_analysis_reply import AnalysisReply
@@ -114,9 +115,17 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
     _checked(connection, params, guard, target, binding, revision)
+    instructions, validator, version, analysis_revision = INSTRUCTIONS, validate_output, 1, revision
+    if graph is not None:
+        from gateway.session_task_linked_input import LINKED_INSTRUCTIONS, validate_linked_output
+        from gateway.session_task_sources import check, revisions
+        check(graph)
+        rows, count, limitations = graph['messages'], graph['message_count'], graph['limitations']
+        instructions, version, analysis_revision = LINKED_INSTRUCTIONS, 2, revisions(graph)
+        validator = lambda text, _: validate_linked_output(text, graph)
     runtime = runtime_for(authority, ref, target)
     cache_id = authority.logical_owner(params['stored_id'])
-    key = _key(cache_id, params['task_id'])
+    key = _key(cache_id, params['task_id'], version)
     generations = getattr(authority, '_task_analysis_generations', None)
     if generations is None:
         generations = authority._task_analysis_generations = {}
@@ -129,6 +138,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
         from agent.auxiliary_task_config import session_auxiliary_scope
         from gateway.session_authorities import owner_scope
         with owner_scope(authority):
+            if graph is not None:
+                check(graph)
             main = runtime()
             if (not isinstance(main, dict) or not main.get('model')
                     or main.get('provider') in (None, '', 'auto')):
@@ -136,14 +147,17 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
             route = {field: main[field] for field in ('provider', 'model', 'base_url', 'api_key', 'api_mode')
                      if isinstance(main.get(field), str) and main[field]}
             with scoped_runtime_main(main), session_auxiliary_scope({'session_task_analysis': route}):
-                output = run_oneshot(instructions=INSTRUCTIONS,
+                output = run_oneshot(instructions=instructions,
                                      user_input=json.dumps({'title': params['title'], 'messages': rows,
-                                                            'limitations': limitations}, ensure_ascii=False),
+                                                            'limitations': limitations,
+                                                            **({'sources': graph['sources']} if graph is not None else {})}, ensure_ascii=False),
                                      task='session_task_analysis', main_runtime=main,
                                      max_tokens=6000, temperature=0, timeout=120)
-            value = validate_output(output, rows)
-        return {'version': 1, 'title': params['title'], 'analyzed_at': int(time.time() * 1000),
-                'conversation_revision': revision, 'stale': False, 'scope': 'single_conversation',
+            value = validator(output, rows)
+        return {'version': version, 'title': params['title'], 'analyzed_at': int(time.time() * 1000),
+                'conversation_revision': analysis_revision, 'stale': False,
+                'scope': 'linked_conversations' if graph is not None else 'single_conversation',
+                **({'complete': graph['complete'], 'sources': graph['sources']} if graph is not None else {}),
                 'message_count': count, 'analyzed_messages': len(rows), **value,
                 'limitations': [*limitations, *value['limitations']]}
 
@@ -164,14 +178,25 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous):
                 pins[id(db)] = conn
                 try:
                     _checked(connection, params, guard, target, binding, revision)
+                    if graph is not None:
+                        check(graph)
                 finally:
                     pins.pop(id(db), None)
                 record = {'generation': generation,
                           'binding': [cache_id, params['stored_id'], params['task_id'], params['title']],
                           'analysis': analysis}
+                if graph is not None:
+                    coverage = list(graph['limitations'])
+                    record['coverage_limitations'] = coverage
+                    record['model_limitations'] = analysis['limitations'][len(coverage):]
                 conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                              (key, json.dumps(record, ensure_ascii=False)))
-            db._execute_write(write, patience_s=0)
+            if graph is None:
+                db._execute_write(write, patience_s=0)
+            else:
+                from gateway.session_task_sources import commit_fence
+                with commit_fence(graph, db):
+                    db._execute_write(write, patience_s=0)
             saved = json.loads(db.get_meta(key))
             if saved['generation'] != generation:
                 raise RuntimeStoreError('analysis_conflict')
@@ -185,17 +210,45 @@ async def task_analysis(connection, ref, params):
     if logical.session_id != ref.session_id:
         raise RuntimeStoreError('session_source_changed')
     db = connection.authority.db
+    graph = None
+    if params.get('follow_sources', False):
+        from gateway.session_task_sources import collect
+        graph = await collect(connection, params)
     cache_id = connection.authority.logical_owner(params['stored_id'])
-    raw = db.get_meta(_key(cache_id, params['task_id']))
+    raw = db.get_meta(_key(cache_id, params['task_id'], 2 if graph is not None else 1))
     record = json.loads(raw) if raw else None
     analysis = record['analysis'] if record and record['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']] else None
     revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
-    if analysis is not None:
-        analysis['stale'] = analysis['conversation_revision'] != revision
+    if record is not None and analysis is not None:
+        if graph is not None:
+            from gateway.session_task_sources import revisions
+            coverage_limitations = graph['limitations']
+            cached_coverage = record.get('coverage_limitations')
+            model_limitations = ([f'Previous analysis (unverified): {item}' for item in analysis['limitations']]
+                                 if cached_coverage is None else record['model_limitations'])
+            coverage_changed = analysis['complete'] != graph['complete'] or cached_coverage != coverage_limitations
+            analysis['stale'] = (
+                analysis['conversation_revision'] != revisions(graph)
+                or analysis['sources'] != graph['sources']
+                or coverage_changed
+            )
+            analysis['complete'] = analysis['complete'] and graph['complete'] and not coverage_changed
+            analysis['limitations'] = list(dict.fromkeys([*coverage_limitations, *model_limitations]))
+        else:
+            analysis['stale'] = analysis['conversation_revision'] != revision
     result = {'session_id': logical.session_id, 'stored_session_id': params['stored_id'], 'owner': owner,
               'authority_epoch': connection.authority.epoch, 'task_id': params['task_id'], 'analysis': analysis}
     guard(db.get_meta('store_instance_id'))
     if params.get('refresh', False):
-        return _refresh(connection, logical, params, target, binding, guard, result, raw)
+        return _refresh(connection, logical, params, target, binding, guard, result, raw, graph)
     _checked(connection, params, guard, target, binding, revision)
+    if graph is not None:
+        from gateway.session_task_sources import check
+        check(graph)
+        if analysis is None:
+            old = db.get_meta(_key(cache_id, params['task_id']))
+            legacy = json.loads(old) if old else None
+            if legacy and legacy['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']]:
+                result['analysis'] = legacy['analysis']
+                result['analysis']['stale'] = True
     return result

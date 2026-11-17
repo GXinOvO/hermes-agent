@@ -1,9 +1,9 @@
 import { openExactSession } from '@/lib/exact-session'
-import { exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactTaskSource } from '@/lib/exact-session-owner'
+import { exactSessionOwnerFromWire, exactSessionOwnerToWire, isExactSessionOwner, requireExactSessionOverview, requireExactTaskSource } from '@/lib/exact-session-owner'
 import { parseSessionRefValue } from '@/lib/session-refs'
 import { activeGatewayConnectionId, activeGatewayProfileKey, dialedGatewayModeFor, gatewayRouteState, openGatewayForAgent } from '@/store/gateway'
 
-import { type TaskAnalysis, validateTaskAnalysis } from './analysis-model'
+import { type AnalysisSource, type TaskAnalysis, validateTaskAnalysis } from './analysis-model'
 import { type Task, type TaskReference, taskReferenceKey } from './model'
 
 export function parseTaskSource(value: string): { profile?: string; sessionId: string } {
@@ -92,16 +92,20 @@ export async function loadTaskAnalysis(task: Task, refresh = false): Promise<Tas
 
   if (!gateway) { throw new Error('来源连接不可用，保留上次分析结果。') }
 
+  const descriptor = await gateway.request<any>('runtime.describe')
+  const followSources = Array.isArray(descriptor?.capabilities) && descriptor.capabilities.includes('task-analysis-v2')
+
   const source = await gateway.request<any>('session.task_source', {
     session_id: reference.storedId, profile: reference.targetProfile, expected_owner: exactSessionOwnerToWire(reference.expectedOwner)
   })
 
   requireExactTaskSource(source, reference.storedId, reference.expectedOwner)
 
-  const result = await gateway.request<any>('session.task_analysis', {
+  const analysisParams = {
     session_id: source.session_id, stored_id: reference.storedId, profile: reference.targetProfile,
     expected_owner: exactSessionOwnerToWire(reference.expectedOwner), task_id: task.id, title: task.title, refresh
-  }, refresh ? 180000 : undefined)
+  }
+  const result = await gateway.request<any>('session.task_analysis', followSources ? { ...analysisParams, follow_sources: true } : analysisParams, refresh ? 180000 : undefined)
 
   requireExactSessionOverview(result, source.session_id, reference.storedId, reference.expectedOwner)
 
@@ -115,4 +119,22 @@ export async function loadTaskAnalysis(task: Task, refresh = false): Promise<Tas
   if (analysis.title !== task.title) { throw new Error('事项分析名称不一致，请重新分析。') }
 
   return analysis
+}
+
+export function taskAnalysisSourceReference(task: Task, source: AnalysisSource): TaskReference {
+  const primary = task.primary
+  const expectedOwner = exactSessionOwnerFromWire(source.owner)
+
+  if (!primary?.connectionId || !primary.mode || source.status !== 'read' || !source.resolved_id || !expectedOwner) {
+    throw new Error('来源尚未核实，请重新关联当前会话后再打开。')
+  }
+
+  return {
+    connectionId: primary.connectionId,
+    mode: primary.mode,
+    profile: source.profile,
+    targetProfile: source.profile,
+    storedId: source.stored_session_id,
+    expectedOwner
+  }
 }

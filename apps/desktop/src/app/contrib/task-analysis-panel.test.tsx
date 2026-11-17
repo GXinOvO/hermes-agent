@@ -10,10 +10,10 @@ import { type Task, taskReferenceKey } from '@/lib/task-overview/model'
 
 import { TaskAnalysisPanel } from './task-analysis-panel'
 
-const api = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), close: vi.fn() }))
+const api = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn(), close: vi.fn(), open: vi.fn() }))
 
 vi.mock('@/lib/task-overview/analysis', async importOriginal => ({
-  ...await importOriginal<typeof Analysis>(), loadTaskAnalysis: api.load
+  ...await importOriginal<typeof Analysis>(), loadTaskAnalysis: api.load, openTaskSource: api.open
 }))
 vi.mock('@/lib/task-overview/store', () => ({ openTaskStore: async () => ({ saveAnalysis: api.save, close: api.close }) }))
 
@@ -43,6 +43,7 @@ beforeEach(() => {
   api.load.mockReset().mockResolvedValue(null)
   api.save.mockReset().mockImplementation(async () => ({ task: cached, revision: 2 }))
   api.close.mockClear()
+  api.open.mockReset().mockResolvedValue(undefined)
 })
 afterEach(cleanup)
 
@@ -122,7 +123,7 @@ describe('task analysis lifecycle', () => {
     show(task)
     await screen.findByText('Coverage: 7 / 10 messages')
     expect(screen.getByText('Only visible messages')).toBeTruthy()
-    expect(screen.getByText('The conversation has changed since this analysis. Analyze again to update it.')).toBeTruthy()
+    expect(screen.getByText('This analysis may be out of date or may not include linked conversations. Analyze again to update it.')).toBeTruthy()
     expect(screen.getAllByText('No verifiable record in this conversation.')).toHaveLength(3)
     fireEvent.click(screen.getByText('View evidence'))
     expect(screen.getByText('Message row 42')).toBeTruthy()
