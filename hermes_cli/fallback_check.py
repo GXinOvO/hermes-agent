@@ -16,6 +16,7 @@ import re
 import time
 from datetime import UTC, datetime
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,34 @@ def run_checks(chain: list[dict[str, Any]], *, live: bool) -> list[EntryCheck]:
     return results
 
 
+def route_summary(results: list[EntryCheck], primary_base_url: str = "") -> dict[str, Any]:
+    """How many hosts the chain really spans; one host means one outage takes every route."""
+    def host(url: str) -> str:
+        return (urlsplit(str(url or "")).hostname or "").lower()
+
+    hosts = {value for value in (host(r.base_url) for r in results) if value}
+    primary = host(primary_base_url)
+    if primary:
+        hosts.add(primary)
+    providers = {r.provider for r in results if r.provider}
+    if len(hosts) > 1:
+        scope = "host_diverse"
+    elif len(providers) > 1:
+        scope = "provider_diverse"
+    else:
+        scope = "model_only"
+    return {"redundancy_scope": scope, "host_groups": sorted(hosts), "host_diverse": len(hosts) > 1}
+
+
+def _print_routes(summary: dict[str, Any]) -> None:
+    hosts = ", ".join(summary["host_groups"]) or "unknown"
+    if summary["host_diverse"]:
+        print(f"  Routes: {len(summary['host_groups'])} hosts ({hosts}) — a host outage leaves another path.")
+    else:
+        print(f"  Routes: 1 host ({hosts}) — {summary['redundancy_scope']}: a host outage takes the whole chain.")
+    print()
+
+
 def _print_table(results: list[EntryCheck], *, live: bool) -> None:
     def mark(value: Optional[bool]) -> str:
         return "—" if value is None else "ok" if value else "FAIL"
@@ -316,18 +345,21 @@ def cmd_fallback_check(args) -> None:
     from hermes_cli.fallback_config import get_fallback_chain
     from hermes_cli.profiles import get_active_profile_name
 
-    chain = get_fallback_chain(load_config_readonly())
+    config = load_config_readonly()
+    chain = get_fallback_chain(config)
     results = run_checks(chain, live=args.live)
+    summary = route_summary(results, (config.get("model") or {}).get("base_url", ""))
     ready = all(r.ready for r in results)
     if args.json:
         print(json.dumps({
             "profile": get_active_profile_name(), "live": bool(args.live), "ready": ready,
-            "checked_at": datetime.now(UTC).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(), "route": summary,
             "results": [{**dataclasses.asdict(r), "ready": r.ready, "status": r.status} for r in results],
         }, indent=2))
     elif not results:
         print("\n  No fallback providers configured. Add one with: hermes fallback add\n")
     else:
         _print_table(results, live=args.live)
+        _print_routes(summary)
     if not ready:
         raise SystemExit(1)

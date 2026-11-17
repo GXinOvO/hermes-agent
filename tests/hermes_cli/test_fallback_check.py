@@ -184,6 +184,30 @@ def test_cli_all_ready_exits_zero_without_inference_in_static_mode(monkeypatch, 
     assert "ready (static)" in capsys.readouterr().out
 
 
+def test_route_summary_names_the_real_failure_scope():
+    relay = "http://relay.example"
+    two_providers = [fc.EntryCheck(provider="custom:a", model="m1", base_url=relay),
+                     fc.EntryCheck(provider="custom:b", model="m2", base_url=relay)]
+    assert fc.route_summary(two_providers, relay) == {
+        "redundancy_scope": "provider_diverse", "host_groups": ["relay.example"], "host_diverse": False}
+    same_provider = [fc.EntryCheck(provider="custom:a", model="m1", base_url=relay),
+                     fc.EntryCheck(provider="custom:a", model="m2", base_url=relay)]
+    assert fc.route_summary(same_provider, relay)["redundancy_scope"] == "model_only"
+    one_off_host = [two_providers[0], fc.EntryCheck(provider="custom:c", model="m3", base_url="http://backup.example")]
+    assert fc.route_summary(one_off_host, relay) == {
+        "redundancy_scope": "host_diverse", "host_groups": ["backup.example", "relay.example"], "host_diverse": True}
+
+
+def test_cli_json_reports_route_scope(monkeypatch, capsys):
+    _config([{"provider": "local-oai", "model": "good"}])
+    monkeypatch.setattr("agent.route_binding.resolve_route_entry_client",
+                        lambda *a, **k: pytest.fail("static mode must not build an inference client"))
+    fc.cmd_fallback_check(types.SimpleNamespace(live=False, json=True))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["route"] == {"redundancy_scope": "model_only",
+                                "host_groups": ["127.0.0.1"], "host_diverse": False}
+
+
 def test_parser_wires_check_subcommand():
     import argparse
     from hermes_cli.subcommands.fallback import build_fallback_parser
