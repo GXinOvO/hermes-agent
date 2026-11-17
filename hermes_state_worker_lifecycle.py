@@ -212,15 +212,18 @@ WORKER_LIFECYCLE_HANDLERS = {
 def insert_session_row_in_transaction(
         self, conn, session_id, source, model=None, model_config=None,
         system_prompt=None, user_id=None, session_key=None, chat_id=None,
-        chat_type=None, thread_id=None, parent_session_id=None, cwd=None,
-        profile_name=None, git_repo_root=None, origin_json=None, display_name=None,
-        transport_profile=None):
+        chat_type=None, thread_id=None, parent_session_id=None, cwd=None, profile_name=None,
+        git_repo_root=None, origin_json=None, display_name=None, transport_profile=None,
+        session_key_insert_only=False):
     """Connection-taking body of the keep-existing constructor upsert.
 
     The ordinary constructor should delegate here too. Worker identity is
     validated before entry; this helper never opens or commits a DB.
     """
-    from hermes_state_sessions import _UPSERT_KEEP_EXISTING_SQL
+    from hermes_state_sessions import (
+        _UPSERT_KEEP_EXISTING_SQL,
+        _UPSERT_KEEP_EXISTING_SQL_INSERT_SESSION_KEY_ONLY,
+    )
     existing_before = conn.execute(
         "SELECT s.model_config, COALESCE(p.prompt,s.tool_names) FROM sessions s "
         "LEFT JOIN system_prompts p ON p.hash=s.tool_names WHERE s.id=?", (session_id,)
@@ -293,7 +296,8 @@ def insert_session_row_in_transaction(
                    THEN NULL
                    ELSE sessions.system_prompt
                END,
-""" + _UPSERT_KEEP_EXISTING_SQL,
+""" + (_UPSERT_KEEP_EXISTING_SQL_INSERT_SESSION_KEY_ONLY if session_key_insert_only
+             else _UPSERT_KEEP_EXISTING_SQL),
         (
             session_id, source, source, user_id, session_key, chat_id, chat_type, thread_id, model,
             json.dumps(model_config) if model_config else None, system_prompt_hash,
@@ -312,7 +316,7 @@ def insert_session_row_in_transaction(
     if system_prompt_hash is not None:
         self._delete_unreferenced_system_prompts(conn)
     if parent_session_id:
-        self._inherit_parent_session_metadata(conn, session_id)
+        self._inherit_parent_session_metadata(conn, session_id, session_key_insert_only=session_key_insert_only)
     # The upsert may have just filled a compression tip's created_source (update_token_counts).
     from hermes_state_compression import stamp_compression_ancestors
     stamp_compression_ancestors(conn, session_id)

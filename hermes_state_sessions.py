@@ -276,22 +276,21 @@ _SAME_KEY_NAMESPACE_SQL = (
 )
 
 
-# Upsert tail of _insert_session_row: every routing/metadata column keeps the value an
-# earlier writer set (whitespace is part of the SQL text).
-_UPSERT_KEEP_EXISTING_SQL = ",\n".join(
-    f"                       {col} = COALESCE(sessions.{col}, excluded.{col})" for col in (
-        "session_key", "chat_id", "chat_type", "thread_id", "parent_session_id", "cwd", "profile_name",
-        "transport_profile", "git_repo_root", "origin_json", "display_name",
+# Upsert tail of _insert_session_row: every routing/metadata column keeps the value an earlier writer set.
+def _upsert_keep_existing_sql(columns):
+    assignments = ",\n".join(f"                       {col} = COALESCE(sessions.{col}, excluded.{col})" for col in columns)
+    return assignments + ",\n" + (
+        "                       created_source = CASE WHEN "
+        + _UNSET_CREATED_SQL.format(col="sessions.created_source")
+        + " THEN COALESCE(NULLIF(excluded.created_source, 'local'), sessions.created_source)"
+        " ELSE sessions.created_source END"
     )
-) + ",\n" + (
-    # Accounting may insert before the creator ('unknown') and a routing write carries 'local':
-    # neither is creation provenance (_UNSET_CREATED_SQL), so a later creator replaces them and
-    # 'local' never replaces anything. A real source, once stamped, is preserved (#56439).
-    "                       created_source = CASE WHEN "
-    + _UNSET_CREATED_SQL.format(col="sessions.created_source")
-    + " THEN COALESCE(NULLIF(excluded.created_source, 'local'), sessions.created_source)"
-    " ELSE sessions.created_source END"
-)
+
+_SESSION_ROUTING_COLUMNS = (
+    "session_key", "chat_id", "chat_type", "thread_id", "parent_session_id", "cwd", "profile_name",
+    "transport_profile", "git_repo_root", "origin_json", "display_name")
+_UPSERT_KEEP_EXISTING_SQL = _upsert_keep_existing_sql(_SESSION_ROUTING_COLUMNS)
+_UPSERT_KEEP_EXISTING_SQL_INSERT_SESSION_KEY_ONLY = _upsert_keep_existing_sql(_SESSION_ROUTING_COLUMNS[1:])
 
 
 def _inherit_col_sql(col: str, extra: str = "") -> str:
@@ -335,6 +334,20 @@ _INHERIT_PARENT_ROUTING_SQL = (
     "                       )"
     + _FORK_EDGE_EXCLUSION_SQL
 )
+_INHERIT_PARENT_ROUTING_SQL_INSERT_SESSION_KEY_ONLY = (
+    "UPDATE sessions\n                       SET "
+    + _INHERIT_SEP.join(_inherit_col_sql(c) for c in (
+        "user_id", "chat_id", "chat_type", "thread_id", "display_name", "origin_json",
+        "transport_profile",
+    ))
+    + "\n                     WHERE id = ? AND parent_session_id IS NOT NULL\n"
+    "                       AND EXISTS (\n"
+    "                           SELECT 1 FROM sessions p\n"
+    "                           WHERE p.id = sessions.parent_session_id\n"
+    "                             AND p.end_reason = 'compression'\n"
+    "                       )"
+    + _FORK_EDGE_EXCLUSION_SQL
+)
 
 
 class SessionSessionsMixin(SessionToolPermissionMixin):
@@ -358,7 +371,7 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
         return None
 
     @staticmethod
-    def _inherit_parent_session_metadata(conn, session_id: str) -> None:
+    def _inherit_parent_session_metadata(conn, session_id: str, *, session_key_insert_only: bool = False) -> None:
         """NULL-fill a child's cwd/git/profile from its parent (profile_name only within the same
         ``agent:<ns>:`` namespace). Gateway routing columns are inherited ONLY by compression forks
         (a crash before the gateway re-records the peer would strand the child unroutable); delegate
@@ -367,7 +380,11 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
         batch outlives its coordinator's rotation, and two live rows holding one routing key is the
         shape reported in #92859."""
         conn.execute(_INHERIT_PARENT_META_SQL, (session_id,))
-        conn.execute(_INHERIT_PARENT_ROUTING_SQL, (session_id,))
+        conn.execute(
+            (_INHERIT_PARENT_ROUTING_SQL_INSERT_SESSION_KEY_ONLY if session_key_insert_only
+             else _INHERIT_PARENT_ROUTING_SQL),
+            (session_id,),
+        )
 
     def _publish_child_session_row(self, conn, parent, *, parent_session_id, child_session_id, source,
                                    model, model_config, system_prompt, cwd, profile_name) -> None:
@@ -383,7 +400,7 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
         chat_id: str | None = None, chat_type: str | None = None, thread_id: str | None = None,
         parent_session_id: str | None = None, cwd: str | None = None, profile_name: Optional[str] = None,
         git_repo_root: str | None = None, origin_json: str | None = None, display_name: str | None = None,
-        transport_profile: Optional[str] = None,
+        transport_profile: Optional[str] = None, session_key_insert_only: bool = False,
     ) -> None:
         """Upsert a session row, never overwriting what an earlier writer set (the gateway creates a
         bare row before create_session carries the real model/prompt) — the one exception is the
@@ -415,12 +432,12 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
         ``db_path`` in tests, ad-hoc copies) derive nothing and keep NULL — never guess.
         """
         from hermes_state_worker_lifecycle import insert_session_row_in_transaction
-        params = dict(session_id=session_id, source=source, model=model, model_config=model_config,
+        params: dict[str, Any] = dict(session_id=session_id, source=source, model=model, model_config=model_config,
                       system_prompt=system_prompt, user_id=user_id, session_key=session_key,
                       chat_id=chat_id, chat_type=chat_type, thread_id=thread_id,
                       parent_session_id=parent_session_id, cwd=cwd, profile_name=profile_name,
                       git_repo_root=git_repo_root, origin_json=origin_json, display_name=display_name,
-                      transport_profile=transport_profile)
+                      transport_profile=transport_profile, session_key_insert_only=session_key_insert_only)
         self._execute_write(lambda conn: insert_session_row_in_transaction(self, conn, **params),
                             patience_s=self._TRANSCRIPT_WRITE_PATIENCE_S)
 

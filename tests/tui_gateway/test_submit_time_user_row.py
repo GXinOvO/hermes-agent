@@ -32,6 +32,45 @@ def _flush_agent(db, key):
     return agent
 
 
+def test_desktop_session_row_persists_its_routing_key_at_first_submit(monkeypatch, tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    sid, key = _desktop_session(monkeypatch, db)
+    session = server._sessions[sid]
+    try:
+        assert server._ensure_session_db_row(session) is True
+        assert db.get_session(key)["session_key"] == key
+    finally:
+        server._sessions.pop(sid, None)
+        db.close()
+
+
+def test_existing_desktop_row_does_not_backfill_a_null_routing_key(monkeypatch, tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    sid, key = _desktop_session(monkeypatch, db)
+    session = server._sessions[sid]
+    db.create_session(key, source="desktop")
+    try:
+        assert db.get_session(key)["session_key"] is None
+        assert server._ensure_session_db_row(session) is True
+        assert db.get_session(key)["session_key"] is None
+    finally:
+        server._sessions.pop(sid, None)
+        db.close()
+
+
+def test_existing_desktop_row_preserves_a_non_null_routing_key(monkeypatch, tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    sid, key = _desktop_session(monkeypatch, db)
+    session = server._sessions[sid]
+    db.create_session(key, source="desktop", session_key="existing-routing-key")
+    try:
+        assert server._ensure_session_db_row(session) is True
+        assert db.get_session(key)["session_key"] == "existing-routing-key"
+    finally:
+        server._sessions.pop(sid, None)
+        db.close()
+
+
 def test_user_message_is_durable_at_submit_before_any_agent_turn(monkeypatch, tmp_path):
     db = SessionDB(db_path=tmp_path / "state.db")
     sid, key = _desktop_session(monkeypatch, db)
