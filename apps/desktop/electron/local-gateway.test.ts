@@ -1,9 +1,130 @@
+import { spawn } from 'node:child_process'
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import path from 'node:path'
 
-import { expect, test, vi } from 'vitest'
+import { expect, onTestFinished, test, vi } from 'vitest'
 
-import { createLocalGatewayDials, ensureLocalGateway, nativeGrantRoute, routedGatewayEndpoint, runGatewayEnsure } from './local-gateway'
+import { createLocalGatewayDials, ensureLocalGateway, freshSshGatewayWsUrl, mintSshInputTicket, nativeGrantRoute, routedGatewayEndpoint, runGatewayEnsure } from './local-gateway'
 import { shortSocketTmpDir } from './local-gateway.test-helpers'
+
+const OWNERSHIP_ID = '0123456789abcdef0123456789abcdef'
+const SPAWN_NONCE = '0123456789abcdef'
+
+test('SSH input mint reads the exact private instance file only in the remote process', async () => {
+  const home = await mkdtemp(path.join(process.env.TMPDIR || '/tmp', 'ssh-input-'))
+  const directory = path.join(home, '.hermes/desktop-ssh', OWNERSHIP_ID)
+  const instance = 'a'.repeat(32)
+  const file = path.join(directory, `${SPAWN_NONCE}.${instance}.input-key`)
+  const proof = { key: 'private-key-never-on-client', instance_id: instance, pid: 333 }
+  const requests: any[] = []
+  let ownership: any = { ok: true, runtimeIntact: true, sshOwnerNonce: SPAWN_NONCE, protocolVersion: 1, sshInputProtocol: 1, sshInputInstance: instance }
+  let redirect = false
+  const server = createServer(async (req, res) => {
+    if (String(req.url).split('?')[0] === '/api/ssh/ownership') {
+      expect(req.headers['x-hermes-session-token']).toBe('public-token')
+      res.end(JSON.stringify(ownership)); return
+    }
+    let body = ''
+    for await (const chunk of req) { body += chunk }
+    requests.push({ path: req.url, token: req.headers['x-hermes-session-token'], ...JSON.parse(body) })
+    if (redirect) { res.writeHead(307, { Location: '/leaked' }); res.end(); return }
+    res.end(JSON.stringify({ ticket: `ticket-${requests.length}`, profile: 'remote-profile', instance_id: instance }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as any).port
+  let proxyRequests = 0
+  const proxy = createServer((_req, res) => { proxyRequests++; res.writeHead(502); res.end() })
+  await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve))
+  const proxyUrl = `http://127.0.0.1:${(proxy.address() as any).port}`
+  const state = { ownershipId: OWNERSHIP_ID, spawnNonce: SPAWN_NONCE, pid: 333, remotePort: port, baseUrl: `http://127.0.0.1:${port}`, token: 'public-token' }
+  const ssh = { exec: async (command: string, options: { stdinData: string }) => {
+    expect(command).not.toContain(proof.key)
+    expect(options.stdinData).not.toContain(proof.key)
+    return new Promise<string>((resolve, reject) => {
+      const child = spawn('sh', ['-c', command], { env: { ...process.env, HOME: home, http_proxy: proxyUrl, HTTP_PROXY: proxyUrl, no_proxy: '', NO_PROXY: '' }, stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = '', stderr = ''
+      child.stdout!.on('data', chunk => { stdout += chunk })
+      child.stderr!.on('data', chunk => { stderr += chunk })
+      child.on('close', code => code === 0 ? resolve(stdout) : reject(new Error(stderr)))
+      child.stdin!.end(options.stdinData)
+    })
+  } }
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await writeFile(file, JSON.stringify(proof), { mode: 0o600 })
+    const first = await mintSshInputTicket(ssh, state, 'remote-profile')
+    expect(first).toEqual({ ticket: 'ticket-1', profile: 'remote-profile', instance_id: instance })
+    expect(JSON.stringify(first)).not.toContain(proof.key)
+    expect((await mintSshInputTicket(ssh, state, 'remote-profile')).ticket).toBe('ticket-2')
+    expect(requests[0]).toEqual({ path: '/api/ssh/input-ticket', token: 'public-token', key: proof.key, instance_id: instance, profile: 'remote-profile' })
+    await chmod(file, 0o644)
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    await chmod(file, 0o600)
+    await writeFile(file, JSON.stringify({ ...proof, pid: 334 }))
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    await writeFile(file, JSON.stringify({ ...proof, instance_id: 'b'.repeat(32) }))
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    await rm(file); await symlink('missing', file)
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    await rm(file); await writeFile(file, JSON.stringify(proof), { mode: 0o600 })
+    await chmod(directory, 0o755)
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    await chmod(directory, 0o700)
+    ownership = { ...ownership, sshOwnerNonce: 'wrong' }
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    ownership = { ok: true, sshOwnerNonce: SPAWN_NONCE, protocolVersion: 1 }
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    expect(requests).toHaveLength(2)
+    ownership = { ...ownership, sshInputProtocol: 1, sshInputInstance: instance }
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    expect(requests).toHaveLength(2)
+    ownership = { ...ownership, runtimeIntact: false }
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.toThrow('SSH input')
+    expect(requests).toHaveLength(2)
+    ownership = { ...ownership, runtimeIntact: true }
+    redirect = true
+    await expect(mintSshInputTicket(ssh, state, 'remote-profile')).rejects.not.toThrow(proof.key)
+    expect(requests).toHaveLength(3)
+    expect(proxyRequests).toBe(0)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await new Promise<void>(resolve => proxy.close(() => resolve()))
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  { remoteProfile: undefined, connectionProfile: undefined, fallback: 'current', expected: 'current' },
+  { remoteProfile: undefined, connectionProfile: 'named', fallback: 'current', expected: 'named' },
+  { remoteProfile: 'shared', connectionProfile: 'named', fallback: 'current', expected: 'shared' }
+])('SSH fresh dial selects the actual $expected profile and remints on reconnect', async ({ remoteProfile, connectionProfile, fallback, expected }) => {
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true, runtimeIntact: true, sshOwnerNonce: SPAWN_NONCE, protocolVersion: 1, sshInputProtocol: 1, sshInputInstance: 'a'.repeat(32) })))
+  onTestFinished(() => fetcher.mockRestore())
+  let minted = 0
+  const exec = vi.fn(async (_command: string, options: { stdinData: string }) => {
+    const input = JSON.parse(options.stdinData)
+    expect(input.profile).toBe(expected)
+    expect(input.session_token).toBe('connection-token')
+    return JSON.stringify({ ticket: `fresh-${++minted}`, profile: input.profile, instance_id: input.instance_id })
+  })
+  const state = { ownershipId: OWNERSHIP_ID, spawnNonce: SPAWN_NONCE, pid: 333, remotePort: 4321, remoteProfile, ssh: { exec } }
+  const states = new Map([['unrelated-map-key', state]])
+  const connection = { remoteIdentity: OWNERSHIP_ID, baseUrl: 'http://127.0.0.1:4321', token: 'connection-token', wsUrl: 'ws://127.0.0.1:4321/api/ws?token=connection-token', remoteProfile: connectionProfile }
+  const dials = createLocalGatewayDials()
+  const first = await freshSshGatewayWsUrl(dials, states, connection, 7, fallback)
+  const second = await freshSshGatewayWsUrl(dials, states, connection, 7, fallback)
+  expect(first).not.toBe(second)
+  for (const [url, ticket] of [[first, 'fresh-1'], [second, 'fresh-2']]) {
+    expect(url).not.toContain(ticket)
+    expect(dials.headers({ url, webContentsId: 8, resourceType: 'webSocket' })).toBeNull()
+    expect(dials.headers({ url, webContentsId: 7, resourceType: 'webSocket' })).toEqual({ 'X-Hermes-Ssh-Input-Ticket': ticket, 'X-Hermes-Ssh-Input-Profile': expected })
+    expect(dials.headers({ url, webContentsId: 7, resourceType: 'webSocket' })).toBeNull()
+  }
+  expect(exec).toHaveBeenCalledTimes(2)
+  await expect(freshSshGatewayWsUrl(dials, states, { ...connection, remoteIdentity: 'missing' }, 7, fallback)).rejects.toThrow('ownership')
+  expect(exec).toHaveBeenCalledTimes(2)
+})
 
 test('the ensure client inherits the caller-scrubbed parent env, not the raw Desktop env', async () => {
   // #68367: a sibling profile's `gateway ensure` must not see the launch profile's dotenv
@@ -223,6 +344,26 @@ test('an ensure child that never reached the protocol boundary is diagnosed from
   // A protocol outcome is never re-diagnosed: `incompatible` stays the gateway's own verdict.
   await expect(ensureLocalGateway(async () => ({ code: 3, stdout: '{"endpoint":null,"reason_code":"runtime_protocol","state":"incompatible"}', stderr: 'noise' }))).rejects.toThrow('Gateway incompatible (runtime_protocol)')
   await expect(ensureLocalGateway(async () => ({ code: 0, stdout: '', stderr: '' }))).rejects.toThrow(/produced no result \(exit 0\)\. Update Hermes/)
+})
+
+test('SSH input tickets stay in main and bind one socket to its origin, path and window', () => {
+  const dials = createLocalGatewayDials()
+  const url = dials.prepareSsh('ws://127.0.0.1:1234/api/ws?token=public', 'private-ssh-ticket', 'remote', 7)
+  expect(new URL(url).searchParams.has('ssh_dial')).toBe(true)
+  expect(url).not.toMatch(/private-ssh-ticket|native_dial/)
+  const details = { url, webContentsId: 7, resourceType: 'webSocket', requestHeaders: { Origin: 'http://renderer' } }
+  for (const change of [{ webContentsId: 8 }, { resourceType: 'xhr' }, { url: url.replace(':1234', ':4321') }, { url: url.replace('/api/ws', '/api/pty') }]) {
+    expect(dials.headers({ ...details, ...change })).toBeNull()
+  }
+  expect(dials.headers(details)).toEqual({ 'X-Hermes-Ssh-Input-Ticket': 'private-ssh-ticket', 'X-Hermes-Ssh-Input-Profile': 'remote' })
+  expect(dials.headers(details)).toBeNull()
+})
+
+test('expired SSH input reservations cannot inject tickets', () => {
+  const dials = createLocalGatewayDials()
+  const url = dials.prepareSsh('ws://127.0.0.1:1234/api/ws?token=public', 'ticket', 'remote', 7)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000)
+  try { expect(dials.headers({ url, webContentsId: 7, resourceType: 'webSocket' })).toBeNull() } finally { clock.mockRestore() }
 })
 
 test('private dial credential is one-use and bound to the requesting native window', () => {

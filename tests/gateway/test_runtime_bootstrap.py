@@ -46,36 +46,39 @@ async def test_private_control_peer_mints_profile_bound_ticket(tmp_path):
         await server.stop()
 
 
-def test_ticket_atomic_single_use_profile_purpose_expiry_and_capacity(monkeypatch):
+@pytest.mark.parametrize('purpose', ['interactive', 'ssh-input'])
+def test_ticket_atomic_single_use_profile_purpose_expiry_and_capacity(monkeypatch, purpose):
     from gateway.runtime_bootstrap import TicketStore
     clock = [0.0]
     monkeypatch.setattr('gateway.runtime_bootstrap.time.monotonic', lambda: clock[0])
     store = TicketStore('boot', frozenset({'a', 'b'}))
-    ticket = store.mint(profile_id='a', subject='uid:1', purpose='interactive')
-    for profile, purpose in [('b', 'interactive'), ('a', 'exposure')]:
+    ticket = store.mint(profile_id='a', subject='uid:1', purpose=purpose)
+    for profile, wrong_purpose in [('b', purpose), ('a', 'exposure')]:
         with pytest.raises(PermissionError):
-            store.redeem(ticket, profile_id=profile, purpose=purpose)
+            store.redeem(ticket, profile_id=profile, purpose=wrong_purpose)
     def consume(_):
         try:
-            return store.redeem(ticket, profile_id='a', purpose='interactive')
+            return store.redeem(ticket, profile_id='a', purpose=purpose)
         except PermissionError:
             return None
     with ThreadPoolExecutor(max_workers=8) as pool:
         grants = list(pool.map(consume, range(8)))
     assert sum(g is not None for g in grants) == 1
-    expired = store.mint(profile_id='a', subject='uid:1', purpose='interactive')
+    if purpose == 'ssh-input':
+        assert next(g for g in grants if g is not None)['capabilities'] == frozenset()
+    expired = store.mint(profile_id='a', subject='uid:1', purpose=purpose)
     native = store.mint(profile_id='a', subject='uid:1', purpose='native-http')
     clock[0] = 30
     with pytest.raises(PermissionError):
-        store.redeem(expired, profile_id='a', purpose='interactive')
+        store.redeem(expired, profile_id='a', purpose=purpose)
     with pytest.raises(PermissionError, match='expired'):  # the native-HTTP gate's redeem (profile_id=None)
         store.redeem(native, profile_id=None, purpose='native-http')
     exposure = store.mint(profile_id='a', subject='uid:1', purpose='exposure')
     assert store.redeem(exposure, profile_id='a', purpose='exposure')['capabilities'] == frozenset({'transport:delegate'})
     for _ in range(store.MAX_ENTRIES):
-        store.mint(profile_id='a', subject='uid:1', purpose='interactive')
+        store.mint(profile_id='a', subject='uid:1', purpose=purpose)
     with pytest.raises(PermissionError):
-        store.mint(profile_id='a', subject='uid:1', purpose='interactive')
+        store.mint(profile_id='a', subject='uid:1', purpose=purpose)
 
 
 @pytest.mark.platforms("linux")

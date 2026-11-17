@@ -153,6 +153,8 @@ class WSTransport:
         self.auth_identity = auth_identity
         self.verified_operator = False
         self.desktop_local = False
+        self.ssh_input = None
+        self.ssh_input_sequence = 0
         #: The served profile home whose skin this peer follows (None = the launch home); see change_watcher.
         self.skin_home: str | None = None
         self._closed = False
@@ -438,7 +440,7 @@ class _SendFailed(Exception):
 
 
 async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: str | None = None,
-                    operator: bool = False) -> None:
+                    operator: bool = False, ssh_input: dict | None = None) -> None:
     """Run one WebSocket session. Wire-compatible with ``tui_gateway.entry``. *auth_identity* is the server-minted
     ``{user_id, provider}`` recorded at WS-upgrade auth, stored as ``WSTransport.auth_identity`` (the only identity
     authority for session ownership and relay authorship); callers that omit it (harnesses, embedded TUI child) get None."""
@@ -657,6 +659,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
         _log.info("ws accepted peer=%s", peer)
         transport = WSTransport(ws, asyncio.get_running_loop(), peer=peer, auth_identity=auth_identity)
         transport.verified_operator = operator is True
+        transport.ssh_input = ssh_input if operator is True else None
         authority_connection = _authority_connection(ws, transport, auth_identity, operator)
         # resolve_skin() is sync I/O + CPU; pooled so the read loop can drain the frontend's initial RPC burst.
         skin_payload = await asyncio.to_thread(server.resolve_skin)

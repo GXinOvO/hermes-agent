@@ -51,7 +51,7 @@ def desktop_identity():
             'capabilities': ['session:create'], 'native_bootstrap': True}
 
 
-async def receive(sid, text, *, operator=True, identity=_UNSET, params=None):
+async def receive(sid, text, *, operator=True, identity=_UNSET, params=None, ssh_input=None):
     from tui_gateway.ws import handle_ws
     from starlette.websockets import WebSocketDisconnect
 
@@ -97,7 +97,7 @@ async def receive(sid, text, *, operator=True, identity=_UNSET, params=None):
 
     if identity is _UNSET:
         identity = desktop_identity()
-    await handle_ws(Socket(), auth_identity=identity, operator=operator)
+    await handle_ws(Socket(), auth_identity=identity, operator=operator, ssh_input=ssh_input)
     return next(frame for frame in frames if frame.get('id') == 'prompt')
 
 
@@ -130,6 +130,176 @@ async def test_authenticated_desktop_submit_is_collectable_before_the_agent_runs
     assert stored[0]['display_metadata']['submission_id'] == row['request_id']
     assert db.display_message_count(key) == 1
     assert [message['content'] for message in db.get_messages(key, include_compacted=True)] == [text]
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms('posix')
+@pytest.mark.parametrize('boundary', ['normal', 'file-api', 'runtime'])
+async def test_private_ssh_ticket_binds_only_its_connection(desktop, monkeypatch, tmp_path, boundary):
+    import re
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocket
+    from hermes_cli import web_server as web
+    from hermes_cli.web_server_dashboard import mount_spa
+    from hermes_cli.web_server_session_token import ssh_input_bootstrap
+    from hermes_cli.web_routers.chat_ws import gateway_ws
+
+    db, sid, key, session, _starts = desktop
+    from hermes_constants import get_process_hermes_home
+    monkeypatch.setattr(server, '_hermes_home', get_process_hermes_home())
+    nonce = '0123456789abcdef'
+    owner = get_process_hermes_home() / 'desktop-ssh' / ('a' * 32)
+    owner.mkdir(mode=0o700, parents=True)
+    runtime_marker = tmp_path / 'runtime-marker'
+    runtime_marker.touch()
+    monkeypatch.setattr(web, '_SSH_RUNTIME_MARKER', str(runtime_marker))
+    monkeypatch.setattr(web, '_SESSION_TOKEN', 'public-fixture-token')
+    monkeypatch.setattr(web, '_SSH_OWNER_NONCE', nonce)
+    for name, value in (('auth_required', False), ('bound_host', '127.0.0.1'),
+                        ('bound_port', 9120), ('session_authority', None),
+                        ('withhold_session_token', False)):
+        monkeypatch.setattr(web.app.state, name, value, raising=False)
+    monkeypatch.setattr('hermes_cli.mcp_startup.start_deferred_mcp_discovery_now', lambda: None)
+    monkeypatch.setenv('HERMES_SERVE_HEADLESS', '1')
+    page_app = FastAPI()
+    page_app.state.auth_required = False
+    mount_spa(page_app)
+    page = TestClient(page_app).get('/')
+    public = json.loads(re.search(r'window\.__HERMES_SESSION_TOKEN__=("[^"\n]+");', page.text)[1])
+    client = TestClient(web.app, base_url='http://127.0.0.1:9120',
+                        headers={'X-Hermes-Session-Token': public})
+
+    async def dial(ticket, text, profile='current'):
+        request = {'jsonrpc': '2.0', 'id': 'p', 'method': 'prompt.submit',
+                   'params': {'session_id': sid, 'text': text}}
+        events = iter([{'type': 'websocket.connect'},
+                       {'type': 'websocket.receive', 'text': json.dumps(request)},
+                       {'type': 'websocket.disconnect', 'code': 1000}])
+        frames = []
+
+        async def incoming():
+            return next(events)
+
+        async def outgoing(frame):
+            frames.append(frame)
+
+        headers = [(b'host', b'127.0.0.1:9120')]
+        if ticket is not None:
+            headers.append((b'x-hermes-ssh-input-ticket', ticket.encode()))
+            headers.append((b'x-hermes-ssh-input-profile', profile.encode()))
+        ws = WebSocket({'type': 'websocket', 'path': '/api/ws', 'scheme': 'ws',
+                        'headers': headers, 'query_string': ('token=' + public).encode(),
+                        'app': web.app, 'client': ('127.0.0.1', 12345),
+                        'server': ('127.0.0.1', 9120)}, incoming, outgoing)
+        session['running'] = False
+        await gateway_ws(ws)
+        return ws, frames
+
+    before = dt.datetime.now(dt.UTC)
+    with ssh_input_bootstrap(owner, nonce) as proof:
+        assert proof is not None
+        monkeypatch.setattr(web.app.state, 'ssh_input', proof, raising=False)
+        private = json.loads(next(owner.glob('*.input-key')).read_text())
+        assert private['instance_id'] == proof['instance_id']
+        assert next(owner.glob('*.input-key')).stat().st_mode & 0o777 == 0o600
+        assert private['key'] not in page.text
+        if boundary == 'file-api':
+            leaf = next(owner.glob('*.input-key'))
+            alias = tmp_path / 'ordinary.txt'
+            alias.symlink_to(leaf)
+            listed = client.get('/api/fs/list', params={'path': str(owner.parent)})
+            statuses = [client.get(route, params={'path': str(path)}).status_code
+                        for path in (leaf, alias)
+                        for route in ('/api/fs/read-text', '/api/fs/read-data-url', '/api/fs/download', '/api/files/download')]
+            assert set(statuses) == {403}
+            assert listed.status_code == 200 and listed.json()['entries'] == []
+            from agent.file_safety import get_read_block_error
+            assert get_read_block_error(str(leaf)) and get_read_block_error(str(alias))
+            normal = tmp_path / 'normal.txt'
+            normal.write_text('ordinary read remains allowed')
+            assert client.get('/api/fs/read-text', params={'path': str(normal)}).json()['text'] == normal.read_text()
+            assert client.post('/api/ssh/input-ticket', json={'key': public, 'instance_id': proof['instance_id'], 'profile': 'current'}).status_code == 403
+            await dial(None, 'public-token input after protected file refusal')
+            assert admissions(db) == [] and history(db, before)['included_messages'] == 0
+            # Control: with the path gate off, a public token that reads this file forges an SSH source.
+            with monkeypatch.context() as gate:
+                gate.setattr('hermes_cli.web_routers.files._is_sensitive_path', lambda _path: False)
+                stolen = json.loads(client.get('/api/fs/read-text', params={'path': str(leaf)}).json()['text'])
+                grant = client.post('/api/ssh/input-ticket', json={**stolen, 'profile': 'current'})
+                assert grant.status_code == 200
+                await dial(grant.json()['ticket'], 'control: file gate disabled')
+            assert len(admissions(db)) == history(db, before)['included_messages'] == 1
+            return
+        ownership = client.get('/api/ssh/ownership').json()
+        assert ownership['sshInputInstance'] == private['instance_id']
+        assert private['key'] not in json.dumps(ownership)
+        for secret in (None, public, 'forged'):
+            response = client.post('/api/ssh/input-ticket', json={
+                'profile': 'current', 'key': secret, 'instance_id': proof['instance_id']})
+            assert response.status_code == 403, response.text
+        _forged, frames = await dial('forged', 'forged SSH proof')
+        assert any(f.get('code') == 4401 for f in frames)
+        ordinary, _ = await dial(None, 'ordinary public-token client')
+        assert ordinary.scope.get('hermes.ssh_input') is None
+        assert admissions(db) == []
+        assert history(db, before)['included_messages'] == 0
+        if boundary == 'runtime':
+            ticket = client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'}).json()['ticket']
+            runtime_marker.unlink()
+            assert client.get('/api/ssh/ownership').json()['runtimeIntact'] is False
+            assert client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'}).status_code == 403
+            _stale, frames = await dial(ticket, 'runtime invalidated before redeem')
+            assert any(f.get('code') == 4401 for f in frames)
+            assert all(not store.outstanding() for store in proof['tickets'].values())
+            runtime_marker.touch()
+            _revoked, frames = await dial(ticket, 'revoked ticket after runtime recovery')
+            assert any(f.get('code') == 4401 for f in frames)
+            assert admissions(db) == [] and history(db, before)['included_messages'] == 0
+            return
+        response = client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'})
+        assert response.status_code == 200, response.text
+        ticket = response.json()['ticket']
+        trusted, frames = await dial(ticket, 'private SSH connection input')
+        assert not any(f.get('code', 1000) != 1000 for f in frames), frames
+        assert trusted.scope['hermes.ssh_input']['instance_id'] == proof['instance_id']
+        row, = admissions(db)
+        assert row['target_session_id'] == key
+        assert json.loads(row['payload_json'])['text'] == 'private SSH connection input'
+        stored = db.get_messages_as_conversation(key, include_row_ids=True)
+        source = next(m for m in stored if m['content'] == 'private SSH connection input')['display_metadata']['ssh_input_v1']
+        assert source['instance_id'] == proof['instance_id']
+        assert source['connection_id'] == trusted.scope['hermes.ssh_input']['connection_id']
+        assert source['sequence'] == 1
+        assert [m['text'] for m in history(db, before)['messages']] == ['private SSH connection input']
+        _replay, frames = await dial(ticket, 'replayed SSH ticket')
+        assert any(f.get('code') == 4401 for f in frames)
+        await dial(None, 'public-token connection after private input')
+        assert len(admissions(db)) == 1
+        unused = client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'}).json()['ticket']
+        other = tmp_path / 'other-profile'
+        other.mkdir()
+        monkeypatch.setattr('hermes_cli.web_server_profiles._resolve_profile_dir', lambda _name: other)
+        _wrong_profile, frames = await dial(unused, 'wrong profile proof', profile='other')
+        assert any(f.get('code') == 4401 for f in frames)
+        session['profile_home'] = str(other)
+        _wrong_target, frames = await dial(unused, 'private connection to wrong target profile')
+        assert not any(f.get('code', 1000) != 1000 for f in frames)
+        assert len(admissions(db)) == 1
+        session['profile_home'] = None
+        from gateway.runtime_bootstrap import TicketStore
+        with monkeypatch.context() as clock:
+            clock.setattr(TicketStore, 'TTL_SECONDS', 0)
+            expired = client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'}).json()['ticket']
+            _expired, frames = await dial(expired, 'expired SSH proof')
+            assert any(f.get('code') == 4401 for f in frames)
+        with ssh_input_bootstrap(owner, nonce) as successor:
+            monkeypatch.setattr(web.app.state, 'ssh_input', successor)
+            assert client.post('/api/ssh/input-ticket', json={**private, 'profile': 'current'}).status_code == 403
+            _old_instance, frames = await dial(unused, 'old SSH instance proof')
+            assert any(f.get('code') == 4401 for f in frames)
+        assert len(admissions(db)) == 1
+    assert not list(owner.glob('*.input-key'))
 
 
 @pytest.mark.asyncio
@@ -319,13 +489,17 @@ async def test_unexpected_receipt_failure_preserves_an_accepted_correction(deskt
 
 
 @pytest.mark.asyncio
-async def test_merged_queue_retains_each_received_original(desktop, monkeypatch):
+@pytest.mark.parametrize('ssh', [False, True])
+async def test_merged_queue_retains_each_received_original(desktop, monkeypatch, ssh):
     db, sid, key, session, _starts = desktop
     monkeypatch.setattr(server, '_load_busy_input_mode', lambda: 'queue')
     session['running'] = True
     before = dt.datetime.now(dt.UTC)
-    await receive(sid, 'first queued', params={'queued': True})
-    await receive(sid, 'second queued', params={'queued': True})
+    source = {'profile_home': str(Path(server._hermes_home).resolve()), 'instance_id': 'test-instance',
+              'connection_id': 'test-connection'} if ssh else None
+    for text in ('first queued', 'second queued'):
+        await receive(sid, text, params={'queued': True}, ssh_input=source,
+                      identity=None if ssh else desktop_identity())
     assert session['queued_prompt']['text'] == 'first queued\n\nsecond queued'
     assert len(admissions(db)) == 2
     result = history(db, before)
@@ -333,6 +507,11 @@ async def test_merged_queue_retains_each_received_original(desktop, monkeypatch)
     assert result['complete_within_declared_scope'] is False
     assert result['uncertain_source_count'] > 0
     assert [row['content'] for row in db.get_messages_as_conversation(key)] == ['first queued\n\nsecond queued']
+    if ssh:
+        witnesses = db._conn.execute("SELECT content,display_metadata FROM messages WHERE active=0 ORDER BY id").fetchall()
+        assert [row['content'] for row in witnesses] == ['first queued', 'second queued']
+        assert all(json.loads(row['display_metadata'])['ssh_input_v1'] == {**source, 'sequence': 1}
+                   for row in witnesses)
 
 
 @pytest.mark.asyncio

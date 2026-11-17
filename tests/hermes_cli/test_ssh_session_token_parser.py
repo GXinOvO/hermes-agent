@@ -112,6 +112,29 @@ def test_token_file_rejects_parent_escape(tmp_path, monkeypatch):
         reset_hermes_home_override(override)
 
 
+@pytest.mark.platforms('posix')
+def test_ssh_input_key_is_private_instance_bound_and_preserves_replacement(tmp_path):
+    import json
+    from hermes_cli.web_server_session_token import ssh_input_bootstrap
+
+    private = tmp_path / 'private'
+    private.mkdir(mode=0o700)
+    nonce = '0123456789abcdef'
+    with ssh_input_bootstrap(private, nonce) as proof:
+        path = private / f'{nonce}.{proof["instance_id"]}.input-key'
+        value = json.loads(path.read_text())
+        assert value['key'] == proof['key']
+        assert value['pid'] == os.getpid()
+        assert path.stat().st_mode & 0o777 == 0o600
+        path.rename(private / 'retained-original')
+        path.write_text('foreign replacement')
+    assert path.read_text() == 'foreign replacement'
+    private.chmod(0o755)
+    with pytest.raises(PermissionError, match='private'):
+        with ssh_input_bootstrap(private, nonce):
+            pytest.fail('unsafe directory accepted')
+
+
 def test_windows_runtime_root_stays_at_machine_root_for_named_profile(tmp_path, monkeypatch):
     from hermes_cli import windows_ssh_runtime
 

@@ -358,6 +358,10 @@ def _ws_auth_reason(ws: WebSocket, *, allow_internal: bool = False,
     if not token:
         return "no_credential", "none"
     if hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
+        from hermes_cli.web_server_session_token import bind_ssh_input_connection
+        refusal = bind_ssh_input_connection(ws)
+        if refusal:
+            return refusal, 'ssh-input'
         track(ws, generation_of(token))
         return None, "token"
     return "token_mismatch", "token"

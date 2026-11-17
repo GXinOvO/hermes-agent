@@ -17,6 +17,7 @@ _PURPOSE_CAPABILITIES = {
     'native-profile-registry': frozenset({'profiles:registry'}),
     'exposure': frozenset({'transport:delegate'}),
     'worker-adoption': frozenset({'worker:adopt'}),
+    'ssh-input': frozenset(),
 }
 # A grant's profile reach: its own home, or (interactive only) every served sibling.
 _SCOPES = frozenset({'profile', 'host'})

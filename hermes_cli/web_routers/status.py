@@ -114,8 +114,41 @@ async def get_ssh_ownership(request: Request):
     _require_token(request)
     if not _SSH_OWNER_NONCE:
         raise HTTPException(status_code=404, detail="SSH ownership is not active")
+    proof = getattr(app.state, 'ssh_input', None)
     return {"ok": True, "sshOwnerNonce": _SSH_OWNER_NONCE, "protocolVersion": 1,
-            "runtimeIntact": _ssh_runtime_intact()}
+            "runtimeIntact": _ssh_runtime_intact(),
+            **({'sshInputInstance': proof['instance_id'], 'sshInputProtocol': 1} if proof else {})}
+
+
+@router.post("/api/ssh/input-ticket")
+async def post_ssh_input_ticket(request: Request):
+    import hmac
+    from gateway.owner_identity import host_owner_subject
+    from gateway.runtime_bootstrap import TicketStore
+    from hermes_cli.web_server_session_token import get_ssh_input_proof
+    proof = get_ssh_input_proof()
+    if proof is None:
+        raise HTTPException(status_code=403, detail="Private SSH input proof required")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+    if (not isinstance(body, dict) or not isinstance(body.get('key'), str)
+            or not hmac.compare_digest(body['key'].encode(), proof['key'].encode())
+            or body.get('instance_id') != proof['instance_id']):
+        raise HTTPException(status_code=403, detail="Private SSH input proof required")
+    profile = body.get('profile')
+    if not isinstance(profile, str):
+        raise HTTPException(status_code=400, detail="profile required")
+    home = str((get_process_hermes_home() if profile in ('', 'current') else _resolve_profile_dir(profile)).resolve())
+    store = proof['tickets'].get(home)
+    if store is None:
+        store = proof['tickets'][home] = TicketStore(proof['instance_id'], frozenset({home}))
+    try:
+        ticket = store.mint(profile_id=home, subject=host_owner_subject(), purpose='ssh-input')
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from None
+    return {'ticket': ticket, 'profile': profile, 'instance_id': proof['instance_id']}
 
 
 @router.get("/api/health")
