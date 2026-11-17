@@ -621,6 +621,8 @@ def _ensure_session_db_row(session: dict) -> bool:
                 # add it later (user_id is set at insert). None (no password provider, legacy token, stdio)
                 # leaves the column empty exactly as before.
                 user_id=_session_auth_user_id(session),
+                session_key=key,
+                session_key_insert_only=True,
                 # Self-describing rows: aggregators merging several profile DBs can't rely on which file a row came
                 # from; a NULL is only repaired by the one-shot backfill.
                 # Stamp the launch profile explicitly instead of leaving NULL — NULL is exactly what the
