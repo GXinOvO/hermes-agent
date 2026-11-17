@@ -7,8 +7,7 @@ import {
   createLocalGatewayDials,
   createStaleGatewayRestarter,
   ensureLocalGateway,
-  gatewayOwnerProfile,
-  localGatewayDial,
+  freshSshGatewayWsUrl, gatewayOwnerProfile, localGatewayDial,
   nativeGatewayHttpHeaders,
   redialLocalGateway,
   runGatewayEnsure,
@@ -7520,7 +7519,7 @@ async function freshGatewayWsUrl(profile, webContentsId) {
   // the wrong profile's DB. A null/empty profile resolves to the primary, so
   // legacy callers and single-profile users are unchanged.
   const connection = await ensureBackend(profile)
-
+  if (connection.remoteKind === 'ssh') {return freshSshGatewayWsUrl(localGatewayDials, sshConnections, connection, webContentsId, profile)}
   if (connection.gatewayEndpoint) {
     return localGatewayDial({ ensure: () => ensureBackend(profile), forget: () => forgetLocalGatewayDescriptor(profile), launchHome: HERMES_HOME,
       prepare: (baseUrl, ticket) => localGatewayDials.prepare(baseUrl, ticket, webContentsId), profile: String(profile ?? '') })
@@ -8876,7 +8875,7 @@ async function buildRemoteConnection(
     )
   }
 
-  const wsUrl = buildGatewayWsUrl(baseUrl, token)
+  const wsUrl = remoteKind === 'ssh' ? `${buildGatewayWsUrl(baseUrl, token)}&ssh_dial=unminted` : buildGatewayWsUrl(baseUrl, token)
 
   rememberRemoteWsHeaders(wsUrl, remoteHeaders)
 
@@ -14697,7 +14696,7 @@ ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
         prepare: (baseUrl, ticket) => localGatewayDials.prepare(baseUrl, ticket, _event.sender.id) })
     }
 
-    return registryGatewayWsUrlHandler(payload)
+    return connection.remoteKind === 'ssh' ? freshSshGatewayWsUrl(localGatewayDials, sshConnections, connection, _event.sender.id, payload?.profile) : registryGatewayWsUrlHandler(payload)
   })
 })
 

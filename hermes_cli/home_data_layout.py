@@ -22,7 +22,7 @@ HOME_ENV_FILES = (".env", ".op.env")
 # Credential trees under a home, as POSIX paths relative to it. Stores resolved by get_hermes_dir()
 # are listed at both the current platforms/... location and the legacy one.
 CREDENTIAL_STORE_DIRS = (
-    "mcp-tokens", "vault", "pairing", "platforms/pairing",
+    "mcp-tokens", "vault", "desktop-ssh", "pairing", "platforms/pairing",
     "whatsapp/session", "platforms/whatsapp/session", "matrix/store", "platforms/matrix/store",
 )
 

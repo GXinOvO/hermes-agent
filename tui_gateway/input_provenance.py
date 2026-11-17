@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from pathlib import Path
 import time
 import uuid
 
@@ -13,6 +14,7 @@ class _InboundInput:
     request_id: str
     message_uid: str
     received_at: float
+    source: dict | None = None
     session: dict | None = None
     session_key: str | None = None
     consumed: bool = False
@@ -51,11 +53,15 @@ def inbound_input_scope(request, transport):
                 and not any(params.get(key) is not None for key in
                             ('_hosted_task', '_turn_author', '_hosted_terminal_callback', '_hosted_images'))):
             principal = _principal(transport)
+            source = getattr(transport, 'ssh_input', None)
             if (principal and not principal.startswith('automation:')
-                    and getattr(transport, 'desktop_local', False) is True):
+                    and (getattr(transport, 'desktop_local', False) is True or source is not None)):
                 from hermes_cli.input_sanitize import sanitize_user_prompt_text
                 value = _InboundInput(params['session_id'], sanitize_user_prompt_text(params['text']),
                                       principal, uuid.uuid4().hex, uuid.uuid4().hex, time.time())
+                if source is not None:
+                    transport.ssh_input_sequence += 1
+                    value.source = {**source, 'sequence': transport.ssh_input_sequence}
     token = _inbound.set(value)
     try:
         yield
@@ -74,6 +80,9 @@ def bind_input(session, text, display_kind):
         return
     with server._sessions_lock:
         if server._sessions.get(value.session_id) is session:
+            if (value.source is not None and str(Path(session.get('profile_home') or server._hermes_home).resolve())
+                    != value.source['profile_home']):
+                return
             value.session = session
             value.session_key = str(session.get('session_key') or '')
 
@@ -111,6 +120,8 @@ def record_accepted_input(response):
                 return
         message = {'role': 'user', 'content': value.text, 'timestamp': value.received_at,
                    'message_uid': value.message_uid}
+        if value.source is not None:
+            message['display_metadata'] = {'ssh_input_v1': value.source}
         append_received_input(db, value.session_key, message,
                               principal_id=value.principal_id, request_id=value.request_id, active=False)
         value.consumed = True

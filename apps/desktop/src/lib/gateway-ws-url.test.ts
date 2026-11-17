@@ -147,6 +147,26 @@ describe('resolveGatewayWsUrl', () => {
     })
   })
 
+  describe('SSH input dial', () => {
+    const sshConn = { authMode: 'token', wsUrl: 'ws://host/api/ws?token=public&ssh_dial=unminted' }
+
+    it('requires the mint bridge even though the descriptor carries a public token', async () => {
+      await expect(resolveGatewayWsUrl({}, sshConn)).rejects.toThrow(/ticket/i)
+    })
+
+    it('surfaces mint rejection and refusal without falling back to the public token URL', async () => {
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl: async () => { throw new Error('missing private proof') } }, sshConn)).rejects.toThrow('missing private proof')
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl: async () => ({ ok: false, error: 'old remote backend' }) }, sshConn)).rejects.toThrow('old remote backend')
+    })
+
+    it('asks for a new dial on every reconnect', async () => {
+      const getGatewayWsUrl = vi.fn().mockResolvedValueOnce('ws://host/api/ws?token=public&ssh_dial=one').mockResolvedValueOnce('ws://host/api/ws?token=public&ssh_dial=two')
+      expect(await resolveGatewayWsUrl({ getGatewayWsUrl }, sshConn)).toContain('ssh_dial=one')
+      expect(await resolveGatewayWsUrl({ getGatewayWsUrl }, sshConn)).toContain('ssh_dial=two')
+      expect(getGatewayWsUrl).toHaveBeenCalledTimes(2)
+    })
+  })
+
   describe('token / local mode', () => {
     it('uses the minted URL when available', async () => {
       const getGatewayWsUrl = vi.fn().mockResolvedValue('ws://host/api/ws?token=fresh')

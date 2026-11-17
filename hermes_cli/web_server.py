@@ -1548,4 +1548,10 @@ def _start_server_runtime(
             if server.started:
                 await server.shutdown()
 
-    _run_serve(_serve, config, host, port)
+    from hermes_cli.web_server_session_token import ssh_input_bootstrap
+    with ssh_input_bootstrap(ssh_lock_path.parent if ssh_lock_path else None, ssh_owner_nonce) as proof:
+        app.state.ssh_input = proof
+        try:
+            _run_serve(_serve, config, host, port)
+        finally:
+            app.state.ssh_input = None

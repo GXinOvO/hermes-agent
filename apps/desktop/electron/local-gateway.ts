@@ -4,6 +4,86 @@ import crypto from 'node:crypto'
 import { profileCollectionRoute, profileRouteSuffix } from './profile-routes'
 import { hiddenWindowsChildOptions, windowsShellCommand } from './windows-child-options'
 
+type GatewayDial = { nonce: string; origin: string; pathname: string }
+type PendingGatewayDial = { ticket: string; webContentsId: number; expires: number; origin: string; pathname: string; header: boolean; sshProfile?: string }
+type GatewayRequestDetails = { url: string; webContentsId?: number; resourceType: string; requestHeaders?: Record<string, string> }
+
+function validateOwnershipId(ownershipId: unknown): string {
+  const value = String(ownershipId || '')
+  if (!/^[0-9a-f]{32}$/.test(value)) {throw new Error('SSH ownership ID is invalid.')}
+  return value
+}
+
+function validateSpawnNonce(spawnNonce: unknown): string {
+  const value = String(spawnNonce || '')
+  if (!/^[0-9a-f]{16}$/.test(value)) {throw new Error('SSH spawn nonce is invalid.')}
+  return value
+}
+
+function sshInputError(message = 'SSH input ticket unavailable') {
+  const error = new Error(message)
+  error.name = 'SshInputTicketError'
+  return error
+}
+
+function sshInputScript(): string {
+  return `import json, os, pathlib, stat, sys, urllib.request
+def fail(): raise SystemExit('SSH input ticket unavailable')
+def hex_id(value, length): return isinstance(value, str) and len(value) == length and all(c in '0123456789abcdef' for c in value)
+try:
+ cfg=json.load(sys.stdin); ownership=cfg.get('ownership_id'); nonce=cfg.get('spawn_nonce'); instance=cfg.get('instance_id'); port=cfg.get('remote_port'); pid=cfg.get('pid'); profile=cfg.get('profile'); token=cfg.get('session_token')
+ if (not hex_id(ownership,32) or not hex_id(nonce,16) or not hex_id(instance,32) or type(port) is not int or not 1 <= port <= 65535 or type(pid) is not int or pid <= 0 or not isinstance(profile,str) or not isinstance(token,str) or not token): fail()
+ owner=pathlib.Path.home()/'.hermes'/'desktop-ssh'/ownership; ds=os.lstat(owner); uid=getattr(os,'getuid',lambda:-1)()
+ if not stat.S_ISDIR(ds.st_mode) or ds.st_uid != uid or stat.S_IMODE(ds.st_mode) != 0o700: fail()
+ fd=os.open(owner/(nonce+'.'+instance+'.input-key'),os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+ try:
+  ks=os.fstat(fd)
+  if not stat.S_ISREG(ks.st_mode) or ks.st_uid != uid or stat.S_IMODE(ks.st_mode) != 0o600: fail()
+  raw=os.fdopen(fd,'rb').read(65537); fd=-1
+ finally:
+  if fd >= 0: os.close(fd)
+ if len(raw)>65536: fail()
+ proof=json.loads(raw.decode('utf-8'))
+ if not isinstance(proof,dict) or not isinstance(proof.get('key'),str) or not proof['key'] or proof.get('instance_id') != instance or type(proof.get('pid')) is not int or proof['pid'] != pid: fail()
+ body=json.dumps({'key':proof['key'],'instance_id':instance,'profile':profile},separators=(',',':')).encode(); req=urllib.request.Request('http://127.0.0.1:%d/api/ssh/input-ticket'%port,data=body,headers={'Content-Type':'application/json','X-Hermes-Session-Token':token},method='POST')
+ class NoRedirect(urllib.request.HTTPRedirectHandler):
+  def redirect_request(self, req, fp, code, msg, headers, newurl): return None
+ with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(req,timeout=5) as response:
+  if response.status != 200: fail()
+  reply_raw=response.read(65537)
+ if len(reply_raw)>65536: fail()
+ reply=json.loads(reply_raw.decode('utf-8'))
+ if not isinstance(reply,dict) or not isinstance(reply.get('ticket'),str) or not reply['ticket'] or reply.get('profile') != profile or reply.get('instance_id') != instance: fail()
+ sys.stdout.write(json.dumps(reply,separators=(',',':')))
+except SystemExit: raise
+except Exception: fail()`
+}
+
+async function readSshOwnership(baseUrl: string, sessionToken: string, spawnNonce: string) {
+  let response
+  try { response = await fetch(new URL('/api/ssh/ownership?sshInputProtocol=1', baseUrl), { headers: { 'X-Hermes-Session-Token': sessionToken }, redirect: 'error', signal: AbortSignal.timeout(5_000) }) } catch { throw sshInputError('SSH input ownership is unavailable') }
+  if (!response.ok || response.status !== 200) {throw sshInputError('SSH input ownership is unavailable')}
+  let body
+  try { const raw = await response.text(); if (raw.length > 65_536) {throw new Error('oversized')}; body = JSON.parse(raw) } catch { throw sshInputError('SSH input ownership is unavailable') }
+  if (!body || body.key !== undefined || body.ok !== true || body.runtimeIntact !== true || body.sshOwnerNonce !== spawnNonce || body.protocolVersion !== 1 || body.sshInputProtocol !== 1 || !/^[0-9a-f]{32}$/.test(body.sshInputInstance || '')) {throw sshInputError('SSH input proof is unavailable on this backend')}
+  return body.sshInputInstance
+}
+
+export async function mintSshInputTicket(ssh: { exec: (command: string, options: { stdinData: string; timeoutMs: number }) => Promise<string> }, state: any, profile: string) {
+  if (!state?.baseUrl || !state?.token || !state?.remotePort || !state?.pid) {throw sshInputError('SSH input state is incomplete')}
+  const instanceId = await readSshOwnership(state.baseUrl, state.token, validateSpawnNonce(state.spawnNonce))
+  let output
+  try { output = await ssh.exec(`python3 -c ${shellQuote(sshInputScript())}`, { stdinData: JSON.stringify({ ownership_id: validateOwnershipId(state.ownershipId), spawn_nonce: validateSpawnNonce(state.spawnNonce), instance_id: instanceId, remote_port: state.remotePort, pid: state.pid, profile, session_token: state.token }), timeoutMs: 10_000 }) } catch { throw sshInputError() }
+  try { const reply = JSON.parse(String(output || '').trim()); if (!reply || typeof reply.ticket !== 'string' || !reply.ticket || reply.profile !== profile || reply.instance_id !== instanceId) {throw new Error('invalid')}; return reply } catch { throw sshInputError() }
+}
+
+export async function freshSshGatewayWsUrl(dials: ReturnType<typeof createLocalGatewayDials>, states: Map<string, any>, connection: any, webContentsId: number, fallbackProfile?: string) {
+  const state = [...states.values()].find(candidate => candidate.ownershipId === connection.remoteIdentity && candidate.remotePort > 0)
+  if (!state) {throw new Error('SSH backend ownership state is unavailable')}
+  const grant = await mintSshInputTicket(state.ssh, { ...state, baseUrl: connection.baseUrl, token: connection.token }, state.remoteProfile || connection.remoteProfile || fallbackProfile)
+  return dials.prepareSsh(connection.wsUrl, grant.ticket, grant.profile, webContentsId)
+}
+
 // `hermes gateway ensure` answers with a protocol verdict (ready, or `starting: deadline`) within
 // its own startup deadline: `--timeout` defaults to 60 s (hermes_cli/gateway_runtime.py
 // DEFAULT_ENSURE_TIMEOUT). The client is killed only after that deadline plus interpreter start
@@ -37,12 +117,12 @@ export function runGatewayEnsure(
 
     // Only the bounded CLI client is ours. Never retain/kill its detached owner.
     const timer = setTimeout(() => expire(`${label} timed out`), timeoutMs)
-    child.stdout.on('data', data => { stdout += data.toString();
+    child.stdout!.on('data', data => { stdout += data.toString();
 
  if (stdout.length > 65536) { stdout = stdout.slice(0, 65536); expire(`${label} output exceeded limit`) } })
     // Diagnostics only (never protocol): an older `hermes` without the subcommand, a missing
     // profile or an import crash explain themselves here while stdout stays empty.
-    child.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-4096) })
+    child.stderr!.on('data', data => { stderr = (stderr + data.toString()).slice(-4096) })
     child.on('error', () => { clearTimeout(timer); clearTimeout(forceTimer); reject(new Error(`Could not run ${label}`)) })
     // A client that exits on SIGTERM still resolves (callers such as restartLocalGatewayOwner log a
     // non-zero exit and re-ensure); only one that outlives the force-kill deadline rejects. An
@@ -314,10 +394,10 @@ export function localGatewayDial<T extends { baseUrl: string; gatewayEndpoint?: 
   })
 }
 
-function dialOf(url: string): { nonce: string; origin: string; pathname: string } | null {
+function dialOf(url: string, parameter = 'native_dial'): GatewayDial | null {
   try {
     const parsed = new URL(url)
-    const nonce = parsed.searchParams.get('native_dial')
+    const nonce = parsed.searchParams.get(parameter)
 
     return nonce ? { nonce, origin: parsed.origin, pathname: parsed.pathname } : null
   } catch {
@@ -328,14 +408,20 @@ function dialOf(url: string): { nonce: string; origin: string; pathname: string 
 // Voice sockets dial their own fresh `/api/ws` reservation on a sibling path (sibling-ws-url.ts).
 const VOICE_DIAL_PATHS = new Set(['/api/audio/speak-stream', '/api/audio/transcribe-stream'])
 
+function dialGrantMatches(grant: PendingGatewayDial, dial: GatewayDial, sshDial: GatewayDial | null, details: GatewayRequestDetails, voice: boolean): boolean {
+  return (grant.sshProfile !== undefined) === Boolean(sshDial) && Boolean(grant.ticket)
+    && (grant.pathname === dial.pathname || voice) && grant.webContentsId === details.webContentsId
+    && details.resourceType === 'webSocket' && (!grant.header || grant.origin === dial.origin)
+}
+
 // A one-use ticket crosses private IPC, then leaves the URL before dialing.
 // Public descriptors and persisted connection state never contain credentials.
 // A plugin socket's native-http grant never enters a URL at all: main attaches
 // it as the header its REST twin sends, to that one dial only.
 export function createLocalGatewayDials() {
-  const pending = new Map<string, { ticket: string; webContentsId: number; expires: number; origin: string; pathname: string; header: boolean }>()
+  const pending = new Map<string, PendingGatewayDial>()
 
-  const reserve = (url: URL, ticket: string, webContentsId: number, header: boolean) => {
+  const reserve = (url: URL, ticket: string, webContentsId: number, header: boolean, sshProfile?: string) => {
     for (const [key, value] of pending) {if (value.expires <= Date.now()) {pending.delete(key)}}
 
     if (pending.size >= 100) {throw new Error('Too many pending gateway dials')}
@@ -343,13 +429,16 @@ export function createLocalGatewayDials() {
     // through (tests, tunnels) rewrites host:port but carries the query through.
     // A header grant is the exception: main attaches it, so it is bound to its origin.
     const nonce = crypto.randomUUID()
-    url.searchParams.set('native_dial', nonce)
-    pending.set(nonce, { ticket, webContentsId, expires: Date.now() + 25_000, origin: url.origin, pathname: url.pathname, header })
+    url.searchParams.set(sshProfile === undefined ? 'native_dial' : 'ssh_dial', nonce)
+    pending.set(nonce, { ticket, webContentsId, expires: Date.now() + 25_000, origin: url.origin, pathname: url.pathname, header, sshProfile })
 
     return url.toString()
   }
 
   return {
+    prepareSsh(wsUrl: string, ticket: string, profile: string, webContentsId: number) {
+      return reserve(new URL(wsUrl), ticket, webContentsId, true, profile)
+    },
     prepare(origin: string, ticket: string, webContentsId: number) {
       return `${reserve(new URL(`${origin.replace(/^http/, 'ws')}/api/ws`), ticket, webContentsId, false)}&ticket=${encodeURIComponent(ticket)}`
     },
@@ -357,14 +446,14 @@ export function createLocalGatewayDials() {
     preparePlugin(origin: string, path: string, ticket: string, webContentsId: number) {
       return reserve(new URL(path, origin.replace(/^http/, 'ws')), ticket, webContentsId, true)
     },
-    headers(details: { url: string; webContentsId?: number; resourceType: string; requestHeaders?: Record<string, string> }) {
-      const dial = dialOf(details.url)
+    headers(details: GatewayRequestDetails) {
+      const sshDial = dialOf(details.url, 'ssh_dial')
+      const dial = sshDial || dialOf(details.url)
       const grant = dial ? pending.get(dial.nonce) : undefined
 
-      const voice = grant && !grant.header && grant.pathname === '/api/ws' && dial && VOICE_DIAL_PATHS.has(dial.pathname)
+      const voice = Boolean(grant && !grant.header && grant.pathname === '/api/ws' && dial && VOICE_DIAL_PATHS.has(dial.pathname))
 
-      if (!dial || !grant || (grant.pathname !== dial.pathname && !voice) || grant.webContentsId !== details.webContentsId
-          || details.resourceType !== 'webSocket' || (grant.header && grant.origin !== dial.origin)) {return null}
+      if (!dial || !grant || !dialGrantMatches(grant, dial, sshDial, details, voice)) {return null}
 
       pending.delete(dial.nonce)
 
@@ -372,8 +461,10 @@ export function createLocalGatewayDials() {
       const headers = { ...details.requestHeaders }
 
       for (const key of Object.keys(headers)) {
-        if (['origin', 'x-hermes-gateway-ticket'].includes(key.toLowerCase())) {delete headers[key]}
+        if (['origin', 'x-hermes-gateway-ticket', 'x-hermes-ssh-input-ticket', 'x-hermes-ssh-input-profile'].includes(key.toLowerCase())) {delete headers[key]}
       }
+
+      if (sshDial) {return { ...headers, 'X-Hermes-Ssh-Input-Ticket': grant.ticket, 'X-Hermes-Ssh-Input-Profile': grant.sshProfile! }}
 
       return grant.header ? { ...headers, 'X-Hermes-Gateway-Ticket': grant.ticket } : headers
     }

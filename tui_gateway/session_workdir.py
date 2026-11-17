@@ -790,6 +790,8 @@ def _write_submit_user_row(session: dict, text: Any, display_kind: str | None,
             if inbound is not None:
                 from hermes_state_input_receipts import append_received_input
                 staged["timestamp"], staged["message_uid"] = inbound.received_at, inbound.message_uid
+                if inbound.source is not None:
+                    staged['display_metadata'] = {**staged.get('display_metadata', {}), 'ssh_input_v1': inbound.source}
                 staged["_row_id"], staged["display_metadata"] = append_received_input(
                     db, target, staged, principal_id=inbound.principal_id, request_id=inbound.request_id)
                 inbound.consumed = True

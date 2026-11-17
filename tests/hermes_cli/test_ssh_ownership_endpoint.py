@@ -29,6 +29,15 @@ def test_ssh_ownership_endpoint_requires_token_and_returns_exact_nonce(monkeypat
     }
 
 
+def test_public_session_token_cannot_mint_ssh_input_proof(monkeypatch):
+    monkeypatch.setattr(web_server, '_SESSION_TOKEN', 'public-fixture-token')
+    monkeypatch.setattr(web_server.app.state, 'auth_required', False, raising=False)
+    response = TestClient(web_server.app).post(
+        '/api/ssh/input-ticket', json={'profile': 'default'},
+        headers={'X-Hermes-Session-Token': 'public-fixture-token'})
+    assert response.status_code == 403
+
+
 def test_ssh_ownership_reports_replaced_runtime(tmp_path, monkeypatch):
     token = "t" * 64
     monkeypatch.setattr(web_server, "_SESSION_TOKEN", token)
