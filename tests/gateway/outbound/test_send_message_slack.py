@@ -117,7 +117,7 @@ def test_standalone_send_stops_on_non_token_error(monkeypatch, _standalone_send)
 @pytest.mark.parametrize("connector_error", [None, ValueError])
 def test_slack_dm_resolution_error_never_echoes_the_proxy_password(monkeypatch, connector_error):
     from gateway.platforms import base
-    from tools.send_message_senders import _resolve_slack_user_target
+    from gateway.outbound.senders import _resolve_slack_user_target
 
     def connector(proxy_url):
         if connector_error:
