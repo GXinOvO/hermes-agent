@@ -6,7 +6,9 @@ import pytest
 
 from gateway.session_contract import SessionRef
 from gateway.session_events import SessionEvents
-from hermes_state import SessionDB
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
+from tests.fixtures.storage_read import transcript_rows
 from tests.waiting import async_wait_until
 
 
@@ -15,9 +17,9 @@ async def test_side_completion_survives_detach_without_another_model_call(tmp_pa
     from gateway.session_tui_side import _spawn
     from hermes_state_background import begin, results
     from gateway.session_background_results import read_snapshot
-    db = SessionDB(tmp_path / 'state.db')
-    db.create_session('parent', source='cli')
-    authority = SimpleNamespace(db=db, profile_id=str(tmp_path), sessions={'parent':SimpleNamespace(event_stream=SessionEvents())},
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
+    db.sessions.create(NewSession('parent', source='cli'))
+    authority = SimpleNamespace(persistence=db, profile_id=str(tmp_path), sessions={'parent':SimpleNamespace(event_stream=SessionEvents())},
                                 runner=SimpleNamespace(config=SimpleNamespace(multiplex_profiles=False)))
     ref = SessionRef(str(tmp_path), 'parent')
     identity = {'profile_id':str(tmp_path),'parent_session_id':'parent','event_type':'background.complete','prompt':'task'}
@@ -37,6 +39,6 @@ async def test_side_completion_survives_detach_without_another_model_call(tmp_pa
         assert await read_snapshot(authority, ref) == snapshot
         assert not received
         assert calls == ['run']
-        assert db.get_messages('parent') == []
+        assert transcript_rows(db, 'parent') == []
     finally:
         db.close()

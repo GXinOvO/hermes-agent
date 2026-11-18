@@ -3,6 +3,7 @@
 A seal is pending evidence. Only the authenticated execution.finish transaction adds
 completion evidence. Neither a pipe frame nor a terminal execution alone is sufficient.
 """
+from hermes_state_runtime import _holder_of
 import json
 import os
 import time
@@ -91,7 +92,7 @@ def expire_results(db, *, profile_id, epoch):
     def write(conn):
         _epoch(conn, epoch)
         return _expire(conn, profile_id=profile_id, epoch=epoch)
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def _binding(conn, body, worker, *, completed=False):
@@ -148,7 +149,7 @@ def seal_result(authority, *, row, scope, raw_result, captured, stop_cause=None)
         from hermes_state_managed_result_capacity import release_slot
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (PREFIX + row['admission_id'], encoded))
         release_slot(conn, row['admission_id'])
-    return authority.db._execute_write(write)
+    return _holder_of(authority.persistence)._execute_write(write)
 
 
 def complete_result(conn, *, execution_id, session_id, epoch, generation, sequence):
@@ -185,13 +186,13 @@ def consume_result(db, *, profile_id, epoch, admission_id):
     from gateway.session_results import prepare_result, close_discarded_turn
     from gateway.session_settlement_recovery import owner_stop_notice, gateway_refusal_boundary
     from hermes_state_runtime import settle_session_input
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         value = _load(conn, admission_id)
     body = value['body']
     if time.time() - body['created_at'] > RETENTION_SECONDS:
         raise RuntimeStoreError('managed_result_expired')
     captured = deepcopy(body['captured'])
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         admission = _admission(conn, admission_id)
         row = dict(admission, payload=json.loads(admission['payload_json']))
     response = captured['result']['final_response']

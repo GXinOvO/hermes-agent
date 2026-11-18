@@ -1,4 +1,6 @@
 """Durable result boundaries for detached side tasks, without another task queue."""
+from hermes_state_runtime import _holder_of
+from persistence_assembly import store_location
 import asyncio
 import hashlib
 import json
@@ -10,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def binding(authority, ref, event_type, policy, inputs):
-    return {'profile_id':str(Path(authority.db.db_path).parent.resolve()), 'parent_session_id':ref.session_id,
+    return {'profile_id':str(store_location(authority.persistence.scope).parent), 'parent_session_id':ref.session_id,
             'owner_epoch':authority.epoch,
             'event_type':event_type, 'policy_sha256':hashlib.sha256(json.dumps({
                 'cwd':policy.cwd, 'model':policy.model, 'config':policy.config_json,
@@ -23,7 +25,7 @@ async def prepare(authority, ref, task_id, event_type, policy, inputs):
     from gateway.session_runtime_workers import tracked_write
     from hermes_state_background import begin
     identity = binding(authority, ref, event_type, policy, inputs)
-    record = await tracked_write(authority, partial(begin, authority.db, task_id, identity))
+    record = await tracked_write(authority, partial(begin, authority.persistence, task_id, identity))
     if not record.get('claimed'):
         from hermes_state_runtime import RuntimeStoreError
         raise RuntimeStoreError('admission_conflict')
@@ -35,7 +37,7 @@ async def read_snapshot(authority, ref):
     from gateway.session_authorities import owner_scope
     def read():
         with owner_scope(authority):
-            return results(authority.db, ref.session_id)
+            return results(authority.persistence, ref.session_id)
     return await asyncio.to_thread(read)
 
 
@@ -45,7 +47,7 @@ def seal(authority, task_id, identity, payload):
     from hermes_state_background import complete
     try:
         with owner_scope(authority):
-            complete(authority.db, task_id, identity, payload)
+            complete(authority.persistence, task_id, identity, payload)
         return payload
     except (RuntimeStoreError, ValueError):
         logger.warning('Side result %s refused by its owner or target fence', task_id, exc_info=True)

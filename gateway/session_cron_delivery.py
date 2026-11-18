@@ -9,11 +9,11 @@ def snapshot(authority, chat_id):
     live = authority.sessions.get(chat_id)
     entry = route_entry(authority, live.route) if live is not None else None
     if (live is None or live.source is None or live.source.platform != Platform.LOCAL
-            or entry is None or entry.suspended or authority.db.get_session(chat_id) is None):
+            or entry is None or entry.suspended or authority.persistence.sessions.get(chat_id) is None):
         raise RuntimeStoreError('admission_conflict')
     return {'profile': authority.profile_id, 'chat': chat_id, 'route': live.route,
             'source': live.source.to_dict(), 'target': entry.session_id,
-            'database': str(Path(authority.db.db_path).resolve())}
+            'database': str(store_location(authority.persistence.scope))}
 
 
 async def admit(authority, identity, epoch):

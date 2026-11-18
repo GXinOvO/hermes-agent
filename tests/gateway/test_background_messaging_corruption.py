@@ -9,7 +9,8 @@ from gateway.config import Platform
 from gateway.platforms.base import SendResult
 from gateway.session import SessionSource
 from gateway.strict_transport import single_attempt_transport
-from hermes_state import SessionDB
+from tests.fixtures.storage_holder import raw_holder
+from persistence_assembly import open_persistence, profile_scope
 
 
 @pytest.mark.asyncio
@@ -21,7 +22,7 @@ async def test_bad_header_seal_does_not_block_saved_siblings(tmp_path, header):
     send = AsyncMock(return_value=SendResult(success=True))
     adapter = SimpleNamespace(send=single_attempt_transport(send),
         extract_media=lambda text:([], text), extract_images=lambda text:([], text))
-    with SessionDB(tmp_path / 'state.db') as db:
+    with open_persistence(profile_scope(home=tmp_path), eager=True) as db:
         runner = SimpleNamespace(_session_db=db, _delivery_adapter_for=lambda source:adapter)
         source = SessionSource(platform=Platform.TELEGRAM, chat_id='original')
         for task in ['bad', 'good', 'unknown']:
@@ -39,11 +40,11 @@ async def test_bad_header_seal_does_not_block_saved_siblings(tmp_path, header):
                     conn.execute('UPDATE state_meta SET value=? WHERE key=?', (damaged, key))
                     return key, damaged
             raise AssertionError('actual sealed result not found')
-        key, raw = db._execute_write(damage)
+        key, raw = raw_holder(db)._execute_write(damage)
         assert await durable.recover(runner, db) == 1
         assert await durable.recover(runner, db) == 0
         send.assert_awaited_once_with(chat_id='original', content='done: saved', metadata={})
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0] == raw
             records = [json.loads(v) for v, in conn.execute('SELECT value FROM state_meta WHERE key LIKE ?', (PREFIX + '%',))]
         by_task = {record['task_id']: record for record in records}
@@ -65,7 +66,7 @@ async def test_bad_messaging_context_is_retained_before_claim(tmp_path, field, v
     send = AsyncMock(return_value=SendResult(success=True))
     adapter = SimpleNamespace(send=single_attempt_transport(send),
         extract_media=lambda text:([], text), extract_images=lambda text:([], text))
-    with SessionDB(tmp_path / 'state.db') as db:
+    with open_persistence(profile_scope(home=tmp_path), eager=True) as db:
         runner = SimpleNamespace(_session_db=db, _delivery_adapter_for=lambda source:adapter)
         source = SessionSource(platform=Platform.TELEGRAM, chat_id='original')
         for task in ['bad', 'good']:
@@ -86,9 +87,9 @@ async def test_bad_messaging_context_is_retained_before_claim(tmp_path, field, v
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (damaged, key))
                 return key, damaged
             raise AssertionError('actual sealed result not found')
-        key, raw = db._execute_write(damage)
+        key, raw = raw_holder(db)._execute_write(damage)
         assert await durable.recover(runner, db) == 1
         assert await durable.recover(runner, db) == 0
         send.assert_awaited_once_with(chat_id='original', content='done: saved', metadata={})
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0] == raw

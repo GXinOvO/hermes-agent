@@ -1,4 +1,5 @@
 """Transactional pending-result slots, shared by ingress and worker assignment."""
+from hermes_state_runtime import _holder_of
 import json
 from hermes_state_runtime import RuntimeStoreError, _admission, _epoch
 
@@ -70,7 +71,7 @@ def reserve_capacity(authority, admission_id):
     def write(conn):
         reserve_slot(conn, admission=_admission(conn, admission_id), epoch=authority.epoch,
                      profile_id=authority.profile_id)
-    authority.db._execute_write(write)
+    _holder_of(authority.persistence)._execute_write(write)
 
 
 def release_capacity(authority, admission_id):
@@ -79,4 +80,4 @@ def release_capacity(authority, admission_id):
         row = conn.execute('SELECT value FROM state_meta WHERE key=?', (PREFIX + admission_id,)).fetchone()
         if row is not None and json.loads(row[0])['epoch'] == authority.epoch:
             release_slot(conn, admission_id)
-    authority.db._execute_write(write)
+    _holder_of(authority.persistence)._execute_write(write)

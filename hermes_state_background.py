@@ -1,4 +1,6 @@
 """Detached background results in the profile's existing SessionDB metadata."""
+from hermes_state_runtime import _holder_of
+from persistence_assembly import store_location
 import hashlib
 import json
 import logging
@@ -12,6 +14,11 @@ RETENTION_SECONDS = 7 * 24 * 3600
 MAX_RESULTS = 64
 MAX_IDENTITIES = 65536
 logger = logging.getLogger(__name__)
+
+
+def _home_of(db):
+    from hermes_state_runtime import _store_of
+    return store_location(_store_of(db).scope).parent
 
 
 def _encoded(value):
@@ -166,7 +173,7 @@ def _prune(conn, clock=time.time, expire_only=False):
 def begin(db, task_id, binding):
     from gateway.status import get_process_start_time
     key = _key(task_id)
-    if binding['profile_id'] != str(Path(db.db_path).parent.resolve()):
+    if binding['profile_id'] != str(_home_of(db)):
         raise ValueError('background profile identity conflict')
     def write(conn):
         record = _load(conn, key)
@@ -192,7 +199,7 @@ def begin(db, task_id, binding):
                   'created_at':created, 'updated_at':created}
         _save(conn, key, record)
         return dict(record, claimed=True)
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def complete(db, task_id, binding, payload):
@@ -222,7 +229,7 @@ def complete(db, task_id, binding, payload):
         _save(conn, key, record)
         _prune(conn)
         return record
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def results(db, parent_session_id):
@@ -233,7 +240,7 @@ def results(db, parent_session_id):
             if record['status'] == 'expired':
                 continue
             if (record['parent_session_id'] != parent_session_id or
-                    record['profile_id'] != str(Path(db.db_path).parent.resolve()) or not _target_matches(conn, record)):
+                    record['profile_id'] != str(_home_of(db)) or not _target_matches(conn, record)):
                 continue
             previous = _encoded(record)
             _reconcile(conn, record)
@@ -245,7 +252,7 @@ def results(db, parent_session_id):
                 values.append((record['updated_at'], {'event_type':record['event_type'], 'payload':{
                     'task_id':record['task_id'], 'text':'error: unknown_execution; reconcile existing artifacts before retrying'}}))
         return [value for _, value in sorted(values, key=lambda item:item[0])]
-    return db._execute_write(read)
+    return _holder_of(db)._execute_write(read)
 
 
 def pending_deliveries(db):
@@ -257,11 +264,11 @@ def pending_deliveries(db):
             _save(conn, key, record)
             if record['status'] == 'expired':
                 continue
-            if (record['profile_id'] == str(Path(db.db_path).parent.resolve()) and
+            if (record['profile_id'] == str(_home_of(db)) and
                     record['status'] == 'completed' and record['delivery'] == 'pending' and _target_matches(conn, record)):
                 pending.append(record)
         return pending
-    return db._execute_write(read)
+    return _holder_of(db)._execute_write(read)
 
 
 def claim_delivery(db, task_id, *, expected=None):
@@ -273,19 +280,19 @@ def claim_delivery(db, task_id, *, expected=None):
             return False
         if expected is not None and _encoded(record) != _encoded(expected):
             return False
-        if record['profile_id'] != str(Path(db.db_path).parent.resolve()) or not _target_matches(conn, record):
+        if record['profile_id'] != str(_home_of(db)) or not _target_matches(conn, record):
             return False
         record.update(delivery='delivering', delivery_pid=os.getpid(),
                       delivery_started_at=get_process_start_time(os.getpid()), delivery_epoch=_current_epoch(conn))
         _save(conn, key, record)
         return True
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def _delivery_matches(conn, db, record, expected):
     from gateway.status import get_process_start_time
     if (record is None or record['status'] != 'completed' or record['delivery'] != 'delivering'
-            or record['profile_id'] != str(Path(db.db_path).parent.resolve()) or not _target_matches(conn, record)
+            or record['profile_id'] != str(_home_of(db)) or not _target_matches(conn, record)
             or (record.get('delivery_pid'), record.get('delivery_started_at')) != (
                 os.getpid(), get_process_start_time(os.getpid()))
             or record.get('delivery_epoch') != _current_epoch(conn)):
@@ -296,7 +303,7 @@ def _delivery_matches(conn, db, record, expected):
 
 
 def delivery_current(db, task_id, expected):
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         return _delivery_matches(conn, db, _load(conn, _key(task_id)), expected)
 
 
@@ -318,4 +325,4 @@ def finish_delivery(db, task_id, outcome, *, expected=None):
         record['updated_at'] = time.time()
         _save(conn, key, record)
         return final_outcome == 'delivered'
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)

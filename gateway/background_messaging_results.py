@@ -1,4 +1,5 @@
 """Result persistence for messaging /bg; an unknown send is never retried."""
+from persistence_assembly import store_location
 import asyncio
 import hashlib
 import json
@@ -14,12 +15,12 @@ async def prepare(runner, prompt, source, task_id, media_urls, media_types):
     from hermes_state import SessionDB
     from hermes_state_background import begin
     authority = active_authority(runner)
-    db = authority.db if authority is not None else getattr(runner, '_session_db', None)
+    db = authority.persistence if authority is not None else getattr(runner, '_session_db', None)
     db = getattr(db, '_db', db)
     opened = db is None
     if opened:
         db = await asyncio.to_thread(SessionDB)
-    identity = {'profile_id':str(Path(db.db_path).parent.resolve()), 'parent_session_id':'messaging-background',
+    identity = {'profile_id':str(store_location(db.scope).parent if hasattr(db, 'scope') else Path(db.db_path).parent.resolve()), 'parent_session_id':'messaging-background',
                 'event_type':'background.complete', 'source':source.to_dict(),
                 'input_sha256':hashlib.sha256(json.dumps([prompt,media_urls or [],media_types or []],sort_keys=True).encode()).hexdigest()}
     if authority is not None:
@@ -165,7 +166,7 @@ async def recover_served(runner):
     from gateway.session_authorities import serving_authorities, async_owner_scope
     for authority in serving_authorities(runner):
         async with async_owner_scope(authority):
-            await recover(runner, authority.db)
+            await recover(runner, authority.persistence)
 
 
 def close(context):
