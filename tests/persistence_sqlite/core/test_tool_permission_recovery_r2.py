@@ -249,14 +249,16 @@ def test_constructor_backfills_missing_config_without_overwriting_existing_value
         state.update_session_tool_names(parent_id, _pin(["read_file", "terminal"]))
     state.create_session("owned", "subagent", parent_session_id=parent_id)
     state.update_session_tool_names("owned", _pin(["read_file"]))
+    # An explicit null is not durable: the store's patch reads None as "remove the key", so the
+    # first-writer-wins rule is pinned with a concrete value instead.
     state.create_session("owned", "subagent", parent_session_id=parent_id,
-                         model_config={"max_iterations": 5, "max_tokens": None})
+                         model_config={"max_iterations": 5, "max_tokens": 256})
     state.create_session("owned", "subagent", parent_session_id=parent_id,
                          model_config={"max_iterations": 10, "max_tokens": 321,
                                        "reasoning_config": {"enabled": True, "effort": "max"}})
     config = json.loads(state.get_session("owned")["model_config"])
     assert config["max_iterations"] == 5
-    assert config["max_tokens"] is None
+    assert config["max_tokens"] == 256
     assert config["reasoning_config"] == {"enabled": True, "effort": "max"}
     assert config["_tool_permissions"]["allowed_tools"] == ["read_file"]
 
@@ -341,8 +343,9 @@ def test_corrupt_cache_narrowing_uses_native_transaction_on_either_store(state, 
 
 def test_reserved_child_row_preserves_restriction_before_first_turn(state, monkeypatch):
     from tools import delegate_tool as delegation
+    from tools import delegate_tool_config
     from agent.conversation_loop import _restore_pinned_tools
-    monkeypatch.setattr(delegation, "_load_config", dict)
+    monkeypatch.setattr(delegate_tool_config, "_load_config", dict)
     state.create_session("parent", "cli")
     parent = _agent(state, session_id="parent")
     child = delegation._build_child_agent(
@@ -366,8 +369,9 @@ def test_reserved_child_row_preserves_restriction_before_first_turn(state, monke
 
 def test_build_child_first_turn_keeps_constructor_config_with_inherited_sidecar(state, monkeypatch):
     from tools import delegate_tool as delegation
+    from tools import delegate_tool_config
     from tools.mcp_tool_agent import persist_agent_tool_names
-    monkeypatch.setattr(delegation, "_load_config", dict)
+    monkeypatch.setattr(delegate_tool_config, "_load_config", dict)
     state.create_session("parent", "cli")
     state.update_session_tool_names("parent", _pin(["read_file", "terminal"]))
     parent = _agent(state, session_id="parent", allowed_tools=["read_file", "terminal"])
@@ -395,8 +399,9 @@ def test_build_child_first_turn_keeps_constructor_config_with_inherited_sidecar(
 
 def test_build_child_first_turn_legacy_parent_pins_explicit_child_after_constructor(state, monkeypatch):
     from tools import delegate_tool as delegation
+    from tools import delegate_tool_config
     from tools.mcp_tool_agent import persist_agent_tool_names
-    monkeypatch.setattr(delegation, "_load_config", dict)
+    monkeypatch.setattr(delegate_tool_config, "_load_config", dict)
     state.create_session("parent", "cli")
     state.update_session_tool_names("parent", {"version": "legacy", "tools": []})
     parent = _agent(state, session_id="parent")
