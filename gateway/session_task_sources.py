@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from gateway.session_task_analysis_input import _text, stored_rows
 from gateway.session_task_relations import candidates, copied_session_results
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import _conversation_revision, RuntimeStoreError
 
 MAX_SOURCES = 8
 MAX_DEPTH = 4
@@ -40,10 +40,10 @@ class SourceRead:
 def _snapshot(connection, params, prepared, guard):
     ref, target, binding = prepared
     db = connection.authority.persistence
-    with db.transcript_read_snapshot() as consistent:
+    with _holder_of(db).transcript_read_snapshot() as consistent:
         guard(db.state_meta.get('store_instance_id'))
         raw = stored_rows(db, target)
-        revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
+        revision = _conversation_revision(db, target)
         from gateway.session_controls import _profile_label
         relations, missing, unresolved = candidates(db, target, raw, params.get('profile') or _profile_label(connection.authority.profile_id))
         if not consistent():

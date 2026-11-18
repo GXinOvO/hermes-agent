@@ -136,7 +136,7 @@ def _delete(db, conn, session_id, payload):
 def _rewind(db, conn, session_id, payload):
     from hermes_state_mutation_guards import require_idle
     from hermes_state_mutation_transcript import rewind_in_transaction
-    from hermes_state_local_lineage import local_physical_target
+    from persistence.sqlite.authority._local import local_physical_target
     physical = local_physical_target(conn, session_id)
     require_idle(db, conn, list({session_id, physical}))
     # The client names the row: like a branch boundary it must be an active row of the physical

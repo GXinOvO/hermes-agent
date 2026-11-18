@@ -5,7 +5,8 @@ from pathlib import Path
 import time
 
 from gateway.session_busy_controls import authorize
-from hermes_state_runtime import _holder_of, _session_row, RuntimeStoreError
+from hermes_state_runtime import (_conversation_revision, _holder_of, _latest_todo, _session_row,
+                                  RuntimeStoreError)
 
 MAX_MESSAGES = 20000
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def _source_binding(authority, ref):
 
 def _target(authority, ref, stored_id):
     db = authority.persistence
-    from hermes_state_local_lineage import local_physical_target
+    from persistence.sqlite.authority._local import local_physical_target
     with _holder_of(db)._read_ctx() as conn:
         target = local_physical_target(conn, ref.session_id)
     if target == ref.session_id:
@@ -110,20 +111,20 @@ def _messages(db, target):
 def _read(authority, ref, stored_id, guard):
     from tui_gateway.tool_progress import _normalize_todo_state
     db = authority.persistence
-    with db.transcript_read_snapshot() as consistent:
+    with _holder_of(db).transcript_read_snapshot() as consistent:
         guard(db.state_meta.get('store_instance_id'))
         target = _target(authority, ref, stored_id)
-        revision = db.conversation_revision(target, include_ancestors=True)
+        revision = _conversation_revision(db, target)
         cwd = _workspace(authority, ref, target)
         messages = _messages(db, target)
-        todo = db.get_latest_todo_result(target)
+        todo = _latest_todo(db, target)
         todo_state = _normalize_todo_state(json.loads(todo)) if todo is not None else None
         verification = _verification(authority, target, cwd)
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
     guard(db.state_meta.get('store_instance_id'))
     if (_target(authority, ref, stored_id) != target
-            or db.conversation_revision(target, include_ancestors=True) != revision
+            or _conversation_revision(db, target) != revision
             or _workspace(authority, ref, target) != cwd):
         raise RuntimeStoreError('revision_conflict')
     return {'resolved_id': target, 'conversation_revision': json.loads(json.dumps(revision)),
@@ -141,7 +142,7 @@ async def task_overview(connection, ref, params):
     authority, db = connection.authority, connection.authority.persistence
     from gateway.session_local_adoption import _due
     guard(await connection._read_store_instance_id())
-    with db.transcript_read_snapshot() as consistent:
+    with _holder_of(db).transcript_read_snapshot() as consistent:
         if not consistent.pinned:
             raise RuntimeStoreError('storage_unavailable', detail='A stable read snapshot is unavailable')
         if _due(authority, ref.session_id) is not None:
@@ -152,11 +153,11 @@ async def task_overview(connection, ref, params):
             raise RuntimeStoreError('revision_conflict')
     data = await asyncio.to_thread(_read, authority, ref, params['stored_id'], guard)
     guard(await connection._read_store_instance_id())
-    if db._db_file_was_replaced():
+    if _holder_of(db)._db_file_was_replaced():
         raise RuntimeStoreError('session_owner_changed')
     if (_source_binding(authority, ref) != binding
             or _target(authority, ref, params['stored_id']) != data['resolved_id']
-            or json.loads(json.dumps(db.conversation_revision(data['resolved_id'], include_ancestors=True))) !=
+            or _conversation_revision(db, data['resolved_id']) !=
             data['conversation_revision']):
         raise RuntimeStoreError('revision_conflict')
     authorize(connection, ref, params, 'session:read', allow_local_adoption=False)

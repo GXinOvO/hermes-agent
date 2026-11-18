@@ -10,6 +10,7 @@ from gateway.session_contract import SessionRef
 from gateway.session_persistence import authority_persistence
 from persistence.authority.bindings import local_session_id
 from persistence.core.errors import AuthorityRefusal
+from hermes_state_runtime import RuntimeStoreError, _holder_of
 
 
 def local_adapter_map(authority):
@@ -80,7 +81,7 @@ def _stored_receipt(authority, sid):
     return receipt
 
 
-def _with_untracked_compression(authority, sid, receipt):
+def _with_untracked_compression(authority, sid, receipt, *, allow_adoption=True):
     """*receipt*, after recording compression steps an older build published past its tip (#140060).
 
     The catch-up writes, so it never runs on the owner loop: a contended writer there would stall every
@@ -91,6 +92,8 @@ def _with_untracked_compression(authority, sid, receipt):
     from gateway.session_local_adoption import _adopt, _binding, on_owner_loop, schedule_adoption
     if not authority_persistence(authority).bindings.compression_adoptable(_binding(receipt)):
         return receipt
+    if not allow_adoption:
+        raise _CatchUpPending('storage_unavailable')
     if on_owner_loop():
         schedule_adoption(authority, sid, receipt)
         raise _CatchUpPending('storage_unavailable')
@@ -124,6 +127,8 @@ def owned_receipt(authority, sid):
     hashes it (``local_session_id``; a legacy-adopted receipt is bound by its route alone), so a
     store that moved with its profile (another machine, a moved home) still owns its rows. Its
     owner is this store; the route namespace binds the profile."""
+    if _holder_of(authority.persistence)._db_file_was_replaced():
+        raise RuntimeStoreError('storage_unavailable')
     receipt = _stored_receipt(authority, sid)
     chat_id = (receipt['legacy_session_id'] if 'legacy_session_id' in receipt else
                local_session_id(receipt['profile_id'], receipt['principal_id'], receipt['request_id']))
@@ -166,7 +171,7 @@ def _stray_route_target(authority, receipt, session_id):
     return True
 
 
-def restore_local_session(authority, sid):
+def restore_local_session(authority, sid, *, allow_adoption=True):
     from gateway.session_authority import LiveSession
     from gateway.session_local import LocalSessionAdapter
     from gateway.session_policy import restore_policy
@@ -174,7 +179,7 @@ def restore_local_session(authority, sid):
         # The catch-up writes, so the receipt as stored must already be this owner's (#140060).
         receipt, source, route, entry = owned_receipt(authority, sid)
         chat_id, store = source.chat_id, authority.runner.session_store
-        adopted = _with_untracked_compression(authority, sid, receipt)
+        adopted = _with_untracked_compression(authority, sid, receipt, allow_adoption=allow_adoption)
         policy = restore_policy(adopted['policy'])
         if adopted is not receipt:  # re-read after a catch-up: check the copy that will be served
             receipt, entry = adopted, _checked_entry(authority, adopted, source, route)

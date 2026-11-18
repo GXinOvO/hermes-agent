@@ -6,7 +6,8 @@ import uuid
 from gateway.session_busy_controls import authorize
 from gateway.session_contract import SessionRef
 from gateway.session_task_overview import _source_binding, _target
-from hermes_state_runtime import RuntimeStoreError, _holder_of, _session_row
+from hermes_state_runtime import (_conversation_revision, _holder_of, _latest_todo, _session_row,
+                                  RuntimeStoreError)
 
 
 def _owner(authority):
@@ -63,7 +64,7 @@ async def _prepare(connection, params, stored_id):
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
     guard(db.state_meta.get('store_instance_id'))
-    if db._db_file_was_replaced():
+    if _holder_of(db)._db_file_was_replaced():
         raise RuntimeStoreError('session_owner_changed')
     return resolved, guard, expected
 
@@ -95,12 +96,12 @@ def _checked(connection, params, guard, target, binding, revision):
     db = connection.authority.persistence
     with _holder_of(db)._read_ctx() as conn:
         guard(conn.execute("SELECT value FROM state_meta WHERE key='store_instance_id'").fetchone()[0])
-    if db._db_file_was_replaced():
+    if _holder_of(db)._db_file_was_replaced():
         raise RuntimeStoreError('session_owner_changed')
     logical, current, bound = _resolve(connection, params['stored_id'], params)
     if logical.session_id != params['session_id'] or current != target or bound != binding:
         raise RuntimeStoreError('session_source_changed')
-    if json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True))) != revision:
+    if _conversation_revision(db, target) != revision:
         raise RuntimeStoreError('revision_conflict')
 
 
@@ -110,7 +111,7 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
     from gateway.session_task_analysis_reply import AnalysisReply
     authority, db = connection.authority, connection.authority.persistence
     with _holder_of(db).transcript_read_snapshot() as consistent:
-        revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
+        revision = _conversation_revision(db, target)
         rows, count, limitations = messages(db, target)
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
@@ -218,7 +219,7 @@ async def task_analysis(connection, ref, params):
     raw = db.state_meta.get(_key(cache_id, params['task_id'], 2 if graph is not None else 1))
     record = json.loads(raw) if raw else None
     analysis = record['analysis'] if record and record['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']] else None
-    revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
+    revision = _conversation_revision(db, target)
     if record is not None and analysis is not None:
         if graph is not None:
             from gateway.session_task_sources import revisions

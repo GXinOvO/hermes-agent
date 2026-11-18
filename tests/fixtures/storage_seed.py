@@ -9,6 +9,7 @@
 import json
 
 from persistence.conversation.messages import NewMessage
+from tests.fixtures.storage_holder import raw_holder
 from persistence.conversation.sessions import NewSession
 
 
@@ -74,3 +75,18 @@ def seed_usage(store, session_id, **counts):
     store.usage.queue_usage(session_id, UsageDelta(tokens=tokens, route=BillingRoute(**route) if route["model"] else None,
                                                    **counts))
     store.usage.flush_usage()
+
+
+def append_message(store, session_id, role, content, **fields):
+    """Append one row with the ``NewMessage`` fields in ``fields``; returns its id."""
+    return store.messages.append(session_id, NewMessage(role=role, content=content, **fields))
+
+
+def append_messages(store, session_id, rows):
+    """Append live message dicts as one batch (``NewMessage.from_live``); returns the batch result."""
+    return store.messages.append_batch(session_id, [NewMessage.from_live(dict(row)) for row in rows])
+
+
+def total_changes(store):
+    """The writer connection's ``total_changes``, for write-count assertions."""
+    return raw_holder(store)._write_generation()[1]

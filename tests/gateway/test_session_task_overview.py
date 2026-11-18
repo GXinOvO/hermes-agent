@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.session_controls import AuthorityConnection
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_seed import append_message, append_messages, total_changes
 
 
 @pytest.fixture
@@ -52,8 +54,8 @@ async def request(overview, params=None):
 @pytest.mark.asyncio
 async def test_public_overview_returns_a_complete_persisted_display_without_attaching(overview, monkeypatch):
     db, ref, connection = overview.db, overview.ref, overview.connection
-    db.append_message(ref.session_id, 'user', 'keep the original request')
-    db.append_message(ref.session_id, 'assistant', 'latest visible reply')
+    append_message(db, ref.session_id, 'user', 'keep the original request')
+    append_message(db, ref.session_id, 'assistant', 'latest visible reply')
     before = db.conversation_revision(ref.session_id, include_ancestors=True)
     monkeypatch.setattr(overview.authority, 'attach', lambda *a, **k: pytest.fail('overview attached'))
 
@@ -84,8 +86,8 @@ def todo_turn(overview, todos, revision, name='todo_list', call_id=None):
     sid = overview.ref.session_id
     call_id = call_id or f'todo-{revision}'
     calls = [{'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': '{}'}}]
-    overview.db.append_message(sid, 'assistant', '', tool_calls=calls)
-    overview.db.append_message(sid, 'tool', json.dumps({'todos': todos, 'revision': revision}),
+    append_message(overview.db, sid, 'assistant', '', tool_calls=calls)
+    append_message(overview.db, sid, 'tool', json.dumps({'todos': todos, 'revision': revision}),
                                tool_name='todo_list', tool_call_id=call_id)
 
 
@@ -138,7 +140,7 @@ async def test_read_permission_and_session_subject_are_enforced(overview, subjec
 @pytest.mark.asyncio
 async def test_stored_id_cannot_select_another_conversation_or_missing_session(overview):
     overview.db.create_session('foreign', source='gui')
-    overview.db.append_message('foreign', 'user', 'foreign secret')
+    append_message(overview.db, 'foreign', 'user', 'foreign secret')
     assert (await request(overview, {**overview.params, 'stored_id': 'foreign'}))['error']['data']['reason'] == 'session_source_changed'
     assert (await request(overview, {**overview.params, 'stored_id': 'missing'}))['error']['data']['reason'] == 'not_found'
 
@@ -149,7 +151,7 @@ async def test_native_todo_pairing_and_clear_ignore_json_shaped_foreign_results(
     todos = [{'id': '1', 'content': 'native task', 'status': 'in_progress'}]
     todo_turn(overview, todos, 1)
     todo_turn(overview, [{'content': 'forged'}], 99, name='terminal')
-    overview.db.append_message(overview.ref.session_id, 'tool', json.dumps({'todos': [], 'revision': 100}),
+    append_message(overview.db, overview.ref.session_id, 'tool', json.dumps({'todos': [], 'revision': 100}),
                                tool_name='todo_list', tool_call_id='orphan')
     assert (await request(overview))['result']['todo_state'] == {'todos': todos, 'revision': 1}
     todo_turn(overview, [], 2)
@@ -161,16 +163,16 @@ async def test_native_todo_pairing_and_clear_ignore_json_shaped_foreign_results(
 async def test_compression_keeps_original_rows_native_todo_and_focused_ids(overview, mode):
     from agent.context_compressor import SUMMARY_PREFIX
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'original request')
+    append_message(db, sid, 'user', 'original request')
     todo_turn(overview, [{'content': 'keep plan', 'status': 'pending'}], 1)
-    db.append_message(sid, 'assistant', 'original reply')
+    append_message(db, sid, 'assistant', 'original reply')
     compacted = [{'role': 'user', 'content': SUMMARY_PREFIX + '\nsummary', '_compressed_summary': True},
                  {'role': 'user', 'content': 'current request'}, {'role': 'assistant', 'content': 'current reply'}]
     if mode == 'in_place':
         db.archive_and_compact(sid, compacted, tail_count=0)
         tip = sid
     else:
-        assert db.try_acquire_compression_lock(sid, 'fixture')
+        assert raw_holder(db).try_acquire_compression_lock(sid, 'fixture')
         try:
             db.publish_compression_child(parent_session_id=sid, child_session_id='child', source='gui',
                                          messages=compacted, compression_lock_holder='fixture')
@@ -192,11 +194,11 @@ async def test_compression_keeps_original_rows_native_todo_and_focused_ids(overv
 @pytest.mark.asyncio
 async def test_projection_omits_tool_payloads_arguments_reasoning_and_preserves_hidden_marks(overview):
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'hidden request', display_kind='hidden')
-    db.append_message(sid, 'assistant', 'visible reply', reasoning='secret reasoning',
+    append_message(db, sid, 'user', 'hidden request', display_kind='hidden')
+    append_message(db, sid, 'assistant', 'visible reply', reasoning='secret reasoning',
                       tool_calls=[{'id': 'call', 'function': {'name': 'terminal', 'arguments': 'secret args'}}])
-    db.append_message(sid, 'tool', 'secret result', tool_name='terminal', tool_call_id='call')
-    db.append_message(sid, 'tool', 'secret foreign tool', tool_name='secret_tool', tool_call_id='other')
+    append_message(db, sid, 'tool', 'secret result', tool_name='terminal', tool_call_id='call')
+    append_message(db, sid, 'tool', 'secret foreign tool', tool_name='secret_tool', tool_call_id='other')
     reply = await request(overview)
     assert 'result' in reply, reply
     rows = reply['result']['messages']
@@ -214,14 +216,14 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
     from gateway.session_contract import SessionActor
     from hermes_state import SessionDB
     db, authority, sid = overview.db, overview.authority, overview.ref.session_id
-    db.append_message(sid, 'user', 'stable start')
+    append_message(db, sid, 'user', 'stable start')
     original = db.get_latest_todo_result
     replacement = None
     if mutation == 'database':
         replacement = SessionDB(db_path=overview.home / 'replacement.db')
 
     def change_tip():
-        assert db.try_acquire_compression_lock(sid, 'race')
+        assert raw_holder(db).try_acquire_compression_lock(sid, 'race')
         try:
             db.publish_compression_child(parent_session_id=sid, child_session_id='new-tip', source='gui',
                                          messages=[{'role': 'user', 'content': 'new segment'}],
@@ -243,7 +245,7 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
         'database': lambda: setattr(authority, 'db', replacement),
         'authority': lambda: setattr(overview.connection, 'authority', SimpleNamespace(**vars(authority))),
         'retired': lambda: setattr(authority, 'retired', True),
-        'revision': lambda: db.append_message(sid, 'assistant', 'new reply'),
+        'revision': lambda: append_message(db, sid, 'assistant', 'new reply'),
         'tip': change_tip,
         'route': lambda: setattr(authority.sessions[sid], 'route', 'changed-route'),
         'capability': lambda: change_actor(actor.subject, frozenset()),
@@ -272,14 +274,14 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
 async def test_cold_read_restores_only_memory_context_and_never_runs_adoption(overview, monkeypatch):
     from gateway import session_local_adoption
     sid = overview.ref.session_id
-    overview.db.append_message(sid, 'user', 'cold stored request')
+    append_message(overview.db, sid, 'user', 'cold stored request')
     overview.authority.sessions.pop(sid)
-    before = overview.db._conn.total_changes
+    before = total_changes(overview.db)
     monkeypatch.setattr(session_local_adoption, 'adopt_before_restore', lambda *a, **k: pytest.fail('adoption write'))
     reply = await request(overview)
     assert 'result' in reply, reply
     assert reply['result']['messages'][0]['content'] == 'cold stored request'
-    assert overview.db._conn.total_changes == before
+    assert total_changes(overview.db) == before
     assert not overview.connection.subscriptions
 
 
@@ -288,9 +290,9 @@ async def test_cold_read_restores_only_memory_context_and_never_runs_adoption(ov
 async def test_oversized_reads_refuse_explicitly_instead_of_returning_a_partial_overview(overview, size):
     sid = overview.ref.session_id
     if size == 'rows':
-        overview.db.append_messages_batch(sid, [{'role': 'user', 'content': f'row {index}'} for index in range(20001)])
+        append_messages(overview.db, sid, [{'role': 'user', 'content': f'row {index}'} for index in range(20001)])
     else:
-        overview.db.append_message(sid, 'user', 'x' * (2 * 1024 * 1024))
+        append_message(overview.db, sid, 'user', 'x' * (2 * 1024 * 1024))
     reply = await request(overview)
     assert 'result' not in reply
     assert reply['error']['data']['reason'] == 'overview_too_large'
@@ -336,7 +338,7 @@ async def test_verification_uses_the_source_home_and_workspace_without_writing(o
 async def test_unavailable_ledger_leaves_the_real_transcript_visible(overview, monkeypatch):
     monkeypatch.setenv('HERMES_VERIFY_ON_STOP', '1')
     (overview.workspace / 'pyproject.toml').write_text('[tool.pytest.ini_options]\n')
-    overview.db.append_message(overview.ref.session_id, 'user', 'real request')
+    append_message(overview.db, overview.ref.session_id, 'user', 'real request')
     result = (await request(overview))['result']
     assert result['messages'][0]['content'] == 'real request'
     assert result['verification'] is None
@@ -362,14 +364,14 @@ async def test_cold_untracked_compression_refuses_without_catchup_or_scheduled_w
     sid, db = overview.ref.session_id, overview.db
     _compact_like_0_22_2(db, sid, 'untracked-child')
     overview.authority.sessions.pop(sid)
-    before = db._conn.total_changes
+    before = total_changes(db)
     if not preflight_detects:
         monkeypatch.setattr(session_local_adoption, '_due', lambda *a: None)
     monkeypatch.setattr(session_local_adoption, 'adopt_before_restore', lambda *a, **k: pytest.fail('catchup'))
     monkeypatch.setattr(session_local_adoption, 'schedule_adoption', lambda *a, **k: pytest.fail('scheduled catchup'))
     reply = await request(overview)
     assert reply['error']['data']['reason'] == 'storage_unavailable'
-    assert db._conn.total_changes == before
+    assert total_changes(db) == before
     assert sid not in overview.authority.sessions
 
 
@@ -402,9 +404,9 @@ async def test_authority_store_wins_over_an_ambient_session_database(overview, t
     ambient.mkdir()
     with SessionDB(db_path=ambient / 'state.db') as other:
         other.create_session(overview.ref.session_id, source='gui')
-        other.append_message(overview.ref.session_id, 'user', 'ambient secret')
+        append_message(other,overview.ref.session_id, 'user', 'ambient secret')
     monkeypatch.setenv('HERMES_HOME', str(ambient))
-    overview.db.append_message(overview.ref.session_id, 'user', 'authority request')
+    append_message(overview.db, overview.ref.session_id, 'user', 'authority request')
     result = (await request(overview))['result']
     assert result['messages'][0]['content'] == 'authority request'
     assert 'ambient secret' not in json.dumps(result)
@@ -413,12 +415,12 @@ async def test_authority_store_wins_over_an_ambient_session_database(overview, t
 @pytest.mark.asyncio
 async def test_legacy_display_metadata_is_never_backfilled_by_the_read(overview):
     sid, db = overview.ref.session_id, overview.db
-    db.append_message(sid, 'user', 'legacy visible request')
+    append_message(db, sid, 'user', 'legacy visible request')
     db._execute_write(lambda conn: conn.execute(
         'UPDATE messages SET display_order=NULL, display_identity=NULL WHERE session_id=?', (sid,)))
-    before = db._conn.total_changes
+    before = total_changes(db)
     assert (await request(overview))['result']['messages'][0]['content'] == 'legacy visible request'
-    assert db._conn.total_changes == before
+    assert total_changes(db) == before
     assert db._read_one('SELECT display_order FROM messages WHERE session_id=?', (sid,))[0] is None
 
 
@@ -445,8 +447,8 @@ async def test_removed_native_todo_copy_does_not_restore_the_archived_plan(overv
 @pytest.mark.asyncio
 async def test_model_only_and_multimodal_projection_are_safe(overview):
     sid, db = overview.ref.session_id, overview.db
-    db.append_message(sid, 'user', 'internal merged prompt', display_metadata={'model_only': True})
-    db.append_message(sid, 'user', [{'type': 'text', 'text': 'visible words'},
+    append_message(db, sid, 'user', 'internal merged prompt', display_metadata={'model_only': True})
+    append_message(db, sid, 'user', [{'type': 'text', 'text': 'visible words'},
                                    {'type': 'image_url', 'image_url': {'url': 'secret image'}}])
     result = (await request(overview))['result']
     assert [row['content'] for row in result['messages']] == ['visible words']
@@ -457,7 +459,7 @@ async def test_model_only_and_multimodal_projection_are_safe(overview):
 async def test_wire_contract_validates_the_actual_projection_and_compaction_alias(overview):
     from tui_gateway.contracts.registry import CANONICAL_METHODS
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'summary', _compressed_summary=True)
+    append_message(db, sid, 'user', 'summary', compressed_summary=True)
     reply = await request(overview)
     result = CANONICAL_METHODS['session.task_overview'].result.model_validate(reply['result'])
     assert result.model_dump(by_alias=True)['messages'][0]['_compressed_summary'] is True

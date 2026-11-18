@@ -46,7 +46,7 @@ def _boundary(conn, logical, physical):
 
 
 def _policy(conn, logical):
-    from hermes_state_local import POLICY_PREFIX
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX
     row = conn.execute('SELECT value FROM state_meta WHERE key=?', (POLICY_PREFIX + logical,)).fetchone()
     return admission_fingerprint(canonical_target=logical, payload=row[0]) if row else None
 

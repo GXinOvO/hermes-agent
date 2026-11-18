@@ -169,6 +169,16 @@ def _holder_of(db):
     return _store_of(db).holder()
 
 
+def _conversation_revision(db, session_id):
+    return json.loads(json.dumps(db.messages.conversation_revision(
+        session_id, include_lineage=True).as_tuple()))
+
+
+def _latest_todo(db, session_id):
+    from persistence.sqlite.conversation._store.todo import get_latest_todo_result
+    return get_latest_todo_result(_holder_of(db), session_id)
+
+
 def _session_row(db, session_id):
     record = db.sessions.get(session_id)
     return None if record is None else record.as_session_row()
