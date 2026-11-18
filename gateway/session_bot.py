@@ -509,7 +509,8 @@ def _result(authority, record):
     return {k: v for k, v in dict(status=status, delivery_id=record['delivery_id'],
         profile_home=record['profile_home'], session_id=record['session_id'],
         admission_id=record['admission_id'], message=record['message'], reply=reply,
-        retry_admission_id=retry_id, error=error, reason=reason).items() if v is not None}
+        retry_admission_id=retry_id, error=error, reason=reason,
+        sealed_cron_result_v1=record.get('sealed_cron_result_v1')).items() if v is not None}
 
 
 def _failure(authority, admission_id):
