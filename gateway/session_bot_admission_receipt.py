@@ -15,7 +15,8 @@ def _descriptor(payload):
 
 
 def snapshot(db, admission_id):
-    with db._read_ctx() as conn:
+    from hermes_state_runtime import _holder_of
+    with _holder_of(db)._read_ctx() as conn:
         row = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone()
     if row is None:
         raise ValueError('strict Bot native admission unavailable before receipt')

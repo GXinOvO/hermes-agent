@@ -562,7 +562,8 @@ def _retry_eligible(authority, record):
     admission SETTLED ``failed`` with a committed result whose error classifies transient (429/5xx/
     context overflow). queued/started/unknown admissions never qualify — unknown execution is never
     replayed — and the retry itself is never retried."""
-    if (record.get('retry') or {}).get('refused') or _retry_admission(authority, record):
+    if (record.get('sealed_cron_result_v1') or (record.get('retry') or {}).get('refused')
+            or _retry_admission(authority, record)):
         return False
     store = authority_persistence(authority)
     row = store.admissions.get(admission_id=record['admission_id'])
@@ -805,7 +806,8 @@ def _delivery_params(authority, actor, params):
     """``(home, key, message, author, category)`` of one ``deliver``/``settle`` request: the
     delivery's full identity, validated the same way for both verbs."""
     home = _home(authority, actor, params.get('profile'))
-    if set(params) - {'id', 'profile', 'message', 'session_id', 'author', 'notification_category'}:
+    if set(params) - {'id', 'profile', 'message', 'session_id', 'author', 'notification_category',
+                      'sealed_cron_result_v1'}:
         raise AuthorityRefusal('invalid_params')
     from gateway.session_automation import automation_notification_metadata
     notification = automation_notification_metadata(params)
@@ -952,13 +954,16 @@ async def _held_by_another_writer(home, key, exc):
 
 
 async def _admit(authority, actor, home, root, key, message, ref, live, entry, author=None, legacy=None,
-                 notification_category='result'):
+                 notification_category='result', sealed=None):
     from gateway.session_automation import automation_notification_metadata
     notification = automation_notification_metadata({'notification_category': notification_category})
     path = root / f'{key}.json'
     event = MessageEvent(text=message, source=live.source, internal=True,
         message_id='bot:' + key, metadata={'gateway_session_key': live.route,
                                          'gateway_session_id': entry.session_id})
+    from cron.sealed_bot_result import bind_event, event_descriptor
+    from gateway.session_delivery_policy import mark_bot_request
+    bind_event(event, sealed) if sealed is not None else mark_bot_request(event)
     event.metadata.update(notification)
     if author is not None:
         event.metadata['turn_author'] = dict(author)
@@ -966,7 +971,7 @@ async def _admit(authority, actor, home, root, key, message, ref, live, entry, a
     # two-store window leaves an explicit unknown record, never a new target.
     record = dict(legacy or {}, delivery_id=key, profile_home=str(home), session_id=ref.session_id,
         principal_id=actor.subject, message=message, status='ambiguous')
-    record.update(notification)
+    record.update(notification, **event_descriptor(event))
     if 'session:operator' in actor.capabilities:
         record['operator'] = True  # admitted on operator access: its one retry keeps it (``_maybe_retry``)
     if author is not None:
@@ -990,6 +995,9 @@ async def _admit(authority, actor, home, root, key, message, ref, live, entry, a
             logging.getLogger(__name__).info('Bot Chat delivery %s refused (%s)', key, exc.reason)
             await refuse_pin(home, key)
         raise
+    if sealed is not None:
+        from gateway.session_bot_admission_receipt import snapshot
+        record['native_admission_v1'] = await asyncio.to_thread(snapshot, authority.persistence, receipt.admission_id)
     record.update(status='canonical', admission_id=receipt.admission_id)
     record.update(_result(authority, record))
     if record['status'] in {'queued', 'claimed'}:

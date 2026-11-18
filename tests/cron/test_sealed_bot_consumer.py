@@ -109,7 +109,8 @@ async def test_scheduler_sealed_result_survives_real_door_and_provider_503_witho
     await recover_bot_deliveries(bot.authority)
     await _settle_quietly(bot)
     rows = _admissions(bot)
-    with bot.authority.db._read_ctx() as conn:
+    from hermes_state_runtime import _holder_of
+    with _holder_of(bot.authority.persistence)._read_ctx() as conn:
         admissions = [dict(r) for r in conn.execute('SELECT * FROM session_admissions')]
     import sqlite3
     with sqlite3.connect(bot.home / 'cron' / 'deliveries.db') as conn:

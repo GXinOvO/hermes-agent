@@ -543,6 +543,9 @@ def snapshot_automation(authority, adapter, event, identity):
         'timestamp': datetime.fromtimestamp(0, UTC).isoformat(),
         'event': {'message_id': identity}, 'provenance': provenance,
         'automation': {'identity': identity, 'owner': owner}}
+    from gateway.session_delivery_policy import recovery_descriptor
+    from cron.sealed_bot_result import event_descriptor
+    envelope['automation'].update(recovery_descriptor(event), **event_descriptor(event))
     envelope['automation'].update(notification)
     if getattr(event, '_heartbeat_session_id', None):
         envelope['automation']['heartbeat'] = event._heartbeat_session_id
@@ -592,6 +595,9 @@ def snapshot_local_automation(authority, adapter, event, identity, entry):
     ref, _live = _local_automation_owner(authority, adapter, event, entry)
     descriptor = {'identity': identity, 'owner': ref.session_id,
                   'route': entry.session_key, 'target': entry.session_id}
+    from gateway.session_delivery_policy import recovery_descriptor
+    from cron.sealed_bot_result import event_descriptor
+    descriptor.update(recovery_descriptor(event), **event_descriptor(event))
     descriptor.update(automation_notification_metadata(event.metadata))
     descriptor.update(automation_display_metadata(event.metadata))
     descriptor.update(_tick_metadata(event.metadata))

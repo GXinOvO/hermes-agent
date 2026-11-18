@@ -510,6 +510,9 @@ class AuthorityConnection:
         return relay_operation(self, 'reply', params)
 
     async def bot_deliver(self, ref, params):
+        if params.get('sealed_cron_result_v1') is not None:
+            from cron.sealed_bot_result import deliver_inside
+            return await deliver_inside(self, params)
         from gateway.session_bot import deliver
         return await deliver(self, params)
 
