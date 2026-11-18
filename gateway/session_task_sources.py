@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import ExitStack, contextmanager
+from persistence_assembly import store_location
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -38,9 +39,9 @@ class SourceRead:
 
 def _snapshot(connection, params, prepared, guard):
     ref, target, binding = prepared
-    db = connection.authority.db
+    db = connection.authority.persistence
     with db.transcript_read_snapshot() as consistent:
-        guard(db.get_meta('store_instance_id'))
+        guard(db.state_meta.get('store_instance_id'))
         raw = stored_rows(db, target)
         revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
         from gateway.session_controls import _profile_label
@@ -152,8 +153,8 @@ async def collect(connection, params):
 
 @contextmanager
 def commit_fence(graph, primary):
-    foreign = {str(read.connection.authority.db.db_path): read.connection.authority.db for read in graph['reads']
-               if read.connection.authority.db is not primary}
+    foreign = {str(store_location(read.connection.authority.persistence.scope)): read.connection.authority.persistence for read in graph['reads']
+               if read.connection.authority.persistence is not primary}
     from hermes_state_errors import StateDbReplacedError
     from hermes_state_stored_reads import _pins
     with ExitStack() as stack:

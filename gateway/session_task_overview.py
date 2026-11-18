@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 
 from gateway.session_busy_controls import authorize
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import _holder_of, _session_row, RuntimeStoreError
 
 MAX_MESSAGES = 20000
 logger = logging.getLogger(__name__)
@@ -22,14 +22,14 @@ def _source_binding(authority, ref):
 
 
 def _target(authority, ref, stored_id):
-    db = authority.db
+    db = authority.persistence
     from hermes_state_local_lineage import local_physical_target
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         target = local_physical_target(conn, ref.session_id)
     if target == ref.session_id:
-        target = db.get_compression_tip(ref.session_id) or ref.session_id
-    row = db.get_session(target)
-    if row is None or db.get_session(stored_id) is None:
+        target = db.lineage.tip(ref.session_id) or ref.session_id
+    row = _session_row(db, target)
+    if row is None or _session_row(db, stored_id) is None:
         raise RuntimeStoreError('not_found')
     live = authority.sessions[ref.session_id]
     from gateway.config import Platform
@@ -40,9 +40,9 @@ def _target(authority, ref, stored_id):
             raise RuntimeStoreError('session_source_changed')
     if row.get('session_key') and row['session_key'] != live.route:
         raise RuntimeStoreError('session_source_changed')
-    lineage = db._resume_lineage_ids(target)
+    lineage = db.lineage.resume_lineage_ids(target)
     if ((stored_id not in lineage and stored_id != ref.session_id)
-            or (db.get_compression_tip(stored_id) or stored_id) != target):
+            or (db.lineage.tip(stored_id) or stored_id) != target):
         raise RuntimeStoreError('session_source_changed', field='stored_id')
     return target
 
@@ -50,7 +50,7 @@ def _target(authority, ref, stored_id):
 def _workspace(authority, ref, target):
     from gateway.session_policy import policy_for_source
     policy = policy_for_source(authority.runner, authority.sessions[ref.session_id].source)
-    cwd = policy.cwd if policy is not None else (authority.db.get_session(target) or {}).get('cwd')
+    cwd = policy.cwd if policy is not None else (authority._session_row(db, target) or {}).get('cwd')
     return cwd if isinstance(cwd, str) and cwd and Path(cwd).is_absolute() else None
 
 
@@ -75,7 +75,7 @@ def _verification(authority, target, cwd):
 
 
 def _messages(db, target):
-    ids = db._resume_lineage_ids(target)
+    ids = db.lineage.resume_lineage_ids(target)
     rows = db._dedupe_display_generations(db._fetch_conversation_rows(
         ids, db._active_clause(False, True), with_session_id=False, with_compacted=True), drop_removed=True)
     if len(rows) > MAX_MESSAGES:
@@ -109,9 +109,9 @@ def _messages(db, target):
 
 def _read(authority, ref, stored_id, guard):
     from tui_gateway.tool_progress import _normalize_todo_state
-    db = authority.db
+    db = authority.persistence
     with db.transcript_read_snapshot() as consistent:
-        guard(db.get_meta('store_instance_id'))
+        guard(db.state_meta.get('store_instance_id'))
         target = _target(authority, ref, stored_id)
         revision = db.conversation_revision(target, include_ancestors=True)
         cwd = _workspace(authority, ref, target)
@@ -121,7 +121,7 @@ def _read(authority, ref, stored_id, guard):
         verification = _verification(authority, target, cwd)
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
-    guard(db.get_meta('store_instance_id'))
+    guard(db.state_meta.get('store_instance_id'))
     if (_target(authority, ref, stored_id) != target
             or db.conversation_revision(target, include_ancestors=True) != revision
             or _workspace(authority, ref, target) != cwd):
@@ -138,7 +138,7 @@ async def task_overview(connection, ref, params):
     if params.get('expected_owner') is None:
         raise RuntimeStoreError('invalid_params', field='expected_owner')
     _, guard = await connection._expected_owner_guard(ref, params)
-    authority, db = connection.authority, connection.authority.db
+    authority, db = connection.authority, connection.authority.persistence
     from gateway.session_local_adoption import _due
     guard(await connection._read_store_instance_id())
     with db.transcript_read_snapshot() as consistent:
@@ -160,7 +160,7 @@ async def task_overview(connection, ref, params):
             data['conversation_revision']):
         raise RuntimeStoreError('revision_conflict')
     authorize(connection, ref, params, 'session:read', allow_local_adoption=False)
-    guard(db.get_meta('store_instance_id'))
+    guard(db.state_meta.get('store_instance_id'))
     result = {'version': 1, 'session_id': ref.session_id, 'stored_session_id': params['stored_id'],
               'owner': dict(params['expected_owner']), 'authority_epoch': authority.epoch,
               'snapshot_scope': 'persisted_display', 'fetched_at': int(time.time() * 1000),

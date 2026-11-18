@@ -6,32 +6,32 @@ import uuid
 from gateway.session_busy_controls import authorize
 from gateway.session_contract import SessionRef
 from gateway.session_task_overview import _source_binding, _target
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import RuntimeStoreError, _holder_of, _session_row
 
 
 def _owner(authority):
     return {'instance_id': authority.instance_id, 'profile_id': authority.profile_id,
-            'authority_epoch': authority.epoch, 'store_instance_id': authority.db.get_meta('store_instance_id')}
+            'authority_epoch': authority.epoch, 'store_instance_id': authority.persistence.state_meta.get('store_instance_id')}
 
 
 def _resolve(connection, stored_id, params):
     from gateway.session_authorities import require_serving
     from gateway.session_listing import legacy_readable
     from gateway.session_local_adoption import _due
-    authority, db = connection.authority, connection.authority.db
+    authority, db = connection.authority, connection.authority.persistence
     require_serving(authority)
     if 'session:read' not in connection.actor.capabilities:
         raise RuntimeStoreError('permission_denied')
     from hermes_state_runtime import _epoch
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         _epoch(conn, authority.epoch)
     if not isinstance(stored_id, str) or not stored_id or stored_id != stored_id.strip() or len(stored_id) > 512:
         raise RuntimeStoreError('invalid_params', field='session_id')
-    if db.get_session(stored_id) is None:
+    if _session_row(db, stored_id) is None:
         raise RuntimeStoreError('not_found')
-    tip = db.get_compression_tip(stored_id) or stored_id
-    from hermes_state_local import POLICY_PREFIX, local_lineage_owner
-    with db._read_ctx() as conn:
+    tip = db.lineage.tip(stored_id) or stored_id
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX, local_lineage_owner
+    with _holder_of(db)._read_ctx() as conn:
         local = local_lineage_owner(conn, tip)
         bound = conn.execute('SELECT 1 FROM state_meta WHERE key=?', (POLICY_PREFIX + local,)).fetchone()
     sid = local if bound else (tip if legacy_readable(authority, connection.actor, tip) else authority.logical_owner(stored_id))
@@ -43,26 +43,26 @@ def _resolve(connection, stored_id, params):
     except RuntimeStoreError as exc:
         if exc.reason != 'not_found' or not legacy_readable(authority, connection.actor, tip):
             raise
-        return ref, tip, ('legacy', db.get_session(tip))
+        return ref, tip, ('legacy', _session_row(db, tip))
     target = _target(authority, ref, stored_id)
     return ref, target, _source_binding(authority, ref)
 
 
 async def _prepare(connection, params, stored_id):
-    authority, db = connection.authority, connection.authority.db
+    authority, db = connection.authority, connection.authority.persistence
     expected = params.get('expected_owner')
     if expected is None:
         expected = _owner(authority)
     guard_params = {'session_id': params['session_id'], 'expected_owner': expected}
     _, guard = await connection._expected_owner_guard(SessionRef(connection.actor.profile_id, params['session_id']), guard_params)
     guard(await connection._read_store_instance_id())
-    with db.transcript_read_snapshot() as consistent:
+    with _holder_of(db).transcript_read_snapshot() as consistent:
         if not consistent.pinned:
             raise RuntimeStoreError('storage_unavailable')
         resolved = _resolve(connection, stored_id, params)
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
-    guard(db.get_meta('store_instance_id'))
+    guard(db.state_meta.get('store_instance_id'))
     if db._db_file_was_replaced():
         raise RuntimeStoreError('session_owner_changed')
     return resolved, guard, expected
@@ -70,7 +70,7 @@ async def _prepare(connection, params, stored_id):
 
 async def task_source(connection, ref, params):
     (logical, target, binding), guard, owner = await _prepare(connection, params, ref.session_id)
-    guard(connection.authority.db.get_meta('store_instance_id'))
+    guard(connection.authority.persistence.state_meta.get('store_instance_id'))
     if _resolve(connection, ref.session_id, params) != (logical, target, binding):
         raise RuntimeStoreError('session_source_changed')
     return {'session_id': logical.session_id, 'stored_session_id': ref.session_id, 'resolved_id': target,
@@ -92,8 +92,8 @@ def _validate(params):
 
 
 def _checked(connection, params, guard, target, binding, revision):
-    db = connection.authority.db
-    with db._read_ctx() as conn:
+    db = connection.authority.persistence
+    with _holder_of(db)._read_ctx() as conn:
         guard(conn.execute("SELECT value FROM state_meta WHERE key='store_instance_id'").fetchone()[0])
     if db._db_file_was_replaced():
         raise RuntimeStoreError('session_owner_changed')
@@ -108,8 +108,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
     from gateway.session_task_analysis_runtime import runtime_for
     from gateway.session_task_analysis_input import INSTRUCTIONS, messages, validate_output
     from gateway.session_task_analysis_reply import AnalysisReply
-    authority, db = connection.authority, connection.authority.db
-    with db.transcript_read_snapshot() as consistent:
+    authority, db = connection.authority, connection.authority.persistence
+    with _holder_of(db).transcript_read_snapshot() as consistent:
         revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
         rows, count, limitations = messages(db, target)
         if not consistent():
@@ -197,7 +197,7 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
                 from gateway.session_task_sources import commit_fence
                 with commit_fence(graph, db):
                     db._execute_write(write, patience_s=0)
-            saved = json.loads(db.get_meta(key))
+            saved = json.loads(db.state_meta.get(key))
             if saved['generation'] != generation:
                 raise RuntimeStoreError('analysis_conflict')
             return {**result, 'analysis': saved['analysis']}
@@ -209,13 +209,13 @@ async def task_analysis(connection, ref, params):
     (logical, target, binding), guard, owner = await _prepare(connection, params, params['stored_id'])
     if logical.session_id != ref.session_id:
         raise RuntimeStoreError('session_source_changed')
-    db = connection.authority.db
+    db = connection.authority.persistence
     graph = None
     if params.get('follow_sources', False):
         from gateway.session_task_sources import collect
         graph = await collect(connection, params)
     cache_id = connection.authority.logical_owner(params['stored_id'])
-    raw = db.get_meta(_key(cache_id, params['task_id'], 2 if graph is not None else 1))
+    raw = db.state_meta.get(_key(cache_id, params['task_id'], 2 if graph is not None else 1))
     record = json.loads(raw) if raw else None
     analysis = record['analysis'] if record and record['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']] else None
     revision = json.loads(json.dumps(db.conversation_revision(target, include_ancestors=True)))
@@ -238,7 +238,7 @@ async def task_analysis(connection, ref, params):
             analysis['stale'] = analysis['conversation_revision'] != revision
     result = {'session_id': logical.session_id, 'stored_session_id': params['stored_id'], 'owner': owner,
               'authority_epoch': connection.authority.epoch, 'task_id': params['task_id'], 'analysis': analysis}
-    guard(db.get_meta('store_instance_id'))
+    guard(db.state_meta.get('store_instance_id'))
     if params.get('refresh', False):
         return _refresh(connection, logical, params, target, binding, guard, result, raw, graph)
     _checked(connection, params, guard, target, binding, revision)
@@ -246,7 +246,7 @@ async def task_analysis(connection, ref, params):
         from gateway.session_task_sources import check
         check(graph)
         if analysis is None:
-            old = db.get_meta(_key(cache_id, params['task_id']))
+            old = db.state_meta.get(_key(cache_id, params['task_id']))
             legacy = json.loads(old) if old else None
             if legacy and legacy['binding'] == [cache_id, params['stored_id'], params['task_id'], params['title']]:
                 result['analysis'] = legacy['analysis']

@@ -12,6 +12,7 @@ from gateway.config import Platform
 from gateway.session_contract import CANONICAL_GATEWAY_PROTOCOL, SessionActor, SessionRef, Submission
 from gateway.session_llm_oneshot import DeferredReply
 from gateway.session_persistence import authority_persistence
+from hermes_state_runtime import RuntimeStoreError
 from hermes_constants import profile_name_for_home
 from persistence.core.errors import STORE_FAILURES, AuthorityRefusal, PersistenceError
 

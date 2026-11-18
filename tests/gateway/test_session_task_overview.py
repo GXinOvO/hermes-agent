@@ -14,6 +14,7 @@ def overview(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority
     from gateway.session_local import create_local_session
     from hermes_state_runtime import begin_runtime_epoch
+    from persistence_assembly import open_persistence, profile_scope
 
     monkeypatch.setattr(run, '_load_gateway_config', lambda *a: {})
     home = tmp_path / 'profile'
@@ -22,13 +23,14 @@ def overview(tmp_path, monkeypatch):
     workspace.mkdir()
     monkeypatch.chdir(tmp_path)
     store = SessionStore(home / 'sessions', GatewayConfig())
-    db = store._db
+    db = open_persistence(profile_scope(home=home), eager=True)
+    store._db = db
     runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None,
                              _handle_message=lambda event: pytest.fail('overview executed a turn'),
                              _resolve_session_agent_runtime=lambda **k: ('frozen', {}))
     runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
-    authority = SessionAuthority(runner, profile_id=str(home), instance_id='owner', db=db,
+    authority = SessionAuthority(runner, profile_id=str(home), instance_id='owner', persistence=db,
                                  epoch=begin_runtime_epoch(db, instance_id='owner'))
     connection = AuthorityConnection(authority, object(), {'user_id': 'human'})
     ref = create_local_session(authority, connection.actor, dict(
@@ -38,7 +40,7 @@ def overview(tmp_path, monkeypatch):
         'session_id': ref.session_id, 'stored_id': ref.session_id,
         'expected_owner': {'instance_id': authority.instance_id, 'profile_id': authority.profile_id,
                            'authority_epoch': authority.epoch,
-                           'store_instance_id': db.get_meta('store_instance_id')}})
+                           'store_instance_id': db.state_meta.get('store_instance_id')}})
     db.close()
 
 

@@ -8,6 +8,7 @@ boundary; this is neither a filesystem sandbox nor a new authorization grant.
 from copy import deepcopy
 from contextlib import suppress
 from dataclasses import dataclass
+from persistence_assembly import store_location
 import hashlib
 import json
 import logging
@@ -288,7 +289,7 @@ def _verify_reference(connection, params, session_id, live_session_id, *, create
     try:
         authority = connection.authority
         require_native(connection)
-        home = Path(authority.db.db_path).parent.resolve()
+        home = store_location(authority.persistence.scope).parent
         if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] != 1:
             raise ValueError('sealed Cron reference invalid')
         if not isinstance(session_id, str) or not isinstance(live_session_id, str):
@@ -329,8 +330,9 @@ def require_native(connection):
 def _require_pinned_target(authority, actor, session_id):
     from gateway import session_bot as bot
     from hermes_state_runtime import RuntimeStoreError
-    row = authority.db.get_session_by_title('Bot Chat')
-    if (row is None or authority.db.get_compression_tip(row['id']) != session_id
+    record = authority.persistence.sessions.get_by_title('Bot Chat')
+    row = record.as_session_row() if record is not None else None
+    if (row is None or authority.persistence.lineage.tip(row['id']) != session_id
             or bot.displaceable_bot_chat(authority, row, actor.subject) is not None):
         raise RuntimeStoreError('admission_conflict')
 
@@ -412,7 +414,8 @@ async def deliver_inside(connection, params):
                 return answer
             if record is not None:
                 raise RuntimeStoreError('unknown_execution')
-            holder = authority.db.get_session_by_title('Bot Chat')
+            bot_record = authority.persistence.sessions.get_by_title('Bot Chat')
+            holder = bot_record.as_session_row() if bot_record is not None else None
             if params.get('sealed_cron_result_v1') is not None and params.get('session_id'):
                 _require_pinned_target(authority, actor, params['session_id'])
             ref, live, entry = await bot._target(authority, actor)

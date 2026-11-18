@@ -169,6 +169,11 @@ def _holder_of(db):
     return _store_of(db).holder()
 
 
+def _session_row(db, session_id):
+    record = db.sessions.get(session_id)
+    return None if record is None else record.as_session_row()
+
+
 def _admission_row(record) -> dict:
     return {name: getattr(record, name) for name in record.__slots__}
 
