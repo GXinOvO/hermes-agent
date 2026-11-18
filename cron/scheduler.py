@@ -2114,40 +2114,31 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
     return final_response
 
 
-def _cron_finalizer_store(session_db):
-    """The cron finalizer's store verbs over a storage handle or a legacy stand-in.
+def _cron_finalizer_store(handle):
+    """The cron finalizer's store verbs over the run's storage handle.
 
-    The finalizer titles, classifies, stamps the cwd and ends the run session before the store is
-    released; those five verbs live on the store handle now, while a stand-in carries only the
-    plugin-guide methods. A handle (or the stand-in's handle) answers them here; a legacy store that
-    already carries the verbs is used as-is.
+    ``_open_cron_session_db`` returns that handle (or refuses the run), so the finalizer titles,
+    classifies, stamps the cwd and ends the run session through the storage interface's own verbs.
     """
-    from agent.agent_init_session import stand_in_interface
-    from hermes_state_runtime import _holder_of
-    from persistence.sqlite.conversation._store import compression, titles
-    try:
-        from persistence_assembly import Persistence
-    except ImportError:  # pragma: no cover - the handle type always exists in this tree
-        Persistence = None
-    handle = session_db if Persistence is not None and isinstance(session_db, Persistence) else stand_in_interface(session_db)
-    if handle is None:
-        return session_db
-    holder = _holder_of(handle)
-
     class _Verbs:
         def get_compression_tip(self, session_id):
-            return compression.get_compression_tip(holder, session_id)
+            return handle.lineage.tip(session_id)
 
         def set_session_title(self, session_id, title):
             handle.sessions.set_title(session_id, title)
 
         def get_next_title_in_lineage(self, base_title):
-            return titles.get_next_title_in_lineage(holder, base_title)
+            titles = [row.title for row in handle.sessions.search_sessions() if row.session.title]
+            candidate = base_title
+            index = 2
+            while candidate in titles:
+                candidate = f"{base_title} #{index}"
+                index += 1
+            return candidate
 
         def session_lifecycle_statuses(self, session_ids):
-            # The handle answers SessionLifecycleStatus members; the callers compare its values.
-            return {sid: getattr(status, 'value', status)
-                    for sid, status in handle.sessions.lifecycle_statuses(list(session_ids)).items()}
+            statuses = handle.sessions.lifecycle_statuses(list(session_ids))
+            return {sid: getattr(status, 'value', status) for sid, status in statuses.items()}
 
         def update_session_cwd(self, session_id, cwd):
             return handle.sessions.update_cwd(session_id, cwd)
@@ -2226,8 +2217,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to end session: %s", job_id, e)
     try:
-        from hermes_state_registry import release_or_close
-        release_or_close(_session_db)
+        session_db.close()
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to close SQLite session store: %s", job_id, e)
 

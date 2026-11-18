@@ -324,7 +324,8 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
               patch.object(scheduler, '_build_job_prompt', side_effect=build_prompt_with_missing_output),
               patch.object(scheduler, 'note_cron_skipped'),
               patch.object(scheduler, '_construct_cron_agent', side_effect=make_agent),
-              patch.object(scheduler, '_open_cron_session_db', return_value=db),
+              patch.object(scheduler, '_open_cron_session_db',
+                           side_effect=lambda job=None: open_persistence(profile_scope(home=home))),
               patch.object(scheduler, '_guard_job_credential_exfil'),
               patch.object(scheduler, '_resolve_cron_agent_setup', return_value=scheduler._CronAgentSetup(
                     model='test/model', runtime={})),
