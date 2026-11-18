@@ -1289,23 +1289,26 @@ def _display_rows_from_conn(conn, session_id: str, *, limit: Optional[int] = Non
     """One display-history projection for normal reads and transactional verification. *after*: keyset
     paging past that ``display_order`` (before it when *latest*)."""
     direction = "DESC" if latest else "ASC"
-    keyset = "" if after is None else f" AND display_order {'<' if latest else '>'} {int(after)}"
+    keyset = "" if after is None else f" AND COALESCE(display_order, id) {'<' if latest else '>'} {int(after)}"
+    # A row written before display metadata existed carries no display_order, and a join on
+    # `display_order = display_order` never matches NULL: those rows would be invisible to every display
+    # read. Their insertion id stands in as the display slot, so legacy segments read without a write.
     return conn.execute(
         f"""WITH page AS (
-                   SELECT display_order FROM messages
+                   SELECT COALESCE(display_order, id) AS slot FROM messages
                    WHERE session_id = ? AND (active = 1 OR compacted = 1){DISPLAY_VISIBLE_SQL}{not_a_later_tool_copy_sql("messages")}{keyset}
-                   GROUP BY display_order ORDER BY display_order {direction}
+                   GROUP BY slot ORDER BY slot {direction}
                    LIMIT ? OFFSET ?
                )
                SELECT chosen.* FROM page
                JOIN messages AS chosen ON chosen.id = (
                    SELECT candidate.id FROM messages AS candidate
                    WHERE candidate.session_id = ?
-                     AND candidate.display_order = page.display_order
+                     AND COALESCE(candidate.display_order, candidate.id) = page.slot
                      AND (candidate.active = 1 OR candidate.compacted = 1){DISPLAY_VISIBLE_SQL}{not_a_later_tool_copy_sql("candidate")}
                    ORDER BY candidate.active DESC, candidate.id DESC LIMIT 1
                )
-               ORDER BY page.display_order ASC""",
+               ORDER BY page.slot ASC""",
         (session_id, -1 if limit is None else limit, offset, session_id),
     ).fetchall()
 
