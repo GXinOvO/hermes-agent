@@ -37,7 +37,8 @@ def test_real_guard_halt_cannot_book_cron_session_complete(tmp_path):
         _final_response_from_result(result, 'review-guard', 'review guard halt', type(agent))
     lifecycle = getattr(db.sessions.lifecycle_statuses([sid])[sid], 'value', None)
     with patch('hermes_state_registry.release_or_close'):
-        _finalize_cron_session(db, agent, 'review-guard', 'review guard halt', sid)
+        _finalize_cron_session(open_persistence(profile_scope(home=tmp_path), eager=True),
+                              agent, 'review-guard', 'review guard halt', sid)
     session = db.sessions.get(sid).as_session_row()
     print(json.dumps({'failed': result['failed'], 'completed': result['completed'],
                       'turn_exit_reason': result['turn_exit_reason'],
@@ -60,6 +61,7 @@ def test_session_finalization_preserves_non_guard_outcomes(tmp_path, role, text,
     db.messages.append(sid, NewMessage(role=role, content=text))
     agent = SimpleNamespace(session_id=sid, _tool_guardrail_halt_decision=None)
     with patch('hermes_state_registry.release_or_close'):
-        _finalize_cron_session(db, agent, 'normal-job', 'normal job', sid)
+        _finalize_cron_session(open_persistence(profile_scope(home=tmp_path), eager=True),
+                               agent, 'normal-job', 'normal job', sid)
     assert db.sessions.get(sid).as_session_row()['end_reason'] == expected
     db.close()
