@@ -14,6 +14,16 @@ from hermes_state_runtime import (
 )
 
 
+def _sql(db, statement, params=()):
+    """Physical write on the store's file: corruption and trigger injection live here, not in the facade."""
+    from persistence_assembly import store_location
+    conn = sqlite3.connect(store_location(db._target), isolation_level=None)
+    try:
+        conn.execute(statement, params)
+    finally:
+        conn.close()
+
+
 def _pin(allowed):
     return {"version": "permission-test", "tools": [], "allowed_tools": allowed}
 
@@ -80,7 +90,7 @@ def test_restore_corrupt_pin_preserves_raw_and_never_grants_unknown_permission(d
     from agent.conversation_loop import _restore_pinned_tools
     if allowed != "unknown":
         db.update_session_tool_names("owned", _pin(allowed))
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (corrupt,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", (corrupt,))
     before = _raw(db)
     agent = _receiver(db)
     if allowed == "unknown":
@@ -127,6 +137,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from hermes_state import SessionDB
 from agent.conversation_loop import _restore_pinned_tools
+
+
+
 db = SessionDB(Path(sys.argv[1]))
 tools = [{"type":"function", "function":{"name":n,"parameters":{}}} for n in ["read_file","terminal"]]
 agent = SimpleNamespace(tools=tools,valid_tool_names={"read_file","terminal"},allowed_tools=None,
@@ -150,7 +163,7 @@ def test_restricted_persist_failure_is_not_silently_ignored(db):
     from tools.mcp_tool_agent import persist_agent_tool_names
     agent = _receiver(db)
     agent.allowed_tools = []
-    db._write_sql("CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
+    _sql(db, "CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
                   "BEGIN SELECT RAISE(ABORT, 'pin-write-failed'); END")
     with pytest.raises(sqlite3.IntegrityError, match="pin-write-failed"):
         persist_agent_tool_names(agent)
@@ -172,7 +185,7 @@ def test_restore_does_not_ignore_restricted_pin_write_failure(db):
     from agent.conversation_loop import _restore_pinned_tools
     agent = _receiver(db)
     agent.allowed_tools = []
-    db._write_sql("CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
+    _sql(db, "CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
                   "BEGIN SELECT RAISE(ABORT, 'restore-write-failed'); END")
     with pytest.raises(sqlite3.IntegrityError, match="restore-write-failed"):
         _restore_pinned_tools(agent, db.get_session("owned"))
@@ -185,7 +198,7 @@ def test_restricted_invalid_tools_cache_keeps_raw_even_after_persist(db, tools):
     from tools.mcp_tool_agent import persist_agent_tool_names
     db.update_session_tool_names("owned", _pin(["read_file"]))
     corrupt = json.dumps({"version": "broken", "tools": tools, "allowed_tools": ["read_file"]})
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (corrupt,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", (corrupt,))
     before = _raw(db)
     agent = _receiver(db)
     _restore_pinned_tools(agent, db.get_session("owned"))
@@ -197,7 +210,7 @@ def test_restricted_invalid_tools_cache_keeps_raw_even_after_persist(db, tools):
 @pytest.mark.parametrize("raw", [None, json.dumps(["read_file"]), json.dumps({"version": "legacy", "tools": []})])
 def test_legacy_unrestricted_session_can_pin_and_rebuild(db, raw):
     from agent.conversation_loop import _restore_pinned_tools
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
     agent = _receiver(db)
     _restore_pinned_tools(agent, db.get_session("owned"))
     assert agent.allowed_tools is None
@@ -208,7 +221,7 @@ def test_legacy_unrestricted_session_can_pin_and_rebuild(db, raw):
 def test_trusted_unrestricted_marker_allows_swept_pin_rebuild(db):
     from agent.conversation_loop import _restore_pinned_tools
     db.update_session_tool_names("owned", {"version": "legacy", "tools": []})
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", ("f" * 64,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", ("f" * 64,))
     agent = _receiver(db)
     _restore_pinned_tools(agent, db.get_session("owned"))
     assert agent.allowed_tools is None
@@ -235,7 +248,7 @@ def test_worker_cannot_patch_reserved_key_or_foreign_session(db):
 def test_unknown_invalid_pin_cannot_become_unrestricted(db, raw):
     from agent.conversation_loop import _restore_pinned_tools
     from tools.mcp_tool_agent import persist_agent_tool_names
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
     agent = _receiver(db)
     with pytest.raises(ValueError, match="permission|pin"):
         _restore_pinned_tools(agent, db.get_session("owned"))
@@ -274,7 +287,7 @@ def test_worker_compression_publication_and_replay_keep_limit(db, record_propert
 def test_pre_sidecar_restricted_pin_migrates_without_unlocking(db, writer):
     from agent.conversation_loop import _restore_pinned_tools
     legacy = json.dumps(_pin(["read_file"]))
-    db._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (legacy,))
+    _sql(db, "UPDATE sessions SET tool_names=? WHERE id='owned'", (legacy,))
     if writer == "session":
         with pytest.raises(ValueError, match="permission"):
             db.update_session_tool_names("owned", _pin(["terminal"]))

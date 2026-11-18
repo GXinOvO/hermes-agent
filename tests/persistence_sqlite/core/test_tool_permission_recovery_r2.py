@@ -11,6 +11,20 @@ import pytest
 
 from hermes_state import SessionDB
 from run_agent import AIAgent
+import sqlite3
+
+
+
+
+
+def _sql(db, statement, params=()):
+    """Physical write on the store's file: corruption and trigger injection live here, not in the facade."""
+    from persistence_assembly import store_location
+    conn = sqlite3.connect(store_location(db._target), isolation_level=None)
+    try:
+        conn.execute(statement, params)
+    finally:
+        conn.close()
 
 
 def _raw_owned(state):
@@ -167,7 +181,7 @@ def test_corrupt_cache_preserves_bytes_while_committing_narrower_authority(state
     from tools.mcp_tool_agent import persist_agent_tool_names
     state.create_session("owned", "cli")
     state.update_session_tool_names("owned", _pin(["read_file", "terminal"]))
-    state._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
+    _sql(state, "UPDATE sessions SET tool_names=? WHERE id='owned'", (raw,))
     first = _agent(state, session_id="owned", allowed_tools=["read_file"])
     second = None
     try:
@@ -198,12 +212,12 @@ def test_corrupt_cache_permission_write_failure_propagates(state):
     from tools.mcp_tool_agent import persist_agent_tool_names
     state.create_session("owned", "cli")
     state.update_session_tool_names("owned", _pin(["read_file", "terminal"]))
-    state._write_sql("UPDATE sessions SET tool_names='unreadable-cache' WHERE id='owned'")
+    _sql(state, "UPDATE sessions SET tool_names='unreadable-cache' WHERE id='owned'")
     before = _raw_owned(state)
     first = _agent(state, session_id="owned", allowed_tools=["read_file"])
     try:
         _restore_pinned_tools(first, state.get_session("owned"))
-        state._write_sql("CREATE TRIGGER reject_permission BEFORE UPDATE OF model_config ON sessions "
+        _sql(state, "CREATE TRIGGER reject_permission BEFORE UPDATE OF model_config ON sessions "
                          "BEGIN SELECT RAISE(ABORT, 'permission-write-failed'); END")
         with pytest.raises(sqlite3.IntegrityError, match="permission-write-failed"):
             persist_agent_tool_names(first)
@@ -268,7 +282,7 @@ def test_root_constructor_cannot_create_reserved_permission_sidecar(state):
 
 def test_child_constructor_narrows_legacy_parent_pin_before_sidecar_migration(state):
     state.create_session("parent", "cli")
-    state._write_sql("UPDATE sessions SET tool_names=? WHERE id='parent'", (
+    _sql(state, "UPDATE sessions SET tool_names=? WHERE id='parent'", (
         json.dumps(_pin(["read_file"])),))
     with pytest.raises(ValueError, match="expand|parent|reserved"):
         state.create_session("owned", "subagent", parent_session_id="parent",
@@ -300,7 +314,7 @@ def test_corrupt_cache_narrowing_uses_native_transaction_on_either_store(state, 
     from tools.mcp_tool_agent import persist_agent_tool_names
     state.create_session("owned", "subagent")
     state.update_session_tool_names("owned", _pin(["read_file", "terminal"]))
-    state._write_sql("UPDATE sessions SET tool_names=? WHERE id='owned'", ("corrupt-cache",))
+    _sql(state, "UPDATE sessions SET tool_names=? WHERE id='owned'", ("corrupt-cache",))
     store = None
     db = state
     if writer == "worker":
