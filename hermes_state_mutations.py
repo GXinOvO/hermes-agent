@@ -191,7 +191,7 @@ def _summarized_by_compaction(conn, physical, message_id):
         return row['active'] == 0 and row['compacted'] == 1
     if not (row['active'] == 1 or row['compacted'] == 1):
         return False
-    from hermes_state_sessions import _expand_compression_lineage_ids
+    from persistence.sqlite.conversation._store.sessions import _expand_compression_lineage_ids
     from hermes_state_compression import _CHAIN_CAP
     lineage, frontier = {physical}, [physical]
     for _ in range(_CHAIN_CAP):
