@@ -6,8 +6,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from persistence_assembly import open_persistence, profile_scope
+from persistence_assembly import open_persistence, profile_scope, store_location
 from persistence.conversation.sessions import NewSession
+from persistence.conversation.messages import NewMessage
 from persistence.sqlite.conversation._store.messages import append_messages_batch as _append_batch
 from tests.fixtures.storage_holder import raw_holder
 
@@ -126,7 +127,7 @@ def test_compression_child_restatement_uses_parent_witness(collector):
             'compression-root', 'user', request, timestamp=START.timestamp() - 60,
             message_uid='compression-uid')
         db.end_session('compression-root', end_reason='compression')
-        db.create_session('compression-child', source='desktop', parent_session_id='compression-root')
+        db.sessions.create(NewSession('compression-child', source='desktop', parent_session_id='compression-root'))
         epoch = begin_runtime_epoch(db, instance_id='compression-fixture')
         admit_session_input(
             db, epoch=epoch, principal_id='human:fixture', session_id='compression-root',
@@ -177,7 +178,7 @@ async def test_gateway_admission_does_not_certify_unbound_or_machine_input(
         session = ref.session_id
         if case == 'wrong_session':
             session = 'other-session'
-            db.create_session(session, source='desktop')
+            db.sessions.create(NewSession(session, source='desktop'))
         from gateway.run_turn_persistence import GatewayTurnPersistenceMixin
         prepared = SimpleNamespace(
             persist_user_message=None, message_text=content,
@@ -190,10 +191,10 @@ async def test_gateway_admission_does_not_certify_unbound_or_machine_input(
                 event, prepared, START.timestamp() + 60)
         if case == 'no_receipt':
             message['display_metadata'] = {'submission_id': 'unmatched-request'}
-        db.append_messages_batch(session, [message])
+        _append_batch(raw_holder(db), session, [message])
         settle_session_input(db, epoch=authority.epoch, admission_id=receipt.admission_id,
                              generation=row['generation'], outcome='completed')
-        result = module.collect_history(db.db_path, START, END)
+        result = module.collect_history(store_location(db.scope), START, END)
         if case in ('admitted', 'authorized_operator'):
             assert result['complete_within_declared_scope'] is True, result
             assert [item['text'] for item in result['messages']] == [text]
@@ -209,18 +210,20 @@ async def test_gateway_admission_does_not_certify_unbound_or_machine_input(
 @pytest.mark.asyncio
 async def test_gateway_rejects_unauthorized_principal_before_admission(collector, tmp_path, monkeypatch):
     from gateway.session_contract import SessionActor, Submission
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
     from tests.gateway import test_session_policy_verbs as gateway_fixtures
 
     module, _home = collector
     store, db, authority, owner, ref = gateway_fixtures._owner(tmp_path, monkeypatch, None)
     actor = SessionActor('unauthorized', authority.profile_id, frozenset(), 'test-unauthorized')
     try:
-        with pytest.raises(RuntimeStoreError, match='permission_denied'):
+        with pytest.raises(AuthorityRefusal, match='permission_denied'):
             await authority.submit(actor, Submission('rejected-request', ref, {'text': 'must not commit'}, 'queue'))
-        assert not db._read_all(
-            'SELECT * FROM session_admissions WHERE request_id=?', ('rejected-request',))
-        assert module.collect_history(db.db_path, START, END)['raw_user_records'] == 0
+        from tests.fixtures.storage_holder import raw_holder
+        with raw_holder(db)._read_ctx() as conn:
+            assert not conn.execute(
+                'SELECT * FROM session_admissions WHERE request_id=?', ('rejected-request',)).fetchall()
+        assert module.collect_history(store_location(db.scope), START, END)['raw_user_records'] == 0
     finally:
         await owner.close()
         store.close_all_db_handles()
