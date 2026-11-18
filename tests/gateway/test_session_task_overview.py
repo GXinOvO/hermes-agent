@@ -217,19 +217,23 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
     from hermes_state import SessionDB
     db, authority, sid = overview.db, overview.authority, overview.ref.session_id
     append_message(db, sid, 'user', 'stable start')
-    original = db.get_latest_todo_result
+    from gateway import session_task_overview as overview_module
+    from persistence.conversation.lineage import CompressionChild
+    from persistence.conversation.messages import NewMessage
+    original = overview_module._latest_todo
     replacement = None
     if mutation == 'database':
-        replacement = SessionDB(db_path=overview.home / 'replacement.db')
+        (overview.home.parent / 'replacement').mkdir(exist_ok=True)
+        replacement = open_persistence(profile_scope(home=overview.home.parent / 'replacement'), eager=True)
 
     def change_tip():
-        assert raw_holder(db).try_acquire_compression_lock(sid, 'race')
+        assert db.coordination.try_acquire_compression_lock(session_id=sid, holder='race')
         try:
-            db.publish_compression_child(parent_session_id=sid, child_session_id='new-tip', source='gui',
-                                         messages=[{'role': 'user', 'content': 'new segment'}],
-                                         compression_lock_holder='race')
+            db.lineage.publish_compression_child(sid, CompressionChild('new-tip', 'gui'),
+                                                 [NewMessage(role='user', content='new segment')],
+                                                 compression_lock_holder='race')
         finally:
-            db.release_compression_lock(sid, 'race')
+            db.coordination.release_compression_lock(session_id=sid, holder='race')
 
     def change_actor(subject, capabilities):
         actor = overview.connection.actor
@@ -240,9 +244,9 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
         'epoch': lambda: setattr(authority, 'epoch', authority.epoch + 1),
         'instance': lambda: setattr(authority, 'instance_id', 'changed'),
         'profile': lambda: setattr(authority, 'profile_id', 'changed'),
-        'store': lambda: db._execute_write(lambda conn: conn.execute(
+        'store': lambda: raw_holder(db)._execute_write(lambda conn: conn.execute(
             "UPDATE state_meta SET value='changed' WHERE key='store_instance_id'")),
-        'database': lambda: setattr(authority, 'db', replacement),
+        'database': lambda: setattr(authority, 'persistence', replacement),
         'authority': lambda: setattr(overview.connection, 'authority', SimpleNamespace(**vars(authority))),
         'retired': lambda: setattr(authority, 'retired', True),
         'revision': lambda: append_message(db, sid, 'assistant', 'new reply'),
@@ -257,7 +261,7 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
         mutations[mutation]()
         return result
 
-    monkeypatch.setattr(db, 'get_latest_todo_result', changed)
+    monkeypatch.setattr(overview_module, '_latest_todo', changed)
     try:
         reply = await request(overview)
         assert 'result' not in reply, reply

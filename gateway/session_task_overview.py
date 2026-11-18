@@ -76,14 +76,13 @@ def _verification(authority, target, cwd):
 
 
 def _messages(db, target):
-    ids = db.lineage.resume_lineage_ids(target)
-    rows = db._dedupe_display_generations(db._fetch_conversation_rows(
-        ids, db._active_clause(False, True), with_session_id=False, with_compacted=True), drop_removed=True)
+    from persistence.conversation.messages import TranscriptRead, TranscriptView
+    rows = [stored.as_wire_row() for stored in db.messages.read_transcript(
+        target, TranscriptRead(view=TranscriptView.DISPLAY, include_lineage=True))]
     if len(rows) > MAX_MESSAGES:
         raise RuntimeStoreError('overview_too_large', detail='Session exceeds the 20000 row limit')
     messages = []
-    for raw in rows:
-        row = db._row_to_message_dict(raw, warn_context='session.task_overview', summary_flag=True)
+    for row in rows:
         role = row.get('role')
         if role not in ('user', 'assistant', 'tool'):
             continue
