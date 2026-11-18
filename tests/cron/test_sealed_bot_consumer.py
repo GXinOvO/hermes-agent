@@ -21,12 +21,12 @@ async def sealed_bot(tmp_path, monkeypatch):
     from gateway.session_contract import SessionActor
     from gateway.session_local import create_local_session
     from gateway.session_local_title import title_new_session
-    from hermes_state import SessionDB
     from types import SimpleNamespace
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
-    store._db = SessionDB(db_path=tmp_path / 'state.db')
+    from persistence_assembly import open_persistence, profile_scope
+    store._db = open_persistence(profile_scope(home=tmp_path), eager=True)
     runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None)
     runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
@@ -299,7 +299,6 @@ async def test_genuine_cross_profile_producer_uses_its_native_store(sealed_bot, 
     from gateway.session_contract import SessionActor
     from gateway.session_local import create_local_session
     from gateway.session_local_title import title_new_session
-    from hermes_state import SessionDB
     from types import SimpleNamespace
     root = sealed_bot.home
     source, target = root / 'profiles' / 'producer', root / 'profiles' / 'target'
@@ -308,7 +307,8 @@ async def test_genuine_cross_profile_producer_uses_its_native_store(sealed_bot, 
     for home in (source,target):
         (home / 'config.yaml').write_text('platform_toolsets:\n  cli: []\n')
     store = SessionStore(target / 'sessions', GatewayConfig())
-    store._db = SessionDB(db_path=target / 'state.db')
+    from persistence_assembly import open_persistence, profile_scope
+    store._db = open_persistence(profile_scope(home=target), eager=True)
     runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None)
     runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)

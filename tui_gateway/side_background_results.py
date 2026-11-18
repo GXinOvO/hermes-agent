@@ -20,21 +20,26 @@ def _stored_id(session):
 
 
 def _store_path(session):
-    from hermes_state import SessionDB
+    from persistence_assembly import Persistence, store_location
     from tui_gateway import server
     agent_db = getattr(session.get("agent"), "_session_db", None)
     home = session.get("profile_home")
-    if isinstance(agent_db, SessionDB):
-        path = Path(agent_db.db_path).resolve()
+    if isinstance(agent_db, Persistence):
+        path = store_location(agent_db.scope).resolve()
         if home and path.parent != Path(home).resolve():
             raise ValueError("background profile identity conflict")
         return path
     if home:
         return Path(home).resolve() / "state.db"
     db = server._get_db()
-    if not isinstance(db, SessionDB):
+    if not isinstance(db, Persistence):
         raise RuntimeError("background result storage unavailable")
-    return Path(db.db_path).resolve()
+    return store_location(db.scope).resolve()
+
+
+def _open(path):
+    from persistence_assembly import open_persistence, profile_scope
+    return open_persistence(profile_scope(home=Path(path).resolve().parent), eager=True)
 
 
 class SideResult:
@@ -44,8 +49,7 @@ class SideResult:
         self.db, self.task_id, self.binding = db, task_id, binding
 
     def close(self):
-        from hermes_state_registry import release_or_close
-        release_or_close(self.db)
+        self.db.close()
 
     def produce(self, body, extra):
         from hermes_state_background import complete
@@ -71,52 +75,52 @@ class SideResult:
 
 def admit(session, task_id, event_type, *, inputs, cwd):
     from hermes_state_background import begin
-    from hermes_state_registry import acquire, release_or_close
+    from persistence_assembly import store_location
+    from persistence.conversation.sessions import NewSession
     parent = _stored_id(session)
     if not parent:
         raise ValueError("background stored parent identity missing")
-    db = acquire(_store_path(session))
+    db = _open(_store_path(session))
     try:
         agent = session.get("agent")
-        binding = {"parent_session_id": parent, "profile_id": str(Path(db.db_path).parent.resolve()),
+        binding = {"parent_session_id": parent, "profile_id": str(store_location(db.scope).parent),
                    "event_type": event_type, "input_sha256": _digest(inputs),
                    "config_sha256": _digest({"cwd": cwd,
                        "runtime": {name: getattr(agent, name, None) for name in (
                            "model", "provider", "base_url", "api_key", "api_mode", "acp_command", "acp_args",
                            "reasoning_config", "service_tier", "enabled_toolsets", "disabled_toolsets",
                            "request_overrides", "_fallback_chain")}})}
-        if not db.get_session(parent):
-            db.create_session(parent, source=session.get("source") or "tui", cwd=cwd)
+        if db.sessions.get(parent) is None:
+            db.sessions.create(NewSession(parent, source=session.get("source") or "tui", cwd=cwd))
         record = begin(db, task_id, binding)
         if not record.get("claimed"):
-            release_or_close(db)
+            db.close()
             return None
         return SideResult(db, task_id, binding)
     except BaseException:
-        release_or_close(db)
+        db.close()
         raise
 
 
 def attach_results(payload, session, *, db=None, parent_session_id=None):
     """Read the sealed list into a snapshot; never insert messages or start work."""
-    from hermes_state import SessionDB
     from hermes_state_background import results
-    from hermes_state_registry import acquire, release_or_close
+    from persistence_assembly import Persistence, store_location
     parent = parent_session_id or _stored_id(session)
     if not parent:
         return payload
     owned = None
     try:
-        path = Path(db.db_path) if isinstance(db, SessionDB) else _store_path(session) if db is None else None
+        path = store_location(db.scope) if isinstance(db, Persistence) else _store_path(session) if db is None else None
         if path is None or not path.is_file():
             return payload
-        owned = acquire(path)
+        owned = _open(path)
         payload["background_results"] = results(owned, parent)
     except Exception:
         logger.debug("background result read unavailable; no task restarted", exc_info=True)
     finally:
         if owned is not None:
-            release_or_close(owned)
+            owned.close()
     return payload
 
 

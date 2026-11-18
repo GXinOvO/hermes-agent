@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope, store_location
 from hermes_state_background import results
 from tui_gateway import server
 
@@ -21,9 +22,9 @@ def profile_session(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(launch))
     monkeypatch.setattr(server, "_db", None)
     monkeypatch.setattr(server, "_db_error", None)
-    db = SessionDB(secondary / "state.db")
-    db.create_session("stored-parent", source="desktop")
-    db.create_session("foreign", source="desktop")
+    db = open_persistence(profile_scope(home=secondary), eager=True)
+    db.sessions.create(NewSession("stored-parent", source="desktop"))
+    db.sessions.create(NewSession("foreign", source="desktop"))
     agent = SimpleNamespace(_session_db=db, session_id="stored-parent", model="test", provider="test")
     session = {"agent": agent, "session_key": "stale-key", "profile_home": str(secondary),
                "cwd": str(tmp_path), "history": [], "history_lock": threading.RLock(), "running": False}
@@ -31,8 +32,6 @@ def profile_session(tmp_path, monkeypatch):
         yield db, session, launch
     finally:
         db.close()
-        from hermes_state_registry import close_all
-        close_all()
 
 
 def _join(task_id):
@@ -49,7 +48,7 @@ def test_sidecar_seals_before_emit_and_cold_resume_reads_same_result(profile_ses
     events, calls = [], []
     def body():
         from hermes_constants import get_hermes_home
-        assert get_hermes_home().resolve() == Path(db.db_path).parent.resolve()
+        assert get_hermes_home().resolve() == store_location(db.scope).parent.resolve()
         calls.append("execute")
         return "sealed standalone answer"
 
@@ -65,11 +64,11 @@ def test_sidecar_seals_before_emit_and_cold_resume_reads_same_result(profile_ses
     saved = {"event_type": kind, "payload": {"task_id": task_id, "text": "sealed standalone answer"}}
     assert events[0] == (kind, "live-ui", saved["payload"], [saved])
     assert session["history"] == history
-    assert db.get_messages("stored-parent") == []
+    assert db.messages.read_transcript("stored-parent") == ()
     assert not (launch / "state.db").exists()
-    path = db.db_path
+    path = store_location(db.scope)
     db.close()
-    reopened = SessionDB(path)
+    reopened = open_persistence(profile_scope(home=Path(path).parent), eager=True)
     sid = None
     try:
         monkeypatch.setattr(server, "_get_db", lambda: reopened)
@@ -98,7 +97,7 @@ def test_sidecar_seals_before_emit_and_cold_resume_reads_same_result(profile_ses
             sid = None
         assert results(reopened, "foreign") == []
         assert calls == ["execute"]
-        assert reopened.get_messages("stored-parent") == []
+        assert reopened.messages.read_transcript("stored-parent") == ()
     finally:
         if sid:
             server._sessions.pop(sid, None)
@@ -130,7 +129,7 @@ def test_sidecar_identity_conflict_never_starts_second_body(profile_session, mon
         if existing == "target":
             session["agent"].session_id = "foreign"
         if existing == "profile":
-            session["profile_home"] = str(Path(db.db_path).parent / "other")
+            session["profile_home"] = str(store_location(db.scope).parent / "other")
         if existing == "unknown":
             with monkeypatch.context() as dead_owner:
                 dead_owner.setattr("hermes_state_background._owner_live", lambda _: False)
