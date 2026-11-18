@@ -981,6 +981,16 @@ def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
                             sequence, operation, payload):
     """One closed durable mutation and receipt; never call a self-committing API here."""
     from persistence.core.errors import AuthorityRefusal
+    if operation == "session.tools":
+        # The worker writes the pin through the same guarded path as a session writer: the store's
+        # own `session.tools` schema has no room for the `allowed_tools` sidecar, and the allowance
+        # may not widen here either.
+        pin = payload.get("tool_names") if isinstance(payload, dict) else None
+        try:
+            db.update_session_tool_names(session_id, pin)
+        except ValueError as exc:
+            raise RuntimeStoreError('permission_denied', detail=str(exc)) from exc
+        return {'value': None}
     try:
         return _store_of(db).worker_executions.persist_operation(
             epoch=epoch, execution_id=execution_id, session_id=session_id, generation=generation,
