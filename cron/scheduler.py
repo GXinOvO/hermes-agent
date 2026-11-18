@@ -2103,11 +2103,55 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
     return final_response
 
 
+def _cron_finalizer_store(session_db):
+    """The cron finalizer's store verbs over a storage handle or a legacy stand-in.
+
+    The finalizer titles, classifies, stamps the cwd and ends the run session before the store is
+    released; those five verbs live on the store handle now, while a stand-in carries only the
+    plugin-guide methods. A handle (or the stand-in's handle) answers them here; a legacy store that
+    already carries the verbs is used as-is.
+    """
+    from agent.agent_init_session import stand_in_interface
+    from hermes_state_runtime import _holder_of
+    from persistence.sqlite.conversation._store import compression, titles
+    try:
+        from persistence_assembly import Persistence
+    except ImportError:  # pragma: no cover - the handle type always exists in this tree
+        Persistence = None
+    handle = session_db if Persistence is not None and isinstance(session_db, Persistence) else stand_in_interface(session_db)
+    if handle is None:
+        return session_db
+    holder = _holder_of(handle)
+
+    class _Verbs:
+        def get_compression_tip(self, session_id):
+            return compression.get_compression_tip(holder, session_id)
+
+        def set_session_title(self, session_id, title):
+            handle.sessions.set_title(session_id, title)
+
+        def get_next_title_in_lineage(self, base_title):
+            return titles.get_next_title_in_lineage(holder, base_title)
+
+        def session_lifecycle_statuses(self, session_ids):
+            # The handle answers SessionLifecycleStatus members; the callers compare its values.
+            return {sid: getattr(status, 'value', status)
+                    for sid, status in handle.sessions.lifecycle_statuses(list(session_ids)).items()}
+
+        def update_session_cwd(self, session_id, cwd):
+            return handle.sessions.update_cwd(session_id, cwd)
+
+        def end_session(self, session_id, reason):
+            handle.sessions.end(session_id, reason)
+
+    return _Verbs()
+
+
 def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_session_id: str,
                            workdir: Optional[str] = None) -> None:
     """Title, classify, end and release the cron session after the agent turn has returned."""
     # Bound every DB op so storage failure cannot hold the dispatch guard.
-    _session_db = _BoundedCronSessionDB(session_db, job_id)
+    _session_db = _BoundedCronSessionDB(_cron_finalizer_store(session_db), job_id)
     # Compression may have rotated the run onto a continuation: finalize that, not the stale cron
     # id. SessionDB lineage is authoritative; agent.session_id is only a fail-safe.
     _final_cron_session_id = cron_session_id

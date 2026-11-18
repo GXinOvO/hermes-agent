@@ -6,16 +6,18 @@ from unittest.mock import patch
 import pytest
 
 from cron.scheduler import _final_response_from_result, _finalize_cron_session
-from hermes_state import SessionDB
+from persistence.conversation.messages import NewMessage
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
 from tests.agent import test_tool_call_guardrail_runtime as fixtures
 
 
 def test_real_guard_halt_cannot_book_cron_session_complete(tmp_path):
-    db = SessionDB(db_path=tmp_path / 'state.db')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid = 'review-real-guard-halt'
     agent_class = fixtures.AIAgent
     def with_db(*args, **kwargs):
-        return agent_class(*args, **kwargs, session_db=db, session_id=sid)
+        return agent_class(*args, **kwargs, session_db=db, persistence=db, session_id=sid)
     with patch.object(fixtures, 'AIAgent', side_effect=with_db):
         agent = fixtures._make_agent('skill_view', max_iterations=12, platform='cron')
     agent._disable_streaming = True
@@ -33,10 +35,10 @@ def test_real_guard_halt_cannot_book_cron_session_complete(tmp_path):
     assert result['guardrail']['action'] in {'block', 'halt'}
     with pytest.raises(RuntimeError, match='stopped retrying'):
         _final_response_from_result(result, 'review-guard', 'review guard halt', type(agent))
-    lifecycle = db.session_lifecycle_statuses([sid])[sid]
+    lifecycle = getattr(db.sessions.lifecycle_statuses([sid])[sid], 'value', None)
     with patch('hermes_state_registry.release_or_close'):
         _finalize_cron_session(db, agent, 'review-guard', 'review guard halt', sid)
-    session = db.get_session(sid)
+    session = db.sessions.get(sid).as_session_row()
     print(json.dumps({'failed': result['failed'], 'completed': result['completed'],
                       'turn_exit_reason': result['turn_exit_reason'],
                       'persisted_tail_lifecycle': lifecycle, 'session_end_reason': session['end_reason']}))
@@ -52,12 +54,12 @@ def test_real_guard_halt_cannot_book_cron_session_complete(tmp_path):
     ('user', 'interrupted request', 'cron_incomplete_no_output'),
 ])
 def test_session_finalization_preserves_non_guard_outcomes(tmp_path, role, text, expected):
-    db = SessionDB(db_path=tmp_path / 'state.db')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid = 'non-guard-finalization'
-    db.create_session(sid, source='cron')
-    db.append_message(sid, role, text)
+    db.sessions.create(NewSession(sid, source='cron'))
+    db.messages.append(sid, NewMessage(role=role, content=text))
     agent = SimpleNamespace(session_id=sid, _tool_guardrail_halt_decision=None)
     with patch('hermes_state_registry.release_or_close'):
         _finalize_cron_session(db, agent, 'normal-job', 'normal job', sid)
-    assert db.get_session(sid)['end_reason'] == expected
+    assert db.sessions.get(sid).as_session_row()['end_reason'] == expected
     db.close()
