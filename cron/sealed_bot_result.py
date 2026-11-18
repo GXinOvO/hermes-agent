@@ -426,7 +426,13 @@ async def deliver_inside(connection, params):
             return await bot._admit(authority, actor, home, root, key, message, ref, live, entry, author=author,
                                     notification_category=category, sealed=verified)
         except RuntimeStoreError as exc:
-            raise await bot._held_by_another_writer(home, key, exc) or exc
+            held = await bot._held_by_another_writer(home, key, exc)
+            if held is None and str(exc) == 'permission_denied':
+                # Refused before admission: the pin proves nothing left, so settle it as refused
+                # instead of leaving an ``ambiguous`` row the queue would treat as maybe-sent.
+                from gateway.session_bot_mailbox import refuse_pin
+                await refuse_pin(home, key)
+            raise held or exc
 
 
 def verify_receipt(job, receipt):
