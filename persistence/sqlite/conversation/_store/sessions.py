@@ -261,20 +261,29 @@ _SAME_KEY_NAMESPACE_SQL = (
 )
 
 
-_UPSERT_KEEP_EXISTING_SQL = ",\n".join(
-    f"                       {col} = COALESCE(sessions.{col}, excluded.{col})" for col in (
-        "session_key", "chat_id", "chat_type", "thread_id", "parent_session_id", "cwd", "profile_name",
-        "transport_profile", "git_repo_root", "origin_json", "display_name",
-    )
-) + ",\n" + (
-    # Accounting may insert before the creator ('unknown') and a routing write carries 'local':
-    # neither is creation provenance (_UNSET_CREATED_SQL), so a later creator replaces them and
-    # 'local' never replaces anything. A real source, once stamped, is preserved (#56439).
-    "                       created_source = CASE WHEN "
-    + _UNSET_CREATED_SQL.format(col="sessions.created_source")
-    + " THEN COALESCE(NULLIF(excluded.created_source, 'local'), sessions.created_source)"
-    " ELSE sessions.created_source END"
+_UPSERT_KEEP_EXISTING_COLUMNS = (
+    "session_key", "chat_id", "chat_type", "thread_id", "parent_session_id", "cwd", "profile_name",
+    "transport_profile", "git_repo_root", "origin_json", "display_name",
 )
+def _keep_existing_sql(columns) -> str:
+    return ",\n".join(
+        f"                       {col} = COALESCE(sessions.{col}, excluded.{col})" for col in columns
+    ) + ",\n" + (
+        # Accounting may insert before the creator ('unknown') and a routing write carries 'local':
+        # neither is creation provenance (_UNSET_CREATED_SQL), so a later creator replaces them and
+        # 'local' never replaces anything. A real source, once stamped, is preserved (#56439).
+        "                       created_source = CASE WHEN "
+        + _UNSET_CREATED_SQL.format(col="sessions.created_source")
+        + " THEN COALESCE(NULLIF(excluded.created_source, 'local'), sessions.created_source)"
+        " ELSE sessions.created_source END"
+    )
+
+
+_UPSERT_KEEP_EXISTING_SQL = _keep_existing_sql(_UPSERT_KEEP_EXISTING_COLUMNS)
+# A routing key is written at the row's birth only: a legacy row's NULL key is never backfilled
+# (the gateway cannot tell which route such a row belongs to).
+_UPSERT_KEEP_EXISTING_INSERT_ONLY_KEY_SQL = _keep_existing_sql(
+    tuple(col for col in _UPSERT_KEEP_EXISTING_COLUMNS if col != "session_key"))
 
 
 def _inherit_col_sql(col: str, extra: str = "") -> str:
@@ -355,6 +364,7 @@ def _inherit_parent_session_metadata(conn, session_id: str) -> None:
 def _insert_session_row(
     holder: StoreHolder, session_id: str, source: str, model: str | None = None, model_config: dict[str, Any] | None = None,
     system_prompt: str | None = None, user_id: str | None = None, session_key: Optional[str] = None,
+    session_key_insert_only: bool = False,
     chat_id: str | None = None, chat_type: str | None = None, thread_id: str | None = None,
     parent_session_id: str | None = None, cwd: str | None = None, profile_name: Optional[str] = None,
     git_repo_root: str | None = None, origin_json: str | None = None, display_name: str | None = None,
@@ -392,6 +402,7 @@ def _insert_session_row(
     from persistence.sqlite.conversation._store.worker_lifecycle import insert_session_row_in_transaction
     params = dict(session_id=session_id, source=source, model=model, model_config=model_config,
                   system_prompt=system_prompt, user_id=user_id, session_key=session_key,
+                  session_key_insert_only=session_key_insert_only,
                   chat_id=chat_id, chat_type=chat_type, thread_id=thread_id,
                   parent_session_id=parent_session_id, cwd=cwd, profile_name=profile_name,
                   git_repo_root=git_repo_root, origin_json=origin_json, display_name=display_name,

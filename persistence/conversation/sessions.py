@@ -362,6 +362,7 @@ class NewSession:
     parent_session_id: Optional[SessionId] = None
     lineage_kind: SessionLineageKind = SessionLineageKind.NONE
     session_key: Optional[str] = None
+    session_key_insert_only: bool = False
     chat_id: Optional[str] = None
     chat_type: Optional[str] = None
     thread_id: Optional[str] = None

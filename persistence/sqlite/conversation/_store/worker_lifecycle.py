@@ -10,7 +10,7 @@ from persistence.sqlite.conversation._store.sessions import _inherit_parent_sess
 
 def insert_session_row_in_transaction(
         holder, conn, session_id, source, model=None, model_config=None,
-        system_prompt=None, user_id=None, session_key=None, chat_id=None,
+        system_prompt=None, user_id=None, session_key=None, session_key_insert_only=False, chat_id=None,
         chat_type=None, thread_id=None, parent_session_id=None, cwd=None,
         profile_name=None, git_repo_root=None, origin_json=None, display_name=None,
         transport_profile=None):
@@ -19,7 +19,8 @@ def insert_session_row_in_transaction(
     The ordinary constructor should delegate here too. Worker identity is
     validated before entry; this helper never opens or commits a DB.
     """
-    from persistence.sqlite.conversation._store.sessions import _UPSERT_KEEP_EXISTING_SQL
+    from persistence.sqlite.conversation._store.sessions import _UPSERT_KEEP_EXISTING_SQL, \
+        _UPSERT_KEEP_EXISTING_INSERT_ONLY_KEY_SQL
     from persistence.sqlite.conversation._store.retirement import RETIRED_PREFIX
     # A delayed constructor/accounting backfill must not recreate a deleted session
     # beside its durable tombstone (the exact delete retry would then report a stale
@@ -82,7 +83,8 @@ def insert_session_row_in_transaction(
                    THEN NULL
                    ELSE sessions.system_prompt
                END,
-""" + _UPSERT_KEEP_EXISTING_SQL,
+""" + (_UPSERT_KEEP_EXISTING_INSERT_ONLY_KEY_SQL if session_key_insert_only
+              else _UPSERT_KEEP_EXISTING_SQL),
         (
             session_id, source, source, user_id, session_key, chat_id, chat_type, thread_id, model,
             json.dumps(model_config) if model_config else None, system_prompt_hash,

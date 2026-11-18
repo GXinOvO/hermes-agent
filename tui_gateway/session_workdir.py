@@ -618,6 +618,7 @@ def _ensure_session_db_row(session: dict) -> bool:
         try:
             persistence.sessions.create(NewSession(
                 key, source=_session_source(session), model=row_model, model_config=model_config or None,
+                session_key=key, session_key_insert_only=True,
                 parent_session_id=session.get("parent_session_id") or None, cwd=_persisted_session_cwd(session),
                 # The login this session was opened under, in the same ``<provider>:<id>`` form the agent is
                 # built with — the row is the only place the identity reaches the store, and the upsert can't

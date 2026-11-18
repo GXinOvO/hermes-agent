@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 from agent.turn_context import _stage_turn_user_message
 from persistence.conversation.messages import ConversationRequest, TranscriptRead, TranscriptView
+from persistence.conversation.sessions import NewSession
 from persistence_assembly import open_persistence, profile_scope
 from run_agent import AIAgent
-from tests.fixtures.storage_read import conversation, transcript_rows
+from tests.fixtures.storage_read import conversation, session_row, transcript_rows
 from tui_gateway import server
 
 
@@ -35,39 +36,39 @@ def _flush_agent(db, key):
 
 
 def test_desktop_session_row_persists_its_routing_key_at_first_submit(monkeypatch, tmp_path):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid, key = _desktop_session(monkeypatch, db)
     session = server._sessions[sid]
     try:
         assert server._ensure_session_db_row(session) is True
-        assert db.get_session(key)["session_key"] == key
+        assert session_row(db, key)["session_key"] == key
     finally:
         server._sessions.pop(sid, None)
         db.close()
 
 
 def test_existing_desktop_row_does_not_backfill_a_null_routing_key(monkeypatch, tmp_path):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid, key = _desktop_session(monkeypatch, db)
     session = server._sessions[sid]
-    db.create_session(key, source="desktop")
+    db.sessions.create(NewSession(key, source="desktop"))
     try:
-        assert db.get_session(key)["session_key"] is None
+        assert session_row(db, key)["session_key"] is None
         assert server._ensure_session_db_row(session) is True
-        assert db.get_session(key)["session_key"] is None
+        assert session_row(db, key)["session_key"] is None
     finally:
         server._sessions.pop(sid, None)
         db.close()
 
 
 def test_existing_desktop_row_preserves_a_non_null_routing_key(monkeypatch, tmp_path):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid, key = _desktop_session(monkeypatch, db)
     session = server._sessions[sid]
-    db.create_session(key, source="desktop", session_key="existing-routing-key")
+    db.sessions.create(NewSession(key, source="desktop", session_key="existing-routing-key"))
     try:
         assert server._ensure_session_db_row(session) is True
-        assert db.get_session(key)["session_key"] == "existing-routing-key"
+        assert session_row(db, key)["session_key"] == "existing-routing-key"
     finally:
         server._sessions.pop(sid, None)
         db.close()

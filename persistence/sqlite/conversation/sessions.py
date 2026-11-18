@@ -347,6 +347,7 @@ class SQLiteSessionRepository:
                 create_session(holder,
                     spec.session_id, spec.source, model=spec.model, model_config=config or None,
                     system_prompt=spec.system_prompt, user_id=spec.user_id, session_key=spec.session_key,
+                    session_key_insert_only=spec.session_key_insert_only,
                     chat_id=spec.chat_id, chat_type=spec.chat_type, thread_id=spec.thread_id,
                     parent_session_id=spec.parent_session_id, cwd=spec.cwd, profile_name=spec.profile_name,
                     git_repo_root=spec.git_repo_root,
