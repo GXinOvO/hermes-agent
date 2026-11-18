@@ -785,7 +785,7 @@ def _submit_row_owner_key(staged: dict, session: dict) -> str:
 
 
 def _write_submit_user_row(session: dict, text: Any, display_kind: str | None,
-                           accept_metadata: dict | None = None) -> dict | None:
+                           accept_metadata: dict | None = None, source_row: dict | None = None) -> dict | None:
     """Write the submitted user turn to the transcript and RETURN the durable dict (stamped
     ``_DB_PERSISTED_MARKER``/``_row_id``) WITHOUT slotting it on the session. The write half of
     :func:`_persist_submit_user_row`, shared by the busy-queue accept (which attaches the dict to
@@ -801,22 +801,42 @@ def _write_submit_user_row(session: dict, text: Any, display_kind: str | None,
     from agent.context_compressor import _DB_PERSISTED_MARKER
     from agent.message_metadata import stamp_message_timestamp, stamp_message_uid
     from persistence.conversation.messages import NewMessage
-    staged = stamp_message_timestamp({"role": "user", "content": text})
+    staged: dict[str, Any] = stamp_message_timestamp({"role": "user", "content": text})
+    if source_row:
+        staged.update({key: source_row[key] for key in ("timestamp", "message_uid", "display_metadata")
+                       if key in source_row and source_row.get("content") == text})
     if display_kind:
         staged["display_kind"] = display_kind
     if accept_metadata:
-        staged["display_metadata"] = {**accept_metadata}
+        staged["display_metadata"] = {**staged.get("display_metadata", {}), **accept_metadata}
+    from tui_gateway.input_provenance import take_input
+    inbound = take_input(session, text, display_kind)
     with _session_db(session) as db, _persistence_for(db) as persistence:
-        if persistence is None:
+        if not persistence:
+            if inbound:
+                from tui_gateway.input_provenance import InputProvenanceWriteError
+                raise InputProvenanceWriteError("trusted input provenance store unavailable")
             return None
         target = _submit_row_target_key(session)
         try:
-            staged["_row_id"] = persistence.messages.append(target, NewMessage(
-                role="user", content=text, display_kind=display_kind, timestamp=staged["timestamp"],
-                message_uid=stamp_message_uid(staged),  # the live dict the turn adopts carries the row's uid
-                display_metadata=staged.get("display_metadata")))
+            if inbound:
+                from hermes_state_input_receipts import append_received_input
+                staged["timestamp"], staged["message_uid"] = inbound.received_at, inbound.message_uid
+                if inbound.source:
+                    staged['display_metadata'] = {**staged.get('display_metadata', {}), 'ssh_input_v1': inbound.source}
+                staged["_row_id"], staged["display_metadata"] = append_received_input(
+                    db, target, staged, principal_id=inbound.principal_id, request_id=inbound.request_id)
+                inbound.consumed = True
+            else:
+                staged["_row_id"] = persistence.messages.append(target, NewMessage(
+                    role="user", content=text, display_kind=display_kind, timestamp=staged["timestamp"],
+                    message_uid=stamp_message_uid(staged),  # the live dict the turn adopts carries the row's uid
+                    display_metadata=staged.get("display_metadata")))
         except Exception as exc:
             _workdir_reraise_disk_full(exc, "submit-time user row persist failed")
+            if inbound:
+                from tui_gateway.input_provenance import InputProvenanceWriteError
+                raise InputProvenanceWriteError("trusted input provenance write failed") from exc
             return None
     staged[_DB_PERSISTED_MARKER] = True
     # Record the owning session so every later addresser of THIS row (the @-expansion rewrite, the
@@ -826,7 +846,7 @@ def _write_submit_user_row(session: dict, text: Any, display_kind: str | None,
 
 
 def _persist_submit_user_row(session: dict, text: Any, display_kind: str | None,
-                             accept_metadata: dict | None = None) -> None:
+                             accept_metadata: dict | None = None, source_row: dict | None = None) -> None:
     """Write the submitted user turn at send time, before the agent build and turn: the agent's own
     crash persist only runs once the build finished, so quitting a frozen app during a slow first build
     left a session row with no message (#111868). The dict is staged on the session already stamped
@@ -835,7 +855,7 @@ def _persist_submit_user_row(session: dict, text: Any, display_kind: str | None,
     the turn's crash persist then writes the row as before. ``accept_metadata`` marks a row that
     belongs to a still-QUEUED envelope (#125577); a dispatching turn's row is never marked."""
     session.pop("_submit_user_row", None)  # a failed/unsupported write must not acknowledge an older send
-    if (staged := _write_submit_user_row(session, text, display_kind, accept_metadata)) is not None:
+    if (staged := _write_submit_user_row(session, text, display_kind, accept_metadata, source_row)) is not None:
         session["_submit_user_row"] = staged
 
 

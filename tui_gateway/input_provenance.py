@@ -116,7 +116,7 @@ def record_accepted_input(response):
         with server._sessions_lock:
             if server._sessions.get(value.session_id) is not session:
                 return
-            if db.get_session(value.session_key) is None:
+            if db.sessions.get(value.session_key) is None:
                 return
         message = {'role': 'user', 'content': value.text, 'timestamp': value.received_at,
                    'message_uid': value.message_uid}
