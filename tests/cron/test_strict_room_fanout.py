@@ -1,20 +1,31 @@
 import pytest
 
 from gateway import hosted_rooms
+from persistence_assembly import open_persistence, profile_scope
 from tests.cron.test_strict_mixed_fanout import enqueue, owner, peer
 
 
+def _placement(db) -> str:
+    return 'shared' if db.name == 'shared-state.db' else 'profile'
+
+
+def _handle(db):
+    return open_persistence(profile_scope(home=db.parent))
+
+
 def room(home):
-    store = hosted_rooms.default_db_path()
-    hosted_rooms.create_room(store, room_id='room-cron', name='Feed',
-        members=[{'member_id': 'member-alpha', 'profile': 'alpha', 'handle': 'alpha'}],
-        authority_gateway_id=hosted_rooms.local_authority_gateway_id())
-    return store
+    db = hosted_rooms.default_db_path()
+    with _handle(db) as store:
+        hosted_rooms.create_room(store, placement=_placement(db), room_id='room-cron', name='Feed',
+            members=[{'member_id': 'member-alpha', 'profile': 'alpha', 'handle': 'alpha'}],
+            authority_gateway_id=hosted_rooms.local_authority_gateway_id())
+    return db
 
 
-def posts(store):
-    return [event for event in hosted_rooms.read_events(store, room_id='room-cron')['events']
-            if event['kind'] == 'message.user']
+def posts(db):
+    with _handle(db) as store:
+        events = hosted_rooms.read_events(store, placement=_placement(db), room_id='room-cron')['events']
+    return [event for event in events if event['kind'] == 'message.user']
 
 
 @pytest.mark.asyncio
@@ -55,9 +66,11 @@ async def test_room_authority_change_after_claim_stops_before_post(tmp_path, mon
     store = room(tmp_path)
     async with peer() as (url, events):
         await owner(tmp_path, url, 'after_claim')
-        state = hosted_rooms.room_state(store, room_id='room-cron')
-        demote_room(store, room_id='room-cron', observed_gateway_id=state['authority_gateway_id'] + ':new',
-                    observed_epoch=state['authority_epoch'] + 1)
+        with _handle(store) as handle:
+            state = hosted_rooms.room_state(handle, placement=_placement(store), room_id='room-cron')
+            demote_room(handle, placement=_placement(store), room_id='room-cron',
+                        observed_gateway_id=state['authority_gateway_id'] + ':new',
+                        observed_epoch=state['authority_epoch'] + 1)
         one = await owner(tmp_path, url)
     assert one['row']['status'] in {'pending', 'unknown'}
     assert posts(store) == [] and events == []

@@ -524,7 +524,7 @@ def _freeze_room(target, job, content, failure):
             run_key=job['execution_id'], text=_redact_cron_payload(content, 'room payload'), notice=failure)
     path = Path(store[0]) / 'state.db'
     stat = path.stat()
-    identity = {'store': str(path), 'inode': [stat.st_dev, stat.st_ino], 'event': plan}
+    identity = {'store': str(path), 'placement': store[1], 'inode': [stat.st_dev, stat.st_ino], 'event': plan}
     return {'kind': 'room', 'identity': identity}, identity
 
 
@@ -560,7 +560,10 @@ def send_target(state, frozen):
         if [stat.st_dev, stat.st_ino] != identity['inode']:
             raise RuntimeError('strict room store changed after claim')
         plan = identity['event']
-        event = append_event(identity['store'], **plan)
+        from cron.scheduler_delivery_room import _handle
+        placement = identity.get('placement') or ('shared' if Path(identity['store']).name == 'shared-state.db' else 'profile')
+        with _handle((Path(identity['store']).parent, placement)) as store:
+            event = append_event(store, placement=placement, **plan)
         if any(event.get(key) != plan[key] for key in ('room_id', 'event_id', 'kind', 'actor', 'payload', 'authority_epoch')):
             raise RuntimeError('strict room append receipt mismatch')
         return {'ok': True, 'event_id': event['event_id'], 'seq': event['seq']}
