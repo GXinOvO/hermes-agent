@@ -50,7 +50,6 @@ def _snapshot(connection, params, prepared, guard):
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
     read = SourceRead(connection, params, ref, target, binding, guard, revision, raw)
-    read.check()
     return read, relations, missing, unresolved
 
 
@@ -146,8 +145,6 @@ async def collect(connection, params):
             source['reason'] = exc.reason
             sources.append(source)
             limitations.append(f'{source_id}: related source unavailable ({exc.reason}).')
-    for read in reads:
-        read.check()
     complete = not limitations and all(source['complete'] for source in sources)
     if not complete:
         limitations.insert(0, 'Linked-conversation coverage is incomplete; do not infer unseen work.')
