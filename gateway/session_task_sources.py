@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import ExitStack, contextmanager
+from persistence.core.errors import AuthorityRefusal
 from persistence_assembly import store_location
 import json
 import sqlite3
@@ -136,7 +137,8 @@ async def collect(connection, params):
                                for profile_name, stored, kind, row_id in related)
             elif related:
                 limitations.append(f'{source_id}: relationship depth limit reached.')
-        except RuntimeStoreError as exc:
+        except (RuntimeStoreError, AuthorityRefusal) as exc:
+
             if relation == 'primary':
                 raise
             source['reason'] = exc.reason

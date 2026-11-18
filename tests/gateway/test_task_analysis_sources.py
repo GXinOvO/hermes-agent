@@ -7,6 +7,7 @@ import pytest
 from persistence.conversation.sessions import NewSession
 from persistence_assembly import open_persistence, open_persistence_reader, profile_scope, store_location
 from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_read import revision_of
 from tests.fixtures.storage_seed import (append_message, append_messages, rotate_compression, seed_session,
                                         total_changes)
 
@@ -104,6 +105,7 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
     append_message(db, 'shared', 'user', 'Reference-only task. Do not add its todo to the release')
     append_message(db, 'shared', 'tool', '4 remote tests passed', tool_name='terminal', tool_call_id='remote')
     seed_read(linked, 'shared', profile='other')
+    linked.authority._native_legacy_transports = {connection.actor.transport_id: connection.actor}
     linked.connection = connection
     captured = []
 
@@ -122,13 +124,13 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
         assert source['owner']['profile_id'] == str(home) and source['status'] == 'read'
         assert any(row['source_id'] == source['id'] and row['content'] == '4 remote tests passed'
                    for row in captured[0]['messages'])
-        before = db.conversation_revision('shared', include_ancestors=True)
+        before = revision_of(db, 'shared')
         append_message(db, 'shared', 'user', 'New remote requirement')
-        changed = db.conversation_revision('shared', include_ancestors=True)
+        changed = revision_of(db, 'shared')
         assert changed != before
         cached = await run_linked(linked)
         assert cached['result']['analysis']['stale'] is True
-        assert db.conversation_revision('shared', include_ancestors=True) == changed
+        assert revision_of(db, 'shared') == changed
     finally:
         await connection.close()
         db.close()
@@ -140,7 +142,7 @@ async def test_forged_source_or_boolean_row_evidence_is_rejected_and_keeps_succe
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     first = await run_linked(linked, refresh=True)
     assert 'result' in first, first
-    before = linked.db.list_meta_prefix('gateway.task_analysis.v2:')
+    before = linked.db.state_meta.list_prefix('gateway.task_analysis.v2:')
 
     def model(**kwargs):
         value = linked_answer(json.loads(kwargs['user_input']))
@@ -150,7 +152,7 @@ async def test_forged_source_or_boolean_row_evidence_is_rejected_and_keeps_succe
     monkeypatch.setattr(oneshot, 'run_oneshot', model)
     failed = await run_linked(linked, refresh=True)
     assert failed['error']['data']['reason'] == 'invalid_analysis'
-    assert linked.db.list_meta_prefix('gateway.task_analysis.v2:') == before
+    assert linked.db.state_meta.list_prefix('gateway.task_analysis.v2:') == before
 
 
 @pytest.mark.asyncio
@@ -159,10 +161,10 @@ async def test_bounds_are_visible_and_v1_cache_stays_available(linked, monkeypat
     from gateway import session_task_sources
     monkeypatch.setattr(session_task_sources, 'MAX_SOURCES', 2)
     append_message(linked.db, linked.ref.session_id, 'user', 'Also check @session:default/third')
-    linked.db.sessions.create(NewSession('third', source='subagent''subagent'))
-    linked.append_message(db, 'third', 'user', 'More work')
+    linked.db.sessions.create(NewSession('third', source='subagent'))
+    append_message(linked.db, 'third', 'user', 'More work')
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     result = await run_linked(linked, refresh=True)
     assert result['result']['analysis']['complete'] is False
     assert any('limit' in item.lower() for item in result['result']['analysis']['limitations'])
-    assert linked.db.list_meta_prefix('gateway.task_analysis.v1:') == []
+    assert linked.db.state_meta.list_prefix('gateway.task_analysis.v1:') == ()

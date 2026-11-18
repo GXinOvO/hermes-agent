@@ -48,13 +48,17 @@ async def test_explicit_profile_selects_native_source_when_ids_collide(linked, m
     monkeypatch.setattr(session_search_tool, '_cross_profile_reads_confined', lambda: False)
     resolve_profile = session_search_tool._resolve_profile_db
     monkeypatch.setattr(session_search_tool, '_resolve_profile_db',
-                        lambda name, handles: handles.enter_context(
-                            open_persistence_reader(store_location(linked.db.scope)))
+                        lambda name, handles: _default_reader(handles)
                         if profiles.normalize_profile_name(name) == 'default' else resolve_profile(name, handles))
+    def _default_reader(handles):
+        reader = handles.enter_context(open_persistence_reader(store_location(linked.db.scope)))
+        reader.ready()
+        return reader
     connection = AuthorityConnection(linked.authority, linked.connection.transport,
                                      {'user_id': linked.connection.actor.subject, 'provider': 'local', 'profile_scope': 'host',
                                       'profile_id': linked.authority.profile_id, 'instance_id': linked.authority.instance_id,
                                       'capabilities': list(linked.connection.actor.capabilities)})
+    linked.authority._native_legacy_transports = {connection.actor.transport_id: connection.actor}
     linked.connection = connection
     for db, text in ((linked.db, 'default collision evidence'), (other, 'other collision evidence')):
         db.sessions.create(NewSession('collision', source='cli'))
