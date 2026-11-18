@@ -35,7 +35,7 @@ class SessionToolPermissionMixin:
             if preserve_cache or (isinstance(pin, dict) and "allowed_tools" in pin):
                 raise ValueError("Cannot persist tool permission: session row is missing")
             return
-        current = saved_tool_permission(record.model_config_json, record.tool_pin)
+        current = saved_tool_permission(record.model_config_json, record.tool_names)
         incoming = _allowed(pin["allowed_tools"]) if isinstance(pin, dict) and "allowed_tools" in pin else None
         if current is not None and incoming is not None and not set(incoming) <= set(current):
             raise ValueError("Tool permission cannot expand an existing allowed_tools restriction")

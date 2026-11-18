@@ -337,6 +337,13 @@ class _SessionDB:
         SessionToolPermissionMixin.update_session_tool_names(self, session_id, pin, preserve_cache=preserve_cache)
 
     @_held
+    def update_conversation_model_config_value(self, session_id: "str", key: "str", update: "Any") -> "Optional[str]":
+        """Fork entry point: read one ``model_config`` key and write ``update(value)`` back."""
+        sessions = self._store.sessions
+        sessions.patch_model_config(session_id, {key: update(sessions.get_model_config_value(session_id, key))})
+        return session_id
+
+    @_held
     def list_sessions_rich(
         self, source: "Optional[str]" = None, sources: "Optional[list[str]]" = None,
         exclude_sources: "Optional[list[str]]" = None, cwd_prefix: "Optional[str]" = None, limit: "int" = 20,

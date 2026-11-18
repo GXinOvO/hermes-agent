@@ -980,29 +980,9 @@ def _worker_finish(db, conn, session_id, payload):
 def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
                             sequence, operation, payload):
     """One closed durable mutation and receipt; never call a self-committing API here."""
-    from hermes_state_worker_context import (worker_context, worker_prompt, worker_row_role, worker_sidecars,
-                                             worker_tail_role, worker_tool_names)
-    from hermes_state_worker_compression import WORKER_COMPRESSION_HANDLERS
-    from hermes_state_worker_lifecycle import WORKER_LIFECYCLE_HANDLERS
-    handlers = {
-        **WORKER_LIFECYCLE_HANDLERS,
-        **WORKER_COMPRESSION_HANDLERS,
-        'session.context': worker_context,
-        'session.prompt': worker_prompt,
-        'session.sidecars': worker_sidecars,
-        'session.tools': worker_tool_names,
-        'session.tail_role': worker_tail_role,
-        'session.row_role': worker_row_role,
-        'transcript.append': _worker_append,
-        'execution.finish': _worker_finish,
-        'usage.main': _worker_usage,
-        'usage.auxiliary': lambda db, conn, sid, p: _worker_usage(db, conn, sid, p, auxiliary=True),
-        **{name: (lambda db, conn, sid, p, op=name: _worker_turn(db, conn, sid, p, op))
-           for name in ('turn.acquire', 'turn.renew', 'turn.release')},
-    }
-    return apply_worker_receipt(db, epoch=epoch, execution_id=execution_id, session_id=session_id,
-                                generation=generation, sequence=sequence, operation=operation,
-                                payload=payload, handlers=handlers)
+    return _store_of(db).worker_executions.persist_operation(
+        epoch=epoch, execution_id=execution_id, session_id=session_id, generation=generation,
+        sequence=sequence, operation=operation, payload=payload)
 
 
 def apply_worker_receipt(db, *, epoch, execution_id, session_id, generation, sequence,
