@@ -1246,8 +1246,8 @@ class SessionStore(
         return entry.session_id if entry is not None and entry.session_id else session_key
 
     def _read_terminal_cwd_durable(self, session_key: str) -> Optional[str]:
-        db = self._db_for_key(session_key)
-        getter = getattr(db, "get_meta", None) if db is not None else None
+        db = self._persistence_for_key(session_key)
+        getter = db.state_meta.get if db is not None else None
         try:
             value = getter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key)) \
                 if callable(getter) else None
@@ -1259,8 +1259,8 @@ class SessionStore(
         return self._read_terminal_cwd_fallback(session_key)
 
     def _write_terminal_cwd_durable(self, session_key: str, cwd: Optional[str]) -> bool:
-        db = self._db_for_key(session_key)
-        setter = getattr(db, "set_meta", None) if db is not None else None
+        db = self._persistence_for_key(session_key)
+        setter = db.state_meta.set if db is not None else None
         if callable(setter):
             try:
                 setter(_TERMINAL_CWD_META_PREFIX + self._terminal_cwd_state_key(session_key), cwd or "")

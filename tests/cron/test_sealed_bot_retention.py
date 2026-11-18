@@ -22,8 +22,10 @@ def _produce(bot, monkeypatch, engine):
     agent = MagicMock()
     def respond(*args, **kwargs):
         from gateway.session_cron import current_execution
+        from persistence.conversation.messages import NewMessage
         authority, session_id, _, _ = current_execution()
-        authority.db.append_message(session_id, 'assistant', 'SEALED_AGENT_REPORT')
+        authority.persistence.messages.append(
+            session_id, NewMessage(role='assistant', content='SEALED_AGENT_REPORT'))
         return {'final_response': 'SEALED_AGENT_REPORT', 'messages': []}
     agent.run_conversation.side_effect = respond
     monkeypatch.setattr('run_agent.AIAgent', lambda **kw: agent)
