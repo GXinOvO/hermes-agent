@@ -258,7 +258,7 @@ def latest_session_admission(db, *, session_id: str, accept) -> dict | None:
     lane needs only its latest envelope, not the session's whole history. One newest-first stream
     per status, merged by ``seq``, so each walks the (target, status, seq) index with no sort."""
     sql = "SELECT * FROM session_admissions WHERE target_session_id=? AND status=? ORDER BY seq DESC"
-    with db._read_ctx() as conn:
+    with _store_of(db).holder()._read_ctx() as conn:
         cursors = [conn.execute(sql, (session_id, status)) for status in _ADMISSION_STATUSES]
         try:
             rows = heapq.merge(*cursors, key=lambda row: row['seq'], reverse=True)
@@ -307,7 +307,7 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
         # tell this turn's own failed-turn boundary from an earlier turn's (#134889 GW-21).
         claimed['transcript_mark'] = conn.execute('SELECT COALESCE(MAX(id), 0) FROM messages').fetchone()[0]
         return claimed
-    return db._execute_write(write)
+    return _store_of(db).holder()._execute_write(write)
 
 
 def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, outcome: str,
@@ -627,7 +627,7 @@ def mutate_runtime_session(db, *, epoch: int, principal_id: str, session_id: str
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
                      (key, _json({'digest': digest, 'result': result})))
         return result, event
-    result, event = db._execute_write(write)
+    result, event = _store_of(db).holder()._execute_write(write)
     if event is not None:
         from hermes_state_common import emit_session_deleted
         emit_session_deleted(db, event.session_ids, reason=event.reason, primary=session_id)

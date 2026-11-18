@@ -6,14 +6,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
+from persistence.conversation.lineage import CompressionChild
+from persistence.conversation.messages import ConversationRequest, NewMessage, TranscriptRead, TranscriptView
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope, store_location
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_read import conversation, session_row, transcript_rows
 from tests.tui_gateway.test_submit_time_user_row import _desktop_session
 from tui_gateway import server
 
 
 @pytest.fixture
 def desktop(monkeypatch, tmp_path):
-    db = SessionDB(tmp_path / 'state.db')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     sid, key = _desktop_session(monkeypatch, db)
     starts = []
     monkeypatch.setattr(server, '_start_agent_build', lambda *_: None)
@@ -35,11 +40,24 @@ def history(db, before):
     assert spec is not None and spec.loader is not None
     collector = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(collector)
-    return collector.collect_history(db.db_path, before, dt.datetime.now(dt.UTC))
+    return collector.collect_history(store_location(db.scope), before, dt.datetime.now(dt.UTC))
+
+
+def sql(db, statement, params=()):
+    with raw_holder(db)._read_ctx() as conn:
+        return conn.execute(statement, tuple(params)).fetchall()
+
+
+def write_sql(db, statement):
+    raw_holder(db)._execute_write(lambda conn: conn.execute(statement))
 
 
 def admissions(db):
-    return [dict(row) for row in db._conn.execute('SELECT * FROM session_admissions ORDER BY seq')]
+    return [dict(row) for row in sql(db, 'SELECT * FROM session_admissions ORDER BY seq')]
+
+
+def rows(db, key, view=TranscriptView.ALL):
+    return transcript_rows(db, key, TranscriptRead(view=view))
 
 
 _UNSET = object()
@@ -117,7 +135,7 @@ async def test_authenticated_desktop_submit_is_collectable_before_the_agent_runs
     text = '我更喜欢先给结论，再给证据。'
     reply = await receive(sid, text, identity=desktop_identity())
     assert reply['result']['status'] == 'streaming', reply
-    stored = db.get_messages_as_conversation(key, include_row_ids=True)
+    stored = conversation(db, key, ConversationRequest(include_row_ids=True))
     assert [row['content'] for row in stored] == [text]
     result = history(db, before)
     assert result['complete_within_declared_scope'] is True, result
@@ -128,8 +146,8 @@ async def test_authenticated_desktop_submit_is_collectable_before_the_agent_runs
     assert row['generation'] is None and row['owner_epoch'] is None
     assert json.loads(row['payload_json'])['text'] == text
     assert stored[0]['display_metadata']['submission_id'] == row['request_id']
-    assert db.display_message_count(key) == 1
-    assert [message['content'] for message in db.get_messages(key, include_compacted=True)] == [text]
+    assert len(rows(db, key, TranscriptView.DISPLAY)) == 1
+    assert [message['content'] for message in rows(db, key, TranscriptView.DISPLAY)] == [text]
 
 
 @pytest.mark.asyncio
@@ -266,7 +284,7 @@ async def test_private_ssh_ticket_binds_only_its_connection(desktop, monkeypatch
         row, = admissions(db)
         assert row['target_session_id'] == key
         assert json.loads(row['payload_json'])['text'] == 'private SSH connection input'
-        stored = db.get_messages_as_conversation(key, include_row_ids=True)
+        stored = conversation(db, key, ConversationRequest(include_row_ids=True))
         source = next(m for m in stored if m['content'] == 'private SSH connection input')['display_metadata']['ssh_input_v1']
         assert source['instance_id'] == proof['instance_id']
         assert source['connection_id'] == trusted.scope['hermes.ssh_input']['connection_id']
@@ -348,12 +366,12 @@ async def test_terminal_receipt_does_not_take_over_the_live_gateway_epoch(deskto
     from hermes_state_runtime import begin_runtime_epoch, admit_session_input, claim_session_input
 
     db, sid, key, _session, _starts = desktop
-    db.create_session('other', source='gui')
+    db.sessions.create(NewSession('other', source='gui'))
     epoch = begin_runtime_epoch(db, instance_id='the-existing-gateway')
-    before = dict(db._conn.execute('SELECT * FROM runtime_epoch').fetchone())
+    before = dict(sql(db, 'SELECT * FROM runtime_epoch')[0])
     await receive(sid, 'ordinary local submit')
-    assert dict(db._conn.execute('SELECT * FROM runtime_epoch').fetchone()) == before
-    assert db.get_session(key)['runtime_generation'] == 0
+    assert dict(sql(db, 'SELECT * FROM runtime_epoch')[0]) == before
+    assert session_row(db, key)['runtime_generation'] == 0
     assert claim_session_input(db, epoch=epoch, session_id=key) is None
     native = admit_session_input(db, epoch=epoch, principal_id='uid:fixture', session_id='other',
                                  request_id='canonical-next', payload={'text': 'other conversation'})
@@ -365,22 +383,22 @@ def test_receipt_and_message_rollback_together(tmp_path):
     from agent.message_metadata import stamp_message_timestamp, stamp_message_uid
     import sqlite3
 
-    with SessionDB(tmp_path / 'state.db') as db:
-        db.create_session('s', source='desktop')
+    with open_persistence(profile_scope(home=tmp_path), eager=True) as db:
+        db.sessions.create(NewSession('s', source='desktop'))
         message = stamp_message_timestamp({'role': 'user', 'content': 'will not commit'})
         stamp_message_uid(message)
-        db._conn.execute("CREATE TRIGGER reject_input BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT,'injected'); END")
+        write_sql(db, "CREATE TRIGGER reject_input BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT,'injected'); END")
         with pytest.raises(sqlite3.IntegrityError, match='injected'):
             append_received_input(db, 's', message, principal_id='uid:fixture', request_id='receive-once')
         assert admissions(db) == []
-        assert db.get_session('s')['message_count'] == 0
-        assert db._conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
-        db._conn.execute('DROP TRIGGER reject_input')
+        assert session_row(db, 's')['message_count'] == 0
+        assert sql(db, 'SELECT count(*) FROM messages')[0][0] == 0
+        write_sql(db, 'DROP TRIGGER reject_input')
         first = append_received_input(db, 's', message, principal_id='uid:fixture', request_id='receive-once')
         second = append_received_input(db, 's', message, principal_id='uid:fixture', request_id='receive-once')
         assert first == second
         assert len(admissions(db)) == 1
-        assert db.get_session('s')['message_count'] == 1
+        assert session_row(db, 's')['message_count'] == 1
 
 
 @pytest.mark.asyncio
@@ -414,7 +432,7 @@ async def test_busy_correction_keeps_the_original_received_input(desktop, monkey
     reply = await receive(sid, 'this is my correction')
     assert reply['result']['status'] == ('redirected' if mode == 'interrupt' else 'steered')
     assert seen == ['this is my correction']
-    assert db.get_messages_as_conversation(key) == []
+    assert conversation(db, key) == []
     assert [row['text'] for row in history(db, before)['messages']] == ['this is my correction']
     assert len(admissions(db)) == 1
 
@@ -428,12 +446,12 @@ async def test_source_receipt_failure_does_not_misreport_an_accepted_correction(
         session_id=key, _supports_active_turn_redirect=True,
         redirect=lambda text: seen.append(text) or True))
     server._ensure_session_db_row(session)
-    db._conn.execute("CREATE TRIGGER reject_receipt BEFORE INSERT ON session_admissions BEGIN SELECT RAISE(ABORT,'receipt injected failure'); END")
+    write_sql(db, "CREATE TRIGGER reject_receipt BEFORE INSERT ON session_admissions BEGIN SELECT RAISE(ABORT,'receipt injected failure'); END")
     response = await receive(sid, 'already accepted correction')
     assert response['result']['status'] == 'redirected', response
     assert seen == ['already accepted correction']
     assert admissions(db) == []
-    assert db._conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
+    assert sql(db, 'SELECT count(*) FROM messages')[0][0] == 0
 
 
 @pytest.mark.asyncio
@@ -445,7 +463,7 @@ async def test_ordinary_submit_receipt_failure_is_not_accepted(desktop, monkeypa
                         lambda *_args, **_kwargs: (_ for _ in ()).throw(LookupError('ordinary receipt failure')))
     response = await receive(sid, 'ordinary input with failed provenance')
     assert 'error' in response, response
-    assert db.get_messages_as_conversation(key, include_inactive=True) == []
+    assert conversation(db, key, ConversationRequest(view=TranscriptView.ALL)) == []
     assert admissions(db) == []
 
 
@@ -506,11 +524,11 @@ async def test_merged_queue_retains_each_received_original(desktop, monkeypatch,
     assert [row['text'] for row in result['messages']] == ['first queued', 'second queued']
     assert result['complete_within_declared_scope'] is False
     assert result['uncertain_source_count'] > 0
-    assert [row['content'] for row in db.get_messages_as_conversation(key)] == ['first queued\n\nsecond queued']
+    assert [row['content'] for row in conversation(db, key)] == ['first queued\n\nsecond queued']
     if ssh:
-        witnesses = db._conn.execute("SELECT content,display_metadata FROM messages WHERE active=0 ORDER BY id").fetchall()
+        witnesses = [row for row in rows(db, key) if row['active'] == 0]
         assert [row['content'] for row in witnesses] == ['first queued', 'second queued']
-        assert all(json.loads(row['display_metadata'])['ssh_input_v1'] == {**source, 'sequence': 1}
+        assert all(row['display_metadata']['ssh_input_v1'] == {**source, 'sequence': 1}
                    for row in witnesses)
 
 
@@ -549,13 +567,13 @@ async def test_accepted_correction_does_not_recreate_a_deleted_session(desktop, 
     response = await pending
     assert response['result']['status'] == 'redirected'
     assert delivered == ['private correction']
-    assert db.get_session(key) is None
+    assert session_row(db, key) is None
     assert admissions(db) == []
-    assert db._conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
+    assert sql(db, 'SELECT count(*) FROM messages')[0][0] == 0
 
 
 @pytest.mark.asyncio
-async def test_inflight_receipt_does_not_recreate_a_deleted_db_row(desktop, monkeypatch):
+async def test_inflight_receipt_does_not_recreate_a_deleted_db_row(desktop, monkeypatch, tmp_path):
     import asyncio
     import hermes_state_input_receipts as receipts
     import threading
@@ -578,12 +596,12 @@ async def test_inflight_receipt_does_not_recreate_a_deleted_db_row(desktop, monk
     pending = asyncio.create_task(receive(sid, 'deleted before receipt commit'))
     try:
         assert await asyncio.to_thread(blocked.wait, 5)
-        assert db.delete_session(key)
+        assert db.sessions.delete(key, media_root=str(tmp_path / 'media'))
     finally:
         release.set()
     response = await pending
     assert response['result']['status'] == 'redirected', response
-    assert db.get_session(key) is None
+    assert session_row(db, key) is None
     assert admissions(db) == []
 
 
@@ -614,9 +632,9 @@ async def test_accepted_correction_keeps_ack_when_session_rotates(desktop, monke
     pending = asyncio.create_task(receive(sid, 'accepted before rotation'))
     try:
         assert await asyncio.to_thread(blocked.wait, 5)
-        await asyncio.to_thread(db.publish_compression_child,
-            parent_session_id=key, child_session_id='rotated-child', source='desktop',
-            messages=[{'role': 'assistant', 'content': 'compressed handoff'}],
+        await asyncio.to_thread(db.lineage.publish_compression_child, key,
+            CompressionChild(session_id='rotated-child', source='desktop'),
+            [NewMessage(role='assistant', content='compressed handoff')],
             require_compression_lease=False)
         session['agent'].session_id = 'rotated-child'
     finally:
@@ -639,7 +657,7 @@ async def test_accepted_correction_is_not_bound_to_a_replaced_runtime_session(de
     db, sid, key, session, _starts = desktop
     other_sid, other_key = _desktop_session(monkeypatch, db)
     other_session = server._sessions[other_sid]
-    db.create_session(other_key, source='desktop')
+    db.sessions.create(NewSession(other_key, source='desktop'))
     monkeypatch.setattr(server, '_load_busy_input_mode', lambda: 'interrupt')
     delivered = []
     session.update(running=True, agent=SimpleNamespace(
@@ -673,10 +691,10 @@ async def test_accepted_correction_is_not_bound_to_a_replaced_runtime_session(de
         assert not [row for row in admissions(db) if row['target_session_id'] == other_key], (
             sid, key, other_sid, other_key,
             [(row['target_session_id'], row['request_id'], json.loads(row['payload_json'])) for row in admissions(db)],
-            db.get_messages_as_conversation(other_key, include_inactive=True),
+            conversation(db, other_key, ConversationRequest(view=TranscriptView.ALL)),
             server._sessions.get(sid) is other_session,
         )
-        assert not db.get_messages_as_conversation(other_key, include_inactive=True)
+        assert not conversation(db, other_key, ConversationRequest(view=TranscriptView.ALL))
     finally:
         release.set()
         with server._sessions_lock:
@@ -724,15 +742,15 @@ async def test_recorded_receipt_can_be_retired_with_the_session(desktop):
     await receive(sid, 'private received words')
     admission_id = admissions(db)[0]['admission_id']
     epoch = runtime.begin_runtime_epoch(db, instance_id='owner-after-local-turn')
-    session = db.get_session(key)
+    session = session_row(db, key)
     runtime.mutate_runtime_session(db, epoch=epoch, principal_id='uid:fixture', session_id=key,
         request_id='delete', expected_revision=session['runtime_revision'],
         expected_generation=session['runtime_generation'], operation='delete', payload={})
-    assert db.get_session(key) is None
+    assert session_row(db, key) is None
     assert admissions(db) == []
-    assert db._conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
-    retained = db._conn.execute('SELECT value FROM state_meta WHERE key=?',
-                                (ADMISSION_PREFIX + admission_id,)).fetchone()
+    assert sql(db, 'SELECT count(*) FROM messages')[0][0] == 0
+    retained = sql(db, 'SELECT value FROM state_meta WHERE key=?',
+                   (ADMISSION_PREFIX + admission_id,))[0]
     assert json.loads(retained[0])['payload_json'] == '{}'
     assert 'private received words' not in retained[0]
 
@@ -742,13 +760,9 @@ async def test_rewinding_a_received_input_retires_its_source_witness(desktop):
     db, sid, key, _session, _starts = desktop
     before = dt.datetime.now(dt.UTC)
     await receive(sid, 'rewind this received input')
-    active = db._conn.execute(
-        "SELECT id FROM messages WHERE session_id=? AND active=1 AND role='user' ORDER BY id LIMIT 1", (key,)
-    ).fetchone()[0]
-    db.rewind_to_message(key, active)
-    witness = db._conn.execute(
-        "SELECT display_metadata FROM messages WHERE session_id=? AND active=0 ORDER BY id DESC LIMIT 1", (key,)
-    ).fetchone()[0]
+    db.messages.rewind_user_turn(key, 0)
+    witness = sql(db, "SELECT display_metadata FROM messages WHERE session_id=? AND active=0 ORDER BY id DESC LIMIT 1",
+                  (key,))[0][0]
     assert 'submission_id' not in (json.loads(witness or '{}'))
     result = history(db, before)
     assert result['included_messages'] == 0
@@ -770,7 +784,7 @@ def test_closed_input_scope_cannot_be_inherited_by_a_delayed_callback(desktop):
 
 
 @pytest.mark.asyncio
-async def test_source_binding_survives_the_real_turn_flush_and_cold_read(desktop):
+async def test_source_binding_survives_the_real_turn_flush_and_cold_read(desktop, tmp_path):
     from tests.tui_gateway.test_submit_time_user_row import _flush_agent
     from agent.turn_context import _stage_turn_user_message
 
@@ -786,8 +800,8 @@ async def test_source_binding_survives_the_real_turn_flush_and_cold_read(desktop
     result = history(db, before)
     assert result['complete_within_declared_scope'] is True
     assert [row['text'] for row in result['messages']] == [text]
-    with SessionDB(db.db_path) as cold:
-        saved = cold.get_messages_as_conversation(key)
+    with open_persistence(profile_scope(home=tmp_path), eager=True) as cold:
+        saved = conversation(cold, key)
         assert len([row for row in saved if row['role'] == 'user']) == 1
         assert saved[0]['display_metadata']['submission_id'] == admissions(db)[0]['request_id']
 
@@ -798,7 +812,7 @@ async def test_expanded_text_is_not_certified_as_the_users_original_words(deskto
     await receive(sid, 'read @private.txt')
     agent = SimpleNamespace(_pending_cli_user_message=None, _session_persist_lock=None)
     server._adopt_submit_user_row(session, agent, 'read @private.txt\n\nfile payload', 'read @private.txt')
-    source = db._conn.execute('SELECT content FROM messages WHERE session_id=? AND active=1 ORDER BY id DESC LIMIT 1', (key,)).fetchone()[0]
+    source = sql(db, 'SELECT content FROM messages WHERE session_id=? AND active=1 ORDER BY id DESC LIMIT 1', (key,))[0][0]
     proof = json.loads(admissions(db)[0]['payload_json'])
     assert proof['text'] == 'read @private.txt'
     assert source != proof['text']
