@@ -344,6 +344,13 @@ class _SessionDB:
         return session_id
 
     @_held
+    def patch_session_model_config(self, session_id: "str", patch: dict) -> None:
+        """Fork entry point: merge ``patch`` into ``model_config`` (None removes a key)."""
+        if not session_id or not patch:
+            return
+        self._store.sessions.patch_model_config(session_id, patch)
+
+    @_held
     def list_sessions_rich(
         self, source: "Optional[str]" = None, sources: "Optional[list[str]]" = None,
         exclude_sources: "Optional[list[str]]" = None, cwd_prefix: "Optional[str]" = None, limit: "int" = 20,
