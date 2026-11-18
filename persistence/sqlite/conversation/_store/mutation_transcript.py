@@ -9,6 +9,9 @@ from persistence.sqlite.conversation._store.messages_sql import _ACTIVE_IDS_SQL,
 def rewind_in_transaction(holder, conn, session_id, target_message_id, *,
                           preserve_compaction_handoff=False, expected_active_ids=None,
                           expected_target_content=None):
+    """Deactivate the target turn's active rows and retire their source receipts: a withdrawn turn is no
+    longer "received", so its user rows and the inactive duplicate witness sharing their message_uid lose
+    their ``submission_id``."""
     _check_transcript_write_guards(holder,
         conn, session_id, None, reject_active_turn_lease=True, reject_active_compression_lock=True)
     if expected_active_ids is not None:
@@ -30,6 +33,11 @@ def rewind_in_transaction(holder, conn, session_id, target_message_id, *,
                                      (session_id, target_message_id)).fetchall()]
     if ids:
         conn.execute(f"UPDATE messages SET active = 0 WHERE id IN ({_placeholders(ids)})", ids)
+        conn.execute(
+            "UPDATE messages SET display_metadata = json_remove(display_metadata, '$.submission_id') "
+            f"WHERE session_id = ? AND json_extract(display_metadata, '$.submission_id') IS NOT NULL "
+            f"AND message_uid IN (SELECT message_uid FROM messages WHERE id IN ({_placeholders(ids)}) "
+            "AND role = 'user' AND message_uid IS NOT NULL)", (session_id, *ids))
     if replacement is not None:
         _insert_message_rows(holder, conn, session_id, [replacement])
         replacement_message_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
