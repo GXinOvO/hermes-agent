@@ -13,7 +13,10 @@ import pytest
 from cron import scheduler
 from cron import memory_audit_policy
 from gateway import session_cron
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope
+from persistence.conversation.sessions import NewSession
+from persistence.sqlite.conversation._store.messages import append_messages_batch as _append_batch
+from tests.fixtures.storage_holder import raw_holder
 from tests.agent import test_tool_call_guardrail_runtime as fixtures
 from tools.memory_tool_store import MemoryStore
 
@@ -78,8 +81,8 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
     (report_dir / 'baseline.json').write_text(json.dumps({'profile_home': str(home), 'files': files}))
     monkeypatch.setattr(memory_audit_policy, 'BASELINE_SHA256', hashlib.sha256((report_dir / 'baseline.json').read_bytes()).hexdigest())
 
-    db = SessionDB(home / 'state.db')
-    db.create_session('interaction', source='desktop')
+    db = open_persistence(profile_scope(home=home))
+    db.sessions.create(NewSession('interaction', source='desktop'))
     if scenario.startswith('complete_'):
         from gateway.run_turn_persistence import GatewayTurnPersistenceMixin
         from gateway.session_display import submission_turn_scope
@@ -98,16 +101,16 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
         with submission_turn_scope(admission['admission_id'], request_id):
             message = GatewayTurnPersistenceMixin._hmwa_user_transcript_entry(
                 event, prepared, _audit_window_timestamp())
-        db.append_messages_batch('interaction', [message])
+        _append_batch(raw_holder(db), 'interaction', [message])
     elif scenario == 'partial_empty':
         pass
     elif scenario == 'partial_unknown_bot':
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': 'Synthetic opaque bot-origin evidence',
              'display_kind': 'hidden', 'timestamp': _audit_window_timestamp()},
         ])
     elif scenario == 'partial_hidden_notice':
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': '[Background process synthetic]\nUnverified human preference',
              'display_kind': 'hidden', 'timestamp': _audit_window_timestamp()},
         ])
@@ -117,10 +120,10 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
         carry_unadmitted_user_message(messages, 'unverified request', 'visible text',
                                       timestamp=_audit_window_timestamp(), display_kind=None,
                                       display_metadata=None, platform_id=None)
-        db.append_messages_batch('interaction', messages['messages'])
+        _append_batch(raw_holder(db), 'interaction', messages['messages'])
     elif scenario == 'partial_absorbed_content':
         now = _audit_window_timestamp()
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': 'Synthetic first request', 'message_uid': 'same', 'timestamp': now},
             {'role': 'user', 'content': 'Synthetic first request', 'message_uid': 'same', 'timestamp': now,
              '_absorbed_message_uids': ['missing-synthetic-user']},
@@ -135,24 +138,24 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
         carrier = dict(original)
         compressor._merge_summary_into_tail_row(carrier, 'Synthetic summary', 'user', False)
         inflight = {'role': 'user', 'content': 'Unwitnessed synthetic request.', 'message_uid': 'later', 'timestamp': now}
-        db.append_messages_batch('interaction', [original, *compressor._reappend_inflight_user_task([carrier], inflight)])
+        _append_batch(raw_holder(db), 'interaction', [original, *compressor._reappend_inflight_user_task([carrier], inflight)])
     elif scenario.startswith('partial_'):
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': '[CRON ambiguous fixture]', 'timestamp': _audit_window_timestamp()},
         ])
     elif scenario == 'complete_invisible_unicode':
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': 'Synthetic a\u200bb preference.', 'timestamp': _audit_window_timestamp()},
         ])
     else:
-        db.append_messages_batch('interaction', [
+        _append_batch(raw_holder(db), 'interaction', [
             {'role': 'user', 'content': 'Synthetic preference evidence.', 'timestamp': _audit_window_timestamp()},
         ])
     monkeypatch.setattr(memory_audit_policy, 'PROFILE_HOME', home)
     if scenario == 'invalid_publication':
         monkeypatch.setattr(memory_audit_policy, 'publication_binding', lambda data, current_home: None)
     session_id, job_id, fire_id = 'synthetic-cron', '562b2c8515ee', 'synthetic-fire'
-    db.create_session(session_id, source='cron')
+    db.sessions.create(NewSession(session_id, source='cron'))
 
     collector_target = scripts / memory_audit_policy.SCRIPT_NAME
     collector_file = 'scripts/' + memory_audit_policy.SCRIPT_NAME
