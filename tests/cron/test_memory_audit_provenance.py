@@ -101,10 +101,9 @@ def test_malformed_admission_principal_is_uncertain_not_collection_failure(colle
         raw_holder(db)._execute_write(lambda conn: conn.execute(
             'UPDATE session_admissions SET principal_id=? WHERE admission_id=?',
             ('', receipt['admission_id'])))
-        db.append_message(
-            'malformed', 'user', 'malformed principal input',
-            timestamp=START.timestamp() + 60, message_uid='malformed-uid',
-            display_metadata={'submission_id': 'malformed-request'})
+        db.messages.append(
+            'malformed', NewMessage(role='user', content='malformed principal input',
+            timestamp=START.timestamp() + 60, message_uid='malformed-uid'))
     finally:
         db.close()
     result = module.collect_history(home / 'state.db', START, END)
@@ -126,7 +125,7 @@ def test_compression_child_restatement_uses_parent_witness(collector):
         db.append_message(
             'compression-root', 'user', request, timestamp=START.timestamp() - 60,
             message_uid='compression-uid')
-        db.end_session('compression-root', end_reason='compression')
+        db.sessions.end('compression-root', 'compression')
         db.sessions.create(NewSession('compression-child', source='desktop', parent_session_id='compression-root'))
         epoch = begin_runtime_epoch(db, instance_id='compression-fixture')
         admit_session_input(
