@@ -81,7 +81,7 @@ def _session(conn, session_id):
 def _admission(conn, admission_id):
     row = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone()
     if row is None:
-        from hermes_state_terminal import terminal_admission
+        from persistence.sqlite.authority._runtime import terminal_admission
         row = terminal_admission(conn, admission_id)
     if row is None:
         raise RuntimeStoreError('not_found')
@@ -96,7 +96,7 @@ def _retire_admission_workers(conn, row, owner_epoch):
     targets = list({row['target_session_id'], lineage[-1] if lineage else row['target_session_id']})
     scope = f"session_id IN ({','.join('?' * len(targets))}) AND generation=? AND owner_epoch=?"
     # Settlement closes an execution that never wrote execution.finish: its read copies go too.
-    from hermes_state_runtime_workers import compact_terminal_receipts
+    from persistence.sqlite.workers._runtime_workers import compact_terminal_receipts
     for (execution_id,) in conn.execute(f"SELECT execution_id FROM worker_executions WHERE {scope} "
                                         "AND status!='terminal'", (*targets, row['generation'], owner_epoch)).fetchall():
         compact_terminal_receipts(conn, execution_id)
@@ -162,6 +162,12 @@ def _store_of(db):
     return getattr(db, "_store", db)
 
 
+def _holder_of(db):
+    """The SQLite holder behind a SessionDB or a persistence handle (the stand-in wraps a handle)."""
+    store = _store_of(db)
+    return getattr(store, "_store", store).holder()
+
+
 def _admission_row(record) -> dict:
     return {name: getattr(record, name) for name in record.__slots__}
 
@@ -197,9 +203,13 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
     if intent not in ('queue', 'steer', 'redirect'):
         raise RuntimeStoreError('invalid_params')
     encoded = _json(payload)
-    from hermes_state_terminal import retry_terminal_admission
-    retired = retry_terminal_admission(db, epoch=epoch, principal_id=principal_id, session_id=session_id,
-        request_id=request_id, payload=payload, intent=intent)
+    from persistence.core.errors import AuthorityRefusal
+    from persistence.sqlite.authority._runtime import retry_terminal_admission
+    try:
+        retired = retry_terminal_admission(_holder_of(db), epoch=epoch, principal_id=principal_id,
+            session_id=session_id, request_id=request_id, payload=payload, intent=intent)
+    except AuthorityRefusal as exc:
+        raise RuntimeStoreError(exc.reason, field=exc.field, detail=exc.detail) from exc
     if retired is not None:
         return retired
     digest = admission_fingerprint(canonical_target=session_id, payload={'input': json.loads(encoded), 'intent': intent})
@@ -228,12 +238,12 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
             VALUES(?,?,?,?,?,?,?,?,'queued',?)''',
             (admission_id, request_id, principal_id, session_id, json.dumps([session_id]), encoded, digest, intent, epoch))
         return _row(_admission(conn, admission_id))
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def get_session_admission(db, *, admission_id: str) -> dict | None:
     with db._read_ctx() as conn:
-        from hermes_state_terminal import terminal_admission
+        from persistence.sqlite.authority._runtime import terminal_admission
         row = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone()
         return _row(row if row is not None else terminal_admission(conn, admission_id))
 
@@ -258,7 +268,7 @@ def latest_session_admission(db, *, session_id: str, accept) -> dict | None:
     lane needs only its latest envelope, not the session's whole history. One newest-first stream
     per status, merged by ``seq``, so each walks the (target, status, seq) index with no sort."""
     sql = "SELECT * FROM session_admissions WHERE target_session_id=? AND status=? ORDER BY seq DESC"
-    with _store_of(db).holder()._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         cursors = [conn.execute(sql, (session_id, status)) for status in _ADMISSION_STATUSES]
         try:
             rows = heapq.merge(*cursors, key=lambda row: row['seq'], reverse=True)
@@ -285,8 +295,12 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
         blocked = conn.execute("SELECT status FROM session_admissions WHERE target_session_id=? AND status IN ('started','unknown')", (session_id,)).fetchall()
         if any(row[0] == 'unknown' for row in blocked):
             raise RuntimeStoreError('unknown_execution')
-        from hermes_state_runtime_workers import worker_states
-        workers = worker_states(conn, session_id)
+        from persistence.core.errors import AuthorityRefusal
+        from persistence.sqlite.workers._runtime_workers import worker_states
+        try:
+            workers = worker_states(conn, session_id)
+        except AuthorityRefusal as exc:
+            raise RuntimeStoreError(exc.reason, field=exc.field, detail=exc.detail) from exc
         if 'unknown' in workers:
             raise RuntimeStoreError('unknown_execution')
         if blocked or workers:
@@ -307,7 +321,7 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
         # tell this turn's own failed-turn boundary from an earlier turn's (#134889 GW-21).
         claimed['transcript_mark'] = conn.execute('SELECT COALESCE(MAX(id), 0) FROM messages').fetchone()[0]
         return claimed
-    return _store_of(db).holder()._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, outcome: str,
@@ -318,7 +332,7 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
     not commit, may run again on SQLite retry, and raising rolls the settlement back."""
     if outcome not in ('completed', 'interrupted', 'rejected', 'failed'):
         raise RuntimeStoreError('invalid_params')
-    from hermes_state_terminal import compact_result, encode_result
+    from persistence.sqlite.conversation._store.terminal import compact_result, encode_result
     def write(conn):
         _epoch(conn, epoch)
         if _recovery_write is not None:
@@ -333,7 +347,7 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
         if _terminal_write is not None:
             _terminal_write(conn, row)
         if result is not None:
-            from hermes_state_terminal import RESULT_PREFIX
+            from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX
             encoded = _json(encode_result(compact_result(result, user_message=json.loads(row['payload_json']).get('text'))))
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
@@ -527,7 +541,7 @@ def recover_session_inputs(db, *, epoch: int) -> int:
     """Never replay started work. Live worker adoption is a separate explicit operation."""
     def write(conn):
         _epoch(conn, epoch)
-        from hermes_state_runtime_workers import retire_stale_children
+        from persistence.sqlite.workers._runtime_workers import retire_stale_children
         retire_stale_children(conn, epoch)
         conn.execute("UPDATE worker_executions SET status='unknown' WHERE status IN ('registered','running') AND owner_epoch!=?", (epoch,))
         # A steer handed to a lost claim may or may not have reached its agent: never replayed.
@@ -627,7 +641,7 @@ def mutate_runtime_session(db, *, epoch: int, principal_id: str, session_id: str
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
                      (key, _json({'digest': digest, 'result': result})))
         return result, event
-    result, event = _store_of(db).holder()._execute_write(write)
+    result, event = _holder_of(db)._execute_write(write)
     if event is not None:
         from hermes_state_common import emit_session_deleted
         emit_session_deleted(db, event.session_ids, reason=event.reason, primary=session_id)
@@ -737,7 +751,7 @@ def resolve_unknown_session_input(db, *, epoch: int, admission_id: str, generati
     ``_captured=(outcome, stored_result)`` is the exact result this owner captured for the turn
     before its settlement write failed; it commits with the resolution (only for an ``unknown``
     row stamped by this same owner epoch), so the finished answer is not thrown away."""
-    from hermes_state_terminal import RESULT_PREFIX
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX
     def write(conn):
         _epoch(conn, epoch)
         row = _admission(conn, admission_id)
@@ -752,7 +766,7 @@ def resolve_unknown_session_input(db, *, epoch: int, admission_id: str, generati
             outcome, stored = _captured
             if outcome not in ('completed', 'interrupted', 'failed'):
                 raise RuntimeStoreError('invalid_params')
-            from hermes_state_terminal import compact_result, encode_result
+            from persistence.sqlite.conversation._store.terminal import compact_result, encode_result
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, _json(encode_result(compact_result(

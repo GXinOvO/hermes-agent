@@ -48,7 +48,8 @@ async def test_cached_notification_and_legacy_controls(sealed_bot, monkeypatch, 
 @pytest.mark.parametrize('case', ['normal', 'missing_template', 'retired_digest', 'retired_principal'])
 async def test_cached_ack_uses_real_retirement_evidence(sealed_bot, monkeypatch, case):
     from cron.strict_bot_delivery import freeze, send
-    from hermes_state_terminal import ADMISSION_PREFIX, terminal_admission
+    from persistence.sqlite.authority._runtime import terminal_admission
+    from persistence.sqlite.conversation._store.terminal import ADMISSION_PREFIX
     async with cached_fanout(sealed_bot, monkeypatch) as test:
         receipt = await admit_cached(test)
         if case == 'missing_template':

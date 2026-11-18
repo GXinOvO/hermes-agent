@@ -56,7 +56,7 @@ def test_prepare_uses_trusted_result_witness_without_minting_plugin_pin(tmp_path
 def test_original_witness_rejects_complete_drift_before_claim(tmp_path, mutation):
     from plugins.platforms.a2a import task_bindings as tb
     from gateway.pending_final_identity import FIELD
-    from hermes_state_terminal import RESULT_PREFIX, load_result
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
     public.seed(tmp_path)
     db = SessionDB(tmp_path / 'state.db')
     try:

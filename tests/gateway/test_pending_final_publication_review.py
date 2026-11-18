@@ -11,7 +11,7 @@ from gateway import pending_final as pf
 from gateway import pending_final_publication as pub
 from gateway.platforms.base import SendResult
 from gateway.strict_transport import single_attempt_transport
-from hermes_state_terminal import RESULT_PREFIX, load_result
+from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
 from tests.gateway import test_pending_final as fixtures
 from tests.gateway.test_pending_final_original_identity import settle
 from tests.gateway.test_pending_final_publication_receipt import prepared_claim, publication

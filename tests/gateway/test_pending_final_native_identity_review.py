@@ -10,7 +10,7 @@ import pytest_asyncio
 from gateway import pending_final as pf
 from gateway.platforms.base import SendResult
 from gateway.session_results import finish_result
-from hermes_state_terminal import RESULT_PREFIX, load_result
+from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
 
 
 @pytest_asyncio.fixture

@@ -736,7 +736,7 @@ async def test_receipt_row_never_appears_as_pending_or_native_work(desktop):
 @pytest.mark.asyncio
 async def test_recorded_receipt_can_be_retired_with_the_session(desktop):
     import hermes_state_runtime as runtime
-    from hermes_state_terminal import ADMISSION_PREFIX
+    from persistence.sqlite.conversation._store.terminal import ADMISSION_PREFIX
 
     db, sid, key, _session, _starts = desktop
     await receive(sid, 'private received words')

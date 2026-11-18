@@ -2,7 +2,7 @@ import pytest
 
 from gateway import pending_final as pf
 from gateway.session_results import finish_result
-from hermes_state_terminal import RESULT_PREFIX
+from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX
 from tests.gateway import test_pending_final as fixtures
 
 

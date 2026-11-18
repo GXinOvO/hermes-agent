@@ -75,7 +75,7 @@ def _public_final(conn, record):
     # Ordinary HUMAN completion uses TaskStore.complete, not strict publish. Its
     # original seal and independent witness already committed at native settlement.
     from gateway.pending_final_identity import FIELD
-    from hermes_state_terminal import RESULT_PREFIX, load_result
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
     admissions = conn.execute('SELECT admission_id FROM session_admissions WHERE request_id=?',
                               (record['task_id'],)).fetchall()
     if len(admissions) > 1:

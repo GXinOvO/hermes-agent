@@ -49,7 +49,7 @@ def validate(home, params, receipt):
     from gateway.session_delivery_policy import consume_only
     from hermes_state import SessionDB
     from hermes_state_runtime import admission_fingerprint
-    from hermes_state_terminal import terminal_admission
+    from persistence.sqlite.authority._runtime import terminal_admission
     home = Path(home).resolve()
     with closing(SessionDB(home / 'state.db', read_only=True)) as db, db._read_ctx() as conn:
         raw = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (receipt['admission_id'],)).fetchone()

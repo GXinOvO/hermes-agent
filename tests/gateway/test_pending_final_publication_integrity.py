@@ -8,7 +8,7 @@ from gateway import pending_final as pf
 from gateway import pending_final_publication as publication
 from gateway.platforms.base import SendResult
 from hermes_state import SessionDB
-from hermes_state_terminal import RESULT_PREFIX, load_result
+from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
 from tests.gateway.test_pending_final_publication_receipt import prepared_claim, publication as capture
 
 

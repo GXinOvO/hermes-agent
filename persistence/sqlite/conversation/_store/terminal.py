@@ -19,6 +19,42 @@ WORKER_PREFIX = 'gateway.terminal_worker.v1.'
 
 _STORED = '_stored'
 
+def compact_result(result, *, user_message=None):
+    """Retain replay/accounting and current-turn API output, never cumulative history."""
+    result = dict(result)
+    value = result.get('result')
+    if not isinstance(value, dict):
+        return result
+    value = dict(value)
+    # The tool schema list rides every turn result for in-process transcript logging; it is the
+    # same session-wide copy each turn (tens of KB, more with MCP) and no stored-result reader uses it.
+    value.pop('tools', None)
+    messages = value.get('messages')
+    if isinstance(messages, list):
+        # Agent results include all previous turns. APIs only project this turn's
+        # assistant/tool suffix; previous_response_id stores its own history. Compression
+        # is the exception: its replacement snapshot is the only immutable record of the
+        # rewritten prefix for this turn. A later live transcript may include a successor.
+        if not value.get('_compressed') and not value.get('_messages_are_turn_suffix'):
+            from agent.turn_context import reanchor_current_turn_user_idx
+            anchor = value.get('current_turn_user_idx')
+            if not (type(anchor) is int and 0 <= anchor < len(messages)
+                    and isinstance(messages[anchor], dict) and messages[anchor].get('role') == 'user'):
+                anchor = reanchor_current_turn_user_idx(messages, user_message)
+            value['messages'] = messages[anchor + 1:]
+            if anchor >= 0 and isinstance(messages[anchor], dict) and messages[anchor].get('api_content'):
+                # The user row as the model saw it (memory prefetch, plugin context): a chained
+                # Responses turn replays it instead of a row rebuilt from the raw request text.
+                value['_turn_user_row'] = {k: messages[anchor][k] for k in ('role', 'content', 'api_content')}
+            # Recovery/verification nudges are later user-role rows within this same turn.
+            # Consumers must not infer a new boundary from them after the real anchor is gone.
+            value['_messages_are_turn_suffix'] = True
+            value.pop('current_turn_user_idx', None)
+    result['result'] = value
+    return result
+
+
+
 
 def encode_result(result):
     """The stored row keeps the reply once. When the turn's closing assistant message carries

@@ -16,7 +16,7 @@ def from_row(row, binding):
 
 def read(conn, home, binding):
     from gateway.pending_final import PREFIX, _binding, _check_descriptor, _json
-    from hermes_state_terminal import RESULT_PREFIX, load_result
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
     try:
         if binding['profile_home'] != str(Path(home).resolve()):
             raise ValueError('home mismatch')
