@@ -228,8 +228,11 @@ def tool_pin_version() -> str:
 
 
 def persist_agent_tool_names(agent) -> None:
-    """Best-effort: write ``agent.tools`` to the session row (freeze pin). The full definitions,
-    keyed by the code that built them: another process or surface derives different bytes."""
+    """Best-effort: write ``agent.tools`` to the session row (freeze pin) through the agent's storage
+    interface, else through its store. The full definitions, keyed by the code that built them: another
+    process or surface derives different bytes."""
+    from agent.agent_init_session import agent_interface
+
     db = getattr(agent, "_session_db", None)
     session_id = getattr(agent, "session_id", None)
     if not db or not session_id:
@@ -252,7 +255,10 @@ def persist_agent_tool_names(agent) -> None:
             pin["allowed_tools"] = list(allowed)
         if isinstance(backend := getattr(agent, "_delegation_backend", None), str) and backend:
             pin["delegation_backend"] = backend  # what its delegate_task was built from: the session routes on it
-        db.update_session_tool_names(session_id, pin)
+        if (store := agent_interface(agent)) is not None:
+            store.sessions.update_tool_pin(session_id, pin)
+        else:
+            db.update_session_tool_names(session_id, pin)
     except Exception:
         if allowed is not None:
             raise  # restriction persistence is an authorization boundary, not a cache hint

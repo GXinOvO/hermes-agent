@@ -3,7 +3,7 @@ import asyncio
 from functools import partial
 from pathlib import Path
 
-from hermes_state_runtime import RuntimeStoreError
+from persistence.core.errors import AuthorityRefusal
 
 
 def handlers(connection):
@@ -25,9 +25,9 @@ def authorize(connection, ref, params, capability, *, allow_local_adoption=True)
         from hermes_cli.profiles import profile_matches_home
         profile = params['profile']
         if not isinstance(profile, str):
-            raise RuntimeStoreError('invalid_params')
+            raise AuthorityRefusal('invalid_params')
         if profile and not profile_matches_home(profile, Path(connection.authority.profile_id)):
-            raise RuntimeStoreError('profile_mismatch')
+            raise AuthorityRefusal('profile_mismatch')
 
 
 async def busy_config(connection, ref, params, *, write=False):
@@ -35,7 +35,7 @@ async def busy_config(connection, ref, params, *, write=False):
         # The legacy picker verb. On the owner a model pick is ``session.mutate`` operation=model
         # (revision-fenced, retry-idempotent, selection-guarded); a config write would bypass all
         # three. Refused before authorization or any read: nothing is written or deferred.
-        raise RuntimeStoreError('use_session_mutation_model')
+        raise AuthorityRefusal('use_session_mutation_model')
     allowed = {'session_id', 'profile', 'key'} | ({'value'} if write else set())
     if params.get('key') == 'verbose' and not set(params) - allowed and ref.session_id:
         return verbose_config(connection, ref, params, write)
@@ -47,7 +47,7 @@ async def busy_config(connection, ref, params, *, write=False):
         return await yolo_config(connection, ref, params, write)
     if (set(params) - allowed or not ref.session_id or params.get('key') != 'busy'
             or (write and params.get('value') not in ('interrupt', 'steer', 'queue'))):
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control' if write else 'session:read')
     authority = connection.authority
     live = authority.sessions[ref.session_id]
@@ -80,7 +80,7 @@ def verbose_config(connection, ref, params, write):
     this session render with (read by TurnRunner), like busy never a settings write."""
     value = params.get('value')
     if write and value not in (*_VERBOSE_CYCLE, 'cycle'):
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control' if write else 'session:read')
     live = connection.authority.sessions[ref.session_id]
     current = getattr(live, 'tool_progress_mode', None) or 'all'
@@ -97,7 +97,7 @@ def show_reasoning_config(connection, ref, params, write):
     value = params.get('value')
     word = str(value).strip().lower()
     if write and word not in _YOLO_WORDS:
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control' if write else 'session:read')
     live = connection.authority.sessions[ref.session_id]
     if write:
@@ -121,7 +121,7 @@ def service_tier_config(connection, ref, params):
     except ValueError:
         tier = None
     if tier is None:
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control')
     live = connection.authority.sessions[ref.session_id]
     connection.authority.runner._set_session_service_tier_override(live.route, tier or None)
@@ -141,7 +141,7 @@ async def yolo_config(connection, ref, params, write):
     ``/yolo``: persisted before the live flip, so an OFF here is not revived by the next turn."""
     value = params.get('value')
     if write and value is not None and str(value).strip().lower() not in _YOLO_WORDS:
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control' if write else 'session:read')
     from gateway.session_policy import policy_for_source
     from tools.approval import is_session_yolo_enabled
@@ -172,7 +172,7 @@ def adopts_owner_agent(authority, ref):
     try:
         policy = policy_for_source(authority.runner, authority.sessions[ref.session_id].source)
         return not (policy is not None and policy.source == 'cron') and managed_policy(authority, ref) is None
-    except RuntimeStoreError:
+    except AuthorityRefusal:
         return False
 
 
@@ -180,7 +180,7 @@ async def correct(connection, ref, params, *, verb):
     if (set(params) - {'session_id', 'profile', 'text', 'execution_generation'}
             or not isinstance(params.get('text'), str) or not params['text'].strip()
             or type(params.get('execution_generation')) is not int):
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     authorize(connection, ref, params, 'session:control')
     # TUI-26: text typed during a running turn in Ink's interrupt/steer busy modes arrives here, not
     # at prompt.submit. A bare stop phrase in a LOCAL voice chat ends the chat and reaches no agent,
@@ -196,7 +196,7 @@ async def correct(connection, ref, params, *, verb):
         # Managed workers have a separate control channel, not a cached owner
         # agent. Refuse explicitly instead of acknowledging undeliverable text.
         if ref.session_id in getattr(authority, '_managed_workers', {}):
-            raise RuntimeStoreError('unsupported_control')
+            raise AuthorityRefusal('unsupported_control')
         # Accepted for this exact claim before its turn built an agent: steer_agent latches it for
         # the agent this generation adopts, never a later one.
         agent, latched = authority.steer_agent(ref, generation, params['text'] if verb == 'steer' else None)
@@ -214,7 +214,7 @@ async def correct(connection, ref, params, *, verb):
                     'authority_epoch': authority.epoch, 'delivered': False}
         method = getattr(agent, verb, None)
         if not callable(method):
-            raise RuntimeStoreError('execution_not_ready')
+            raise AuthorityRefusal('execution_not_ready')
         accepted = method(params['text'])
         return {'status': ({'steer': 'queued', 'redirect': 'redirected'}[verb] if accepted else 'rejected'),
                 'text': params['text'], 'execution_generation': generation,

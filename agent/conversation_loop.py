@@ -63,6 +63,17 @@ from agent.turn_tool_round import run_tool_round
 from hermes_logging import set_session_context
 from tools.skill_provenance import set_current_write_origin
 from utils import base_url_host_matches
+from session_rules.turns import (
+    _CODEX_ACK_CONTINUATION_NUDGE,
+    _CODEX_INCOMPLETE_NUDGE,
+    _DEGENERATE_FINAL_NUDGE,
+    _DROPPED_TOOLCALL_NUDGE_CONTENT,
+    _EMPTY_TOOL_RESPONSE_NUDGE,
+    _LEGACY_LENGTH_CONTINUATION_NETWORK_STUB,
+    _LENGTH_CONTINUATION_DROPPED_TOOLS_PREFIX,
+    _LENGTH_CONTINUATION_NETWORK_STUB,
+    _LENGTH_CONTINUATION_OUTPUT_LIMIT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +248,21 @@ _API_CALL_MODULES = frozenset({"chat_completion_helpers"})
 # Max outer-loop exceptions per user turn before giving up; only exceptions that
 # ESCAPE the inner retry/fallback machinery count, so this can be small (#92450).
 _MAX_OUTER_LOOP_ERRORS = 8
+
+
+def _is_interpreter_shutdown_error(exc: Exception) -> bool:
+    """True for a fatal interpreter-shutdown RuntimeError. The RuntimeError type gate
+    stays here: a ValueError carrying similar text must not match (#93269)."""
+    if isinstance(exc, RuntimeError):
+        # ── Interpreter finalization: abandon immediately ── The process is exiting (TUI quit, SIGTERM,
+        # one-shot done) while this turn — typically the post-turn review fork's daemon thread — is
+        # mid-flight. Retries, credential rotation, and fallbacks are all futile ("cannot schedule new
+        # futures..."), and the buffered ⚠️/❌ retry trace spams the shell after the TUI already exited. End
+        # the turn with a single log line: no print, no traceback, no debug dump, no retry. Same class as
+        # cron delivery (#55924/#58720) and concurrent tool submission — shared predicate.
+        from tools.interpreter_shutdown import interpreter_shutting_down
+        return interpreter_shutting_down(exc)
+    return False
 
 
 def _moa_client_consumes_prepared_request(client: Any) -> bool:
@@ -708,7 +734,10 @@ def _bot_chat_prompt_stale(agent, stored_prompt: str | None) -> bool:
         title = str(getattr(agent, "_session_title_hint", "") or "").strip()
         if not title and agent._session_db and agent.session_id:
             try:
-                title = str(agent._session_db.get_session_title(agent.session_id) or "").strip()
+                from agent.agent_init_session import agent_interface
+                store = agent_interface(agent)
+                title = str((store.sessions.get_title(agent.session_id) if store is not None
+                             else agent._session_db.get_session_title(agent.session_id)) or "").strip()
             except Exception:
                 title = ""
         return title == BOT_CHAT_TITLE and bool(stored_bot_chat_prompt_needs_upgrade(stored_prompt, home))
@@ -722,38 +751,28 @@ def _persist_system_prompt(agent, failure_message: str, *, persist_tools: bool =
     this row every turn, so a silent failure breaks prefix-cache reuse."""
     if not agent._session_db:
         return
-    if persist_tools and callable(ensure := getattr(agent, "_ensure_db_session", None)):
-        ensure()
     try:
-        agent._session_db.update_system_prompt(agent.session_id, agent._cached_system_prompt)
+        from agent.agent_init_session import agent_interface
+        store = agent_interface(agent)
+        (store.sessions if store is not None else agent._session_db).update_system_prompt(
+            agent.session_id, agent._cached_system_prompt)
+        if persist_tools:
+            from tools.mcp_tool_agent import persist_agent_tool_names
+            persist_agent_tool_names(agent)
     except Exception as exc:
-        logger.warning(failure_message, agent.session_id, exc, exc_info=True)
-    if persist_tools:
-        from tools.mcp_tool_agent import persist_agent_tool_names
-        persist_agent_tool_names(agent)
+        logger.warning(failure_message, agent.session_id, exc)
 
 
 def _restore_pinned_tools(agent, session_row) -> list:
     """Pin ``agent.tools`` to the session's persisted array (tools freeze); returns the names
     this surface built BEFORE the pin merged a previous surface's tools back in."""
     from tools.mcp_tool_agent import agent_tool_names, persist_agent_tool_names, restore_agent_tool_prefix
-    from hermes_state_tool_permissions import restore_session_tool_permission, usable_tool_cache
     built_for_this_surface = agent_tool_names(agent)
     saved_tools = session_row.get("tool_names") if session_row else None
-    restriction = restore_session_tool_permission(agent, session_row)
-    agent._tool_pin_unusable = False
     try:
         pin = json.loads(saved_tools) if saved_tools else None
     except ValueError:
-        # Known authorization is independent of this disposable cache. Preserve bad
-        # restricted bytes for diagnosis; only proven unrestricted rows may re-pin.
-        if restriction is not None:
-            agent._tool_pin_unusable = True
-            return built_for_this_surface
-        pin = None
-    if saved_tools is not None and not usable_tool_cache(pin) and restriction is not None:
-        agent._tool_pin_unusable = True
-        return built_for_this_surface
+        pin = None  # a pin hash whose row an older build's cleanup swept resolves to itself
     try:
         if pin:
             restore_agent_tool_prefix(agent, pin)
@@ -762,8 +781,6 @@ def _restore_pinned_tools(agent, session_row) -> list:
             # or every later hop re-derives tools[] until the next compaction.
             persist_agent_tool_names(agent)
     except Exception:
-        if getattr(agent, "allowed_tools", None) is not None:
-            raise
         logger.debug("tool prefix restore skipped", exc_info=True)
     return built_for_this_surface
 
@@ -808,24 +825,29 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     stored_prompt = None
     stored_state = "missing"
     session_row = None
-    if agent._session_db:
+    if conversation_history and agent._session_db:
         try:
-            session_row = agent._session_db.get_session(agent.session_id)
-            agent._tool_authority_unknown = False
-            if session_row is not None and conversation_history:
+            from agent.agent_init_session import agent_interface
+            store = agent_interface(agent)
+            if store is not None:
+                record = store.sessions.get(agent.session_id)
+                session_row = None if record is None else {
+                    "system_prompt": record.system_prompt,
+                    "tool_names": None if record.tool_pin is None else json.dumps(record.tool_pin),
+                    "model_config": record.model_config,
+                }
+            else:
+                session_row = agent._session_db.get_session(agent.session_id)
+            if session_row is not None:
                 raw_prompt = session_row.get("system_prompt")
                 stored_state = "null" if raw_prompt is None else ("empty" if raw_prompt == "" else "present")
                 stored_prompt = raw_prompt or None
         except Exception as exc:
-            agent.allowed_tools, agent.tools, agent.valid_tool_names = [], [], set()
-            agent._tool_pin_unusable = True
-            agent._tool_authority_unknown = True
             logger.warning(
-                "Session DB get_session failed for tool authority restore (session=%s): %s. "
-                "Refusing execution with unknown session permissions.",
+                "Session DB get_session failed for system-prompt restore (session=%s): %s. "
+                "Falling back to fresh build — prefix cache will miss for this turn.",
                 agent.session_id, exc,
             )
-            raise RuntimeError("Cannot restore session tool authority") from exc
 
     if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
         # NULL/empty rows never reach this probe: they already rebuild below.
@@ -845,7 +867,6 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 clear_skills_system_prompt_cache(clear_snapshot=True)
             except Exception:
                 pass
-            _restore_pinned_tools(agent, session_row)
             _refresh_bot_chat_tools(agent)
             agent._cached_system_prompt = agent._build_system_prompt(system_message)
             record_cache_break(agent, "toolset_change")
@@ -990,27 +1011,6 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     return True
 
 
-# Named so _is_synthetic_compression_user_turn can recognize a crash-persisted nudge by
-# content (SessionDB projection strips the _length_continuation_nudge tag).
-_LENGTH_CONTINUATION_NETWORK_STUB = (
-    "[System: The previous response was cut off by a network error mid-stream — a transport "
-    "interruption, NOT a change in your capabilities. Your tools are still fully available; call "
-    "them as normal and ignore any earlier claim that you lack tool access. Continue the task "
-    "from where you left off. Do not restart or repeat prior text.]"
-)
-_LENGTH_CONTINUATION_OUTPUT_LIMIT = (
-    "[System: Your previous response was truncated by the output length limit. Continue exactly "
-    "where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
-)
-# Pre-#74990 wording; kept so crash-persisted nudges from older sessions are still recognized.
-_LEGACY_LENGTH_CONTINUATION_NETWORK_STUB = (
-    "[System: The previous response was cut off by a network error mid-stream. Continue exactly "
-    "where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
-)
-# The dropped-tools variant interpolates tool names; matched by prefix.
-_LENGTH_CONTINUATION_DROPPED_TOOLS_PREFIX = "[System: Your previous tool call "
-
-
 def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[list[str]] = None) -> str:
     if is_partial_stub and dropped_tools:
         tool_list = ", ".join(dropped_tools[:3])
@@ -1023,45 +1023,6 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[list
             "interruption, not a capability change — your tools remain fully available.]"
         )
     return _LENGTH_CONTINUATION_NETWORK_STUB if is_partial_stub else _LENGTH_CONTINUATION_OUTPUT_LIMIT
-
-
-# Codex/Responses turns that returned only internal reasoning: a bare retry would be
-# byte-identical, so the model repeats it.
-_CODEX_INCOMPLETE_NUDGE = (
-    "[System: Your previous response contained only internal reasoning and never produced a "
-    "visible answer or tool call. Do not keep thinking. Produce your final answer as plain text "
-    "now (or make the tool call you were planning).]"
-)
-
-
-# Re-prompt after an acknowledgment-only Codex/Responses reply.
-_CODEX_ACK_CONTINUATION_NUDGE = (
-    "[System: Continue now. Execute the required tool calls and only send your final answer "
-    "after completing the task.]"
-)
-
-# Re-prompt after a collapsed fragment ended a turn that had done real tool work (#103483). Asks
-# for the same answer again when it WAS complete, so a false positive costs one call, never the answer.
-_DEGENERATE_FINAL_NUDGE = (
-    "[System: Your previous message ended the turn with a fragment that is not a usable answer. "
-    "If the task is unfinished, continue it and then give the complete answer. If that fragment "
-    "WAS your complete answer, send it again exactly as before.]"
-)
-
-# Re-prompt for finish_reason="tool_calls" with empty tool_calls (an interrupt mid-retry can persist it).
-_DROPPED_TOOLCALL_NUDGE_CONTENT = (
-    "Your previous turn indicated a tool call but none was included. Do not narrate a plan or "
-    "restate intent — issue the actual tool call now to continue the task."
-)
-
-# Re-prompt for an empty response after tool calls (#9400); the metadata flag does not
-# survive SessionDB projection, so it is matched by content.
-_EMPTY_TOOL_RESPONSE_NUDGE = (
-    "You just executed tool calls but returned an empty response. Please process the tool "
-    "results above and continue with the task."
-)
-
-
 
 
 # Memo for send-path tool-call argument canonicalization (re-run on every historical call
@@ -1328,7 +1289,8 @@ def _redecorate_prompt_cache_for_provider(
             planned_tools,
             # Clamp per-destination: a configured 1h regresses to 5m on
             # Qwen/Alibaba routes, whose context cache is 5m-only (#84733).
-            cache_ttl=effective_cache_ttl(agent._cache_ttl, provider=agent.provider, model=agent.model),
+            cache_ttl=effective_cache_ttl(agent._cache_ttl, provider=agent.provider, model=agent.model,
+                                          base_url=getattr(agent, "base_url", "") or ""),
             native_anthropic=agent._use_native_cache_layout,
             static_system_prefix=static if isinstance(static, str) else None,
             session_system_prompt=agent._cached_system_prompt,
@@ -1535,7 +1497,6 @@ class _LoopState:
     thinking_spinner: Any = None
     api_start_time: Any = None
     retry_count: int = 0
-    audit_retry_count: int = 0
     max_retries: Any = None
     _retry: Any = None
     finish_reason: str = "stop"
@@ -1587,10 +1548,7 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[dict[str, Any]]:
 
     Returns a turn result dict when a phase ends the turn, else None once the loop is left
     (success, a restart armed on ``s._retry``, interrupt, or retries exhausted)."""
-    s.audit_retry_count = 0
     while s.retry_count < s.max_retries:
-        agent._current_api_call_count = s.api_call_count
-        agent._current_retry_count = s.audit_retry_count
         _ng = _run_phase(nous_rate_limit_guard, agent, s)
         if _ng.action == "return":
             return _ng.result
@@ -1614,7 +1572,6 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[dict[str, Any]]:
                 return _ae.result
             if _ae.action == "break":
                 return None
-        s.audit_retry_count += 1
     return None
 
 
@@ -1876,9 +1833,6 @@ def run_conversation(
     from agent.primary_auth_fallback import lead_failed_turn_with_primary_auth
     lead_failed_turn_with_primary_auth(agent, result)
     settle_held_final(agent, result)
-    if isinstance(result, dict) and isinstance(result.get("messages"), list):
-        from agent.session_persistence import drop_ephemeral_scaffolding
-        drop_ephemeral_scaffolding(agent, result["messages"])
     result = export_current_turn_boundary(agent, result, user_message)
     if isinstance(result, dict):
         result["user_intervened"] = bool(getattr(agent, "_turn_user_intervened", False))
@@ -1951,7 +1905,7 @@ def _close_durable_failed_turn(agent, result: Any) -> None:
     turn (tool rounds included) is deliberate: the user keeps SEEING the message in the chat, but the
     model is never re-sent the content that tripped the filter, so the chat is not locked. A closing
     boundary would only be written to be rewound. Idempotence
-    is keyed on the DURABLE tail (``SessionDB.latest_conversation_role``), so a redelivery or a tail
+    is keyed on the DURABLE tail (``latest_conversation_role``), so a redelivery or a tail
     already closed by another writer is a no-op, and the gateway's own closer then no-ops in turn.
     """
     try:
@@ -1966,16 +1920,18 @@ def _close_durable_failed_turn(agent, result: Any) -> None:
         db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", None)
         if not isinstance(messages, list) or not messages or db is None or not session_id:
             return
-        if getattr(agent, "_persist_disabled", False) or db.latest_conversation_role(session_id) not in OPEN_TURN_TAIL_ROLES:
+        from agent.agent_init_session import agent_interface
+        store = agent_interface(agent)
+        if getattr(agent, "_persist_disabled", False) or (
+            (store.messages if store is not None else db).latest_conversation_role(session_id) not in OPEN_TURN_TAIL_ROLES
+        ):
             return
         # Scope the "did a tool run" scan to this turn when its boundary is proven; otherwise
         # hedge over the whole list rather than under-report a possible side effect.
         start = result.get("current_turn_user_idx")
         turn_messages = messages[start:] if isinstance(start, int) and 0 <= start < len(messages) else messages
         boundary = {
-            "role": "assistant", "content": failed_turn_notice(
-                turn_messages, interrupted=bool(result.get("interrupted"))
-            ), "display_kind": FAILED_TURN_DISPLAY_KIND,
+            "role": "assistant", "content": failed_turn_notice(turn_messages), "display_kind": FAILED_TURN_DISPLAY_KIND,
         }
         if failure := _failed_turn_display_metadata(agent, result):
             boundary["display_metadata"] = failure

@@ -1,3 +1,8 @@
+"""Span-keeping shell word lexer for the approval detector's quoted-grep-operand handling.
+
+Moved verbatim from :mod:`tools.approval_detection` (size ratchet); see `_quoted_grep_pattern_spans` there.
+"""
+
 from tools.approval_parser_budget import _scan_shell
 
 
