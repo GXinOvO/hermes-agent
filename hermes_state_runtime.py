@@ -810,29 +810,11 @@ def register_worker_execution(db, *, epoch: int, execution_id: str, session_id: 
         _text(value)
     if kind not in ('cron', 'child', 'compute', 'kanban'):
         raise RuntimeStoreError('invalid_params')
-    digest = _secret_digest(adoption_secret)
-    def write(conn):
-        _epoch(conn, epoch)
-        session = _session(conn, session_id)
-        if type(generation) is not int or session['runtime_generation'] != generation:
-            raise RuntimeStoreError('stale_generation')
-        old = conn.execute('SELECT * FROM worker_executions WHERE execution_id=?', (execution_id,)).fetchone()
-        if old is not None:
-            if (old['session_id'], old['generation'], old['kind'], old['owner_epoch'], old['adoption_digest']) != (session_id, generation, kind, epoch, digest):
-                raise RuntimeStoreError('admission_conflict')
-            return _worker_public(old)
-        from hermes_state_runtime_workers import runtime_lineage, worker_states
-        targets = runtime_lineage(conn, session_id)
-        if require_idle and any(conn.execute("SELECT 1 FROM session_admissions WHERE target_session_id=? AND status IN ('queued','started','unknown')", (sid,)).fetchone() for sid in targets):
-            raise RuntimeStoreError('stale_generation')
-        if worker_states(conn, session_id):
-            raise RuntimeStoreError('stale_generation')
-        if any(conn.execute("SELECT 1 FROM session_admissions WHERE target_session_id=? AND status='unknown'", (sid,)).fetchone() for sid in targets):
-            raise RuntimeStoreError('unknown_execution')
-        conn.execute("""INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest)
-            VALUES(?,?,?,?,?,'registered',?)""", (execution_id, session_id, kind, epoch, generation, digest))
-        return _worker_public(_worker_assignment(conn, execution_id, session_id, generation))
-    return db._execute_write(write)
+    from persistence.workers.executions import WorkerKind
+    record = _store_of(db).worker_executions.register(
+        epoch=epoch, execution_id=execution_id, session_id=session_id, generation=generation,
+        kind=WorkerKind(kind), adoption_secret=adoption_secret, require_idle=require_idle)
+    return {name: getattr(record, name) for name in record.__slots__}
 
 
 def adopt_worker_execution(db, *, epoch: int, execution_id: str, session_id: str,
