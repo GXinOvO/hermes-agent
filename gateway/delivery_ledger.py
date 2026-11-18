@@ -16,6 +16,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -174,6 +175,17 @@ def _scope():
     return profile_scope(home=get_process_hermes_home())
 
 
+def _db_path():
+    """The ledger's own state.db under the launch home (the one store every profile's replies share)."""
+    from persistence_assembly import store_location
+    return store_location(_scope())
+
+
+def _connect():
+    """A raw connection to the ledger's store (boot sweeps and fixtures)."""
+    return sqlite3.connect(_db_path())
+
+
 def _store():
     """A handle on the ledger's store through the launch home's registered writer; the caller closes it."""
     from persistence_assembly import open_persistence
@@ -243,6 +255,66 @@ def record_obligation(*, obligation_id: str, session_key: str, platform: str, ch
             obligation_id=obligation_id, session_key=session_key, platform=platform, chat_id=chat_id,
             thread_id=thread_id, content=content, adapter_profile=adapter_profile,
             owner=OwnerStamp(pid=pid, started_at=started))
+
+
+def record_human_final_failure(descriptor: dict, error: str, *, db) -> Optional[str]:
+    """Explicit ordinary-human refusal hands retry ownership to the existing ledger.
+
+    The sealed descriptor was already claimed before transport, so the row is inserted ``failed``
+    directly: a kill must never expose a pending row for a possibly partial send. Strict
+    automation and unproven legacy descriptors cannot use this migration.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    from persistence_assembly import store_location
+    binding = descriptor['binding']
+    if binding.get('policy') != 'human_reply_v1':
+        raise ValueError('ordinary retry requires exact human admission provenance')
+    source, part = binding['source'], descriptor['parts']['text']
+    if part['state'] != 'attempting':
+        raise ValueError('ordinary retry requires a claimed final')
+    oid = compute_obligation_id(binding['route'], 'human-final:' + binding['admission_id'], part['content'])
+    now, (pid, started) = time.time(), _owner_stamp()
+
+    def insert(conn):
+        conn.execute("""INSERT OR IGNORE INTO delivery_obligations
+            (obligation_id,session_key,platform,chat_id,thread_id,content,state,attempts,
+             created_at,updated_at,owner_pid,owner_started_at,adapter_profile,
+             recovery_policy,provenance_json,payload_kind)
+            VALUES (?,?,?,?,?,?,'failed',0,?,?,?,?,?,'human_reply_v1',?,'text')""",
+            (oid, binding['route'], source['platform'], str(source['chat_id']), source.get('thread_id'),
+             part['content'], now, now, pid, started, descriptor.get('adapter_profile') or 'default',
+             _json.dumps(binding, sort_keys=True)))
+        conn.execute("UPDATE delivery_obligations SET last_error=? WHERE obligation_id=? AND state='failed'",
+                     (str(error)[:500], oid))
+
+    def write(conn):
+        from gateway.pending_final import _read
+        from gateway.pending_final_claim import snapshot, valid
+        value = _read(conn, binding['admission_id'])
+        if value is None or not valid(conn, db, value, 'text', expected=snapshot(descriptor)):
+            return None
+        from persistence.sqlite.gateway._delivery_ledger import _ensure_obligations_table
+        _ensure_obligations_table(conn)
+        insert(conn)
+        return oid
+
+    from hermes_state_runtime import _holder_of
+    with _DB_LOCK:
+        if _Path(_db_path()).resolve() == _Path(store_location(db.scope)).resolve():
+            return _holder_of(db)._execute_write(write)
+        with _connect() as ledger:
+            from persistence.sqlite.gateway._delivery_ledger import _ensure_obligations_table
+            _ensure_obligations_table(ledger)
+            from gateway.pending_final import _read
+            from gateway.pending_final_claim import snapshot, valid
+            with _holder_of(db)._read_ctx() as source_conn:
+                value = _read(source_conn, binding['admission_id'])
+                if value is None or not valid(source_conn, db, value, 'text', expected=snapshot(descriptor)):
+                    return None
+            insert(ledger)
+            ledger.commit()
+            return oid
 
 
 def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: str, chat_id: str,

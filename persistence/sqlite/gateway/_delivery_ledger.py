@@ -49,8 +49,12 @@ def _ensure_obligations_table(conn) -> None:
             adapter_profile TEXT
         )"""
     )
-    if "adapter_profile" not in {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(delivery_obligations)")}
+    if "adapter_profile" not in columns:
         add_column_if_missing(conn, "delivery_obligations", "adapter_profile", "adapter_profile TEXT")
+    for name in ("recovery_policy", "provenance_json", "payload_kind"):
+        if name not in columns:
+            add_column_if_missing(conn, "delivery_obligations", name, f"{name} TEXT")
 
 
 # Drops settled rows past retention, then the oldest rows over the row cap, settled ones first.

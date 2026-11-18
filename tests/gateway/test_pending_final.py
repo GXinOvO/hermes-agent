@@ -250,7 +250,7 @@ async def test_explicit_human_failure_hands_back_to_existing_reconnect_retry(tmp
     from gateway.session_delivery_policy import automation_delivery_scope
     from gateway.session_results import finish_result
     db, epoch, row, event, descriptor, authority = await _sealed(tmp_path, human=True)
-    monkeypatch.setattr(dl, '_db_path', lambda:tmp_path / 'outbound.db')
+    monkeypatch.setattr(dl, '_scope', lambda: profile_scope(home=tmp_path))
     adapter = Adapter()
     adapter.gateway_runner = SimpleNamespace(_redeliver_failed_obligations_for_platform=AsyncMock(return_value=1))
     adapter._final_delivery_adapter = lambda source:object()

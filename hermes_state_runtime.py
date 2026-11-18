@@ -659,8 +659,10 @@ def mutate_runtime_session(db, *, epoch: int, principal_id: str, session_id: str
         return result, event
     result, event = _holder_of(db)._execute_write(write)
     if event is not None:
-        from hermes_state_common import emit_session_deleted
-        emit_session_deleted(db, event.session_ids, reason=event.reason, primary=session_id)
+        from session_retention import emit_session_deleted
+        from persistence_assembly import store_location
+        emit_session_deleted(store_location(db.scope).parent, event.session_ids,
+                             reason=event.reason, primary=session_id)
     return result
 
 

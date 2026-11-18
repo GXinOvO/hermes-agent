@@ -1,6 +1,6 @@
 """Closed action handlers inside the runtime mutation receipt transaction."""
 import time
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import _holder_of, RuntimeStoreError
 
 METADATA_FIELDS = {'title': str, 'archived': bool, 'hidden': bool, 'pinned': bool, 'unread': bool}
 
@@ -104,8 +104,11 @@ def _apply_action(db, conn, session_id, operation, payload, *, prepared=None):
     if operation == 'branch':
         from hermes_state_mutation_branch import branch_in_transaction
         return branch_in_transaction(db, conn, session_id, payload, prepared)
-    from hermes_state_mutation_reset import reset_in_transaction
-    handlers = {'delete': _delete, 'import': _import, 'rewind': _rewind, 'reset': reset_in_transaction}
+    from hermes_state_runtime import _holder_of
+    from persistence.sqlite.authority._mutation_publish import reset_in_transaction
+    handlers = {'delete': _delete, 'import': _import, 'rewind': _rewind,
+                'reset': lambda db, conn, session_id, payload: reset_in_transaction(
+                    _holder_of(db), conn, session_id, payload)}
     if operation in handlers:
         return handlers[operation](db, conn, session_id, payload)
     affected = set()
@@ -129,8 +132,10 @@ def _apply_action(db, conn, session_id, operation, payload, *, prepared=None):
 def _delete(db, conn, session_id, payload):
     # Terminal admission/worker rows become digest tombstones so exact retries and
     # adoption checks still resolve after the transcript is gone.
-    from hermes_state_mutation_retirement import delete_in_transaction
-    return delete_in_transaction(db, conn, session_id, payload)
+    from gateway.session_ingress_media import native_inputs_root
+    from persistence.sqlite.authority._runtime_retirement import delete_in_transaction
+    return delete_in_transaction(_holder_of(db), conn, session_id, payload,
+                                 media_root=str(native_inputs_root()))
 
 
 def _rewind(db, conn, session_id, payload):
@@ -220,7 +225,7 @@ def _import(db, conn, session_id, payload):
     for item in normalized:
         raw = item['session']
         sid = raw['id']
-        from hermes_state_mutation_retirement import RETIRED_PREFIX
+        from persistence.sqlite.conversation._store.retirement import RETIRED_PREFIX
         if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + sid,)).fetchone():
             # Refused by name at import time: a row restored beside the fence would refuse every turn.
             raise RuntimeStoreError('admission_conflict', field='sessions',

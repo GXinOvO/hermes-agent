@@ -106,7 +106,7 @@ def _validate_result(conn, home, record):
     from gateway import pending_final as pf
     from hermes_state_background import _target
     from hermes_state_common import _RESET_END_REASONS
-    from hermes_state_mutation_retirement import retired_in
+    from persistence.sqlite.conversation._store.retirement import retired_in
     binding = value['binding']
     pf._check_descriptor(pf.PREFIX + binding['admission_id'], value)
     if (binding['request_id'] != record['task_id'] or value['reply_to'] != record['task_id']

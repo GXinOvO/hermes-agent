@@ -225,8 +225,9 @@ def _collect_delegate_child_ids(conn, parent_ids: list[str]) -> list[str]:
 
 def _delete_delegate_children(conn, parent_ids: list[str]) -> list[str]:
     ids = _collect_delegate_child_ids(conn, parent_ids)
-    from hermes_state_mutation_retirement import retire_sessions
-    retire_sessions(conn, ids)
+    from persistence.sqlite.conversation._store.retirement import retire_sessions
+    from gateway.session_ingress_media import native_inputs_root
+    retire_sessions(conn, ids, media_root=str(native_inputs_root()))
     for chunk in _id_chunks(ids):
         ph = _session_ids_placeholders(chunk)
         conn.execute(f"DELETE FROM messages WHERE session_id IN ({ph})", chunk)
@@ -1770,8 +1771,9 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
                 for covered_id, expected in expected_display_messages.items()
             ):
                 return False
-            from hermes_state_mutation_retirement import retire_sessions
-            retire_sessions(conn, scope)
+            from persistence.sqlite.conversation._store.retirement import retire_sessions
+            from gateway.session_ingress_media import native_inputs_root
+            retire_sessions(conn, scope, media_root=str(native_inputs_root()))
             removed_ids.extend(_delete_delegate_children(conn, scope))
             for sid in scope:  # orphan remaining children (branches) so FK is satisfied
                 conn.execute("UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?", (sid,))
@@ -1837,8 +1839,9 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
             # Same BEGIN IMMEDIATE transaction as the check above: retire the ledger rows
             # (ON DELETE RESTRICT) and delete without re-evaluating eligibility. Housekeeping, not
             # a user delete: its fence ages out at the horizon (an untitled row is never a Bot Chat).
-            from hermes_state_mutation_retirement import retire_sessions
-            retire_sessions(conn, [session_id], expiring=[session_id])
+            from persistence.sqlite.conversation._store.retirement import retire_sessions
+            from gateway.session_ingress_media import native_inputs_root
+            retire_sessions(conn, [session_id], expiring=[session_id], media_root=str(native_inputs_root()))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             self._delete_unreferenced_system_prompts(conn)
             return True
@@ -1915,8 +1918,9 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
                 if not existing:
                     return 0
                 expanded = expand(existing)
-            from hermes_state_mutation_retirement import retire_sessions
-            retire_sessions(conn, expanded)
+            from persistence.sqlite.conversation._store.retirement import retire_sessions
+            from gateway.session_ingress_media import native_inputs_root
+            retire_sessions(conn, expanded, media_root=str(native_inputs_root()))
             removed_ids.extend(_delete_delegate_children(conn, expanded))
             for chunk in _id_chunks(expanded):
                 ph = _session_ids_placeholders(chunk)
@@ -1962,8 +1966,9 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
             session_ids = {row["id"] for row in conn.execute(
                 f"SELECT id FROM sessions WHERE {self._EMPTY_SESSION_WHERE}"
             ).fetchall()}
-            from hermes_state_mutation_retirement import retire_prunable
-            session_ids = retire_prunable(conn, sorted(session_ids))
+            from persistence.sqlite.conversation._store.retirement import retire_prunable
+            from gateway.session_ingress_media import native_inputs_root
+            session_ids = retire_prunable(conn, sorted(session_ids), media_root=str(native_inputs_root()))
             if not session_ids:
                 return 0
             for chunk in _id_chunks(session_ids):
