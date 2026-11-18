@@ -358,6 +358,21 @@ class _SessionDB:
         return session_id
 
     @_held
+    def update_session_meta(self, session_id: "str", model_config_json: "str", model: "Optional[str]" = None) -> None:
+        """Fork entry point: merge a whole config in, keeping the reserved permission sidecar."""
+        from hermes_state_runtime import _store_of
+        from hermes_state_sessions import _parse_model_config
+        from hermes_state_tool_permissions import preserve_tool_permission
+        sessions = _store_of(self).sessions
+        record = sessions.get(session_id)
+        if record is None:
+            return
+        config = preserve_tool_permission(record.model_config, _parse_model_config(model_config_json))
+        sessions.patch_model_config(session_id, dict(config))
+        if model:
+            sessions.update_model(session_id, model)
+
+    @_held
     def patch_session_model_config(self, session_id: "str", patch: dict) -> None:
         """Fork entry point: merge ``patch`` into ``model_config`` (None removes a key)."""
         from hermes_state_tool_permissions import PERMISSION_KEY
