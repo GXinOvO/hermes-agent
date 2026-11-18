@@ -2,6 +2,10 @@ import hashlib
 import json
 import os
 import time
+from pathlib import Path
+
+from hermes_state_runtime import _holder_of
+from persistence_assembly import store_location
 
 
 def snapshot(value):
@@ -23,7 +27,6 @@ def matches(value, admission_id, expected=None):
 
 
 def valid(conn, db, value, kind, *, expected=None):
-    from pathlib import Path
     from gateway.delivery_ledger import _start_time
     from gateway.pending_final import RETENTION_SECONDS, _valid
     if not matches(value, value['binding']['admission_id'], expected):
@@ -36,7 +39,8 @@ def valid(conn, db, value, kind, *, expected=None):
         return False
     epoch = conn.execute('SELECT epoch FROM runtime_epoch WHERE singleton=1').fetchone()
     return (epoch is not None and part['delivery_epoch'] == epoch[0]
-            and _valid(conn, value, str(Path(db.db_path).resolve().parent)))
+            and _valid(conn, value, str((Path(db.db_path) if hasattr(db, 'db_path')
+                                         else store_location(db.scope)).resolve().parent)))
 
 
 def current(receipt, kind):
@@ -44,6 +48,6 @@ def current(receipt, kind):
     db, admission, won, _state, claimed = receipt
     if not won:
         return False
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         value = _read(conn, admission)
         return value is not None and valid(conn, db, value, kind, expected=snapshot(claimed))

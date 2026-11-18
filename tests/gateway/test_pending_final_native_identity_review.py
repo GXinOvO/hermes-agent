@@ -8,6 +8,9 @@ import pytest
 import pytest_asyncio
 
 from gateway import pending_final as pf
+from persistence_assembly import store_location
+from persistence.conversation.sessions import NewSession
+from tests.fixtures.storage_holder import raw_holder
 from gateway.platforms.base import SendResult
 from gateway.session_results import finish_result
 from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
@@ -42,16 +45,16 @@ async def native(tmp_path, monkeypatch):
     event._ingress_sha256 = fingerprint
     with native_callback(runner, event, tmp_path):
         admitted = await authority.admit_native(event)
-    row = claim_session_input(authority.db, epoch=authority.epoch, session_id=admitted.ref.session_id)
+    row = claim_session_input(authority.persistence, epoch=authority.epoch, session_id=admitted.ref.session_id)
     assert row['principal_id'].startswith('messaging:')
     assert row['payload']['native_text_v1']['ingress_sha256'] == fingerprint
     route = row['payload']['native_text_v1']['route']
     descriptor = await pf.prepare(authority, row, event, route, 'sol sealed answer')
     assert descriptor['binding']['policy'] == 'human_reply_v1'
     try:
-        yield authority.db, authority.epoch, row, descriptor, tmp_path, fingerprint
+        yield authority.persistence, authority.epoch, row, descriptor, tmp_path, fingerprint
     finally:
-        authority.db.close()
+        authority.persistence.close()
 
 
 def settle(native):
@@ -64,7 +67,7 @@ def settle(native):
 
 
 def result_raw(db, row):
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         return conn.execute('SELECT value FROM state_meta WHERE key=?', (RESULT_PREFIX + row['admission_id'],)).fetchone()[0]
 
 
@@ -96,7 +99,7 @@ def fault(native, mode):
         conn.execute('UPDATE session_admissions SET generation=?,principal_id=?,request_id=?,target_session_id=?,owner_epoch=?,payload_json=? WHERE admission_id=?',
             (generation, principal, request, target, owner, json.dumps(payload), row['admission_id']))
         raw = dict(conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (row['admission_id'],)).fetchone())
-        value['binding'] = pf._binding(raw, db.db_path)
+        value['binding'] = pf._binding(raw, store_location(db.scope))
         if mode in {'profile'}:
             value['binding']['profile_home'] += '/foreign'
         if mode in {'generation_no_marker','generation_stripped_both','marker_only'}:
@@ -106,7 +109,7 @@ def fault(native, mode):
             saved.pop('_pending_final_identity_v1')
             conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(saved), RESULT_PREFIX + row['admission_id']))
         pf._put(conn, row['admission_id'], value)
-    db._execute_write(write)
+    raw_holder(db)._execute_write(write)
 
 
 @pytest.mark.asyncio
@@ -116,12 +119,12 @@ async def test_native_original_identity_before_any_prepare_pin_or_claim(native, 
     settle(native)
     original = result_raw(db, row)
     if mode == 'session':
-        db.create_session(row['target_session_id'] + ':drift', source='telegram')
+        db.sessions.create(NewSession(row['target_session_id'] + ':drift', source='telegram'))
     if mode != 'none':
         fault(native, mode)
     value = pf.pending(db)[0]
     before_read = result_raw(db, row)
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         changes = conn.total_changes
         try:
             witness = pf.read_identity_witness(conn, home, value['binding'])
@@ -169,9 +172,9 @@ async def test_native_invalid_ack_clock_rolls_back(native, monkeypatch, bad_cloc
 async def test_native_bad_admission_is_value_error_and_preserves_raw(native, raw):
     db, _epoch, row, _descriptor, home, _fingerprint = native
     settle(native)
-    db._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',(raw,row['admission_id'])))
+    raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',(raw,row['admission_id'])))
     value = pf.pending(db)[0]
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         before = conn.total_changes
         try:
             pf.read_identity_witness(conn,home,value['binding'])
@@ -194,17 +197,17 @@ async def test_native_bad_admission_is_value_error_and_preserves_raw(native, raw
 @pytest.mark.asyncio
 async def test_native_terminal_atomic_abort_retry_and_idempotency(native):
     db, _epoch, row, _descriptor, home, fingerprint = native
-    db._execute_write(lambda conn: conn.execute("CREATE TRIGGER sol_abort_result BEFORE INSERT ON state_meta WHEN NEW.key LIKE 'gateway.admission.result.v1.%' BEGIN SELECT RAISE(ABORT,'sol result insert fault'); END"))
+    raw_holder(db)._execute_write(lambda conn: conn.execute("CREATE TRIGGER sol_abort_result BEFORE INSERT ON state_meta WHEN NEW.key LIKE 'gateway.admission.result.v1.%' BEGIN SELECT RAISE(ABORT,'sol result insert fault'); END"))
     with pytest.raises(sqlite3.IntegrityError, match='sol result insert fault'):
         settle(native)
     assert pf.pending(db) == []
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         assert conn.execute('SELECT status FROM session_admissions WHERE admission_id=?',(row['admission_id'],)).fetchone()[0] == 'started'
         assert conn.execute('SELECT value FROM state_meta WHERE key=?',(RESULT_PREFIX+row['admission_id'],)).fetchone() is None
-    db._execute_write(lambda conn: conn.execute('DROP TRIGGER sol_abort_result'))
+    raw_holder(db)._execute_write(lambda conn: conn.execute('DROP TRIGGER sol_abort_result'))
     settle(native)
     saved, final = result_raw(db, row), pf.pending(db)[0]
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         witness = pf.read_identity_witness(conn, home, final['binding'])
         assert witness['ingress_sha256'] == fingerprint and witness['version'] == 1
     settle(native)
@@ -226,7 +229,7 @@ async def test_native_sqlite_busy_retry_reexecutes_real_terminal_writer(native, 
     monkeypatch.setattr(pf,'persist',once_busy)
     settle(native)
     assert len(calls) == 2 and calls[0] == calls[1]
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         assert pf.read_identity_witness(conn,home,pf.pending(db)[0]['binding'])['ingress_sha256'] == fingerprint
     print('SOL_NATIVE_RETRY', json.dumps({'terminal_callback_calls':len(calls), 'duplicate_seal':False}))
 
@@ -251,12 +254,12 @@ async def test_native_ack_result_write_failure_does_not_consume(native):
     settle(native)
     assert pf.claim(db,row['admission_id'],'text','sol sealed answer')[1]
     before = pf.pending(db)[0]
-    db._execute_write(lambda conn: conn.execute("CREATE TRIGGER sol_abort_ack BEFORE UPDATE ON state_meta WHEN NEW.key LIKE 'gateway.pending_final.v1:%' BEGIN SELECT RAISE(ABORT,'sol ACK write fault'); END"))
+    raw_holder(db)._execute_write(lambda conn: conn.execute("CREATE TRIGGER sol_abort_ack BEFORE UPDATE ON state_meta WHEN NEW.key LIKE 'gateway.pending_final.v1:%' BEGIN SELECT RAISE(ABORT,'sol ACK write fault'); END"))
     with pytest.raises(sqlite3.IntegrityError, match='sol ACK write fault'):
         pf.finish(db,row['admission_id'],'text',SendResult(success=True))
     assert pf.pending(db)[0] == before
     assert 'delivered_at' not in before['parts']['text']
-    db._execute_write(lambda conn: conn.execute('DROP TRIGGER sol_abort_ack'))
+    raw_holder(db)._execute_write(lambda conn: conn.execute('DROP TRIGGER sol_abort_ack'))
     assert pf.finish(db,row['admission_id'],'text',SendResult(success=True))
     print('SOL_NATIVE_ACK_ROLLBACK',json.dumps({'failed_commit':'attempting_without_timestamp','retry':'delivered'}))
 
@@ -268,14 +271,14 @@ async def test_native_result_compaction_retirement_and_pruning_fail_closed(nativ
     settle(native)
     value = pf.pending(db)[0]
     original = load_result(result_raw(db,row))['_pending_final_identity_v1']
-    db._execute_write(lambda conn: _compact_result(conn,row['admission_id']))
-    with db._read_ctx() as conn:
+    raw_holder(db)._execute_write(lambda conn: _compact_result(conn,row['admission_id']))
+    with raw_holder(db)._read_ctx() as conn:
         assert pf.read_identity_witness(conn,home,value['binding']) == original
-    db._execute_write(lambda conn: retire_sessions(conn,[row['target_session_id']]))
+    raw_holder(db)._execute_write(lambda conn: retire_sessions(conn,[row['target_session_id']]))
     assert load_result(result_raw(db,row))['_pending_final_identity_v1'] == original
     assert pf.claim(db,row['admission_id'],'text','sol sealed answer')[1:] == (False,'invalidated')
-    db._execute_write(lambda conn: prune_retired_tombstones(conn,older_than=-1))
-    with db._read_ctx() as conn:
+    raw_holder(db)._execute_write(lambda conn: prune_retired_tombstones(conn,older_than=-1))
+    with raw_holder(db)._read_ctx() as conn:
         assert pf.read_identity_witness(conn,home,value['binding']) is None
     current,won,reason=pf.claim(db,row['admission_id'],'text','sol sealed answer')
     assert not won and reason=='invalidated' and current['parts']['text']['attempts']==0

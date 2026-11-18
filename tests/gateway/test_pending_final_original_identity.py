@@ -183,13 +183,13 @@ async def test_real_native_human_ingress_witness_rejects_first_prepare_generatio
     try:
         with native_callback(runner, event, tmp_path):
             admitted = await authority.admit_native(event)
-        row = claim_session_input(authority.db, epoch=authority.epoch, session_id=admitted.ref.session_id)
+        row = claim_session_input(authority.persistence, epoch=authority.epoch, session_id=admitted.ref.session_id)
         assert row['principal_id'].startswith('messaging:')
         route = row['payload']['native_text_v1']['route']
         assert row['payload']['native_text_v1']['ingress_sha256'] == 'c' * 64
         prepared = await pf.prepare(authority, row, event, route, 'sealed final')
-        settle(authority.db, authority.epoch, row, prepared)
-        value = pf.pending(authority.db)[0]
+        settle(authority.persistence, authority.epoch, row, prepared)
+        value = pf.pending(authority.persistence)[0]
         assert value['binding']['policy'] == 'human_reply_v1'
         if drift:
             def mutate(conn):
@@ -198,15 +198,15 @@ async def test_real_native_human_ingress_witness_rejects_first_prepare_generatio
                 conn.execute('UPDATE session_admissions SET generation=? WHERE admission_id=?', (generation, row['admission_id']))
                 value['binding']['generation'] = generation
                 pf._put(conn, row['admission_id'], value)
-            authority.raw_holder(db)._execute_write(mutate)
-        with authority.raw_holder(db)._read_ctx() as conn:
+            raw_holder(authority.persistence)._execute_write(mutate)
+        with raw_holder(authority.persistence)._read_ctx() as conn:
             if drift:
                 with pytest.raises(ValueError, match='identity witness'):
                     pf.read_identity_witness(conn, tmp_path, value['binding'])
             else:
                 assert pf.read_identity_witness(conn, tmp_path, value['binding'])['ingress_sha256'] == 'c' * 64
-        result, won, _ = pf.claim(authority.db, row['admission_id'], 'text', 'sealed final')
+        result, won, _ = pf.claim(authority.persistence, row['admission_id'], 'text', 'sealed final')
         assert won is (not drift)
         assert result['parts']['text']['attempts'] == int(not drift)
     finally:
-        authority.db.close()
+        authority.persistence.close()

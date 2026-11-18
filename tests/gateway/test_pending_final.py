@@ -114,7 +114,7 @@ async def test_real_readers_refuse_live_owner_then_only_one_cas_wins(tmp_path):
             replies = list(pool.map(_reader, [home]*4))
         assert sum(reply['claimed'] for reply in replies) == 1, replies
         assert {reply['state'] for reply in replies} <= {'attempting','unknown'}
-        with SessionDB(home / 'state.db') as fresh:
+        with open_persistence(profile_scope(home=home), eager=True) as fresh:
             value = pf.pending(fresh)[0]
             assert value['parts']['text']['attempts'] == 1
             assert pf.claim(fresh, value['binding']['admission_id'], 'text', 'sealed final', recovering=True)[1:] == (False, 'unknown')

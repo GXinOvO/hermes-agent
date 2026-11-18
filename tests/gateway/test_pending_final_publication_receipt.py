@@ -6,6 +6,8 @@ import json
 import pytest
 
 from gateway import pending_final as pf
+from persistence_assembly import open_persistence, profile_scope, store_location
+from tests.fixtures.storage_holder import raw_holder
 from gateway.platforms.base import SendResult
 from gateway.config import Platform
 from tests.gateway import test_pending_final as fixtures
@@ -16,7 +18,7 @@ async def prepared_claim(tmp_path):
     db, epoch, row, event, _, authority = await fixtures._sealed(tmp_path, human=True)
     payload = deepcopy(row['payload'])
     payload['native_text_v1']['source'].update(platform='a2a', chat_id='context')
-    db._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
+    raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                                 (json.dumps(payload), row['admission_id'])))
     row['payload'] = payload
     event.source.platform = Platform('a2a')
@@ -42,9 +44,9 @@ def publication(db, row):
             'task_id': 'task', 'context_id': 'context', 'payload_hash': value['parts']['text']['payload_hash'],
             'public_reply_sha256': hashlib.sha256(b'public final').hexdigest()}
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (key, json.dumps(expected)))
-        return pub.capture(conn, db.db_path.parent, row['admission_id'], 'text', task_id='task',
+        return pub.capture(conn, store_location(db.scope).parent, row['admission_id'], 'text', task_id='task',
                            context_id='context', public_reply='public final', verify=verify)
-    return db._execute_write(publish), verify
+    return raw_holder(db)._execute_write(publish), verify
 
 
 @pytest.mark.asyncio
@@ -62,12 +64,12 @@ async def test_publication_receipt_requires_real_claim_and_runtime_capability(tm
             candidate = replace(capability, encoded=capability.encoded.replace('public_reply_sha256', 'foreign'))
         if fault == 'task':
             with pytest.raises(ValueError):
-                db._execute_write(lambda conn: pub.capture(conn, tmp_path, row['admission_id'], 'text',
+                raw_holder(db)._execute_write(lambda conn: pub.capture(conn, tmp_path, row['admission_id'], 'text',
                     task_id='foreign', context_id='context', public_reply='public final', verify=verify))
             return
         if fault == 'context':
             with pytest.raises(ValueError):
-                db._execute_write(lambda conn: pub.capture(conn, tmp_path, row['admission_id'], 'text',
+                raw_holder(db)._execute_write(lambda conn: pub.capture(conn, tmp_path, row['admission_id'], 'text',
                     task_id='task', context_id='foreign', public_reply='public final', verify=verify))
             return
         if fault == 'payload':
@@ -76,22 +78,21 @@ async def test_publication_receipt_requires_real_claim_and_runtime_capability(tm
                 current['parts']['text']['content'] = 'foreign'
                 current['parts']['text']['payload_hash'] = pf._digest('foreign')
                 pf._put(conn, row['admission_id'], current)
-            db._execute_write(mutate)
+            raw_holder(db)._execute_write(mutate)
         if fault == 'epoch':
-            db._execute_write(lambda conn: conn.execute('UPDATE runtime_epoch SET epoch=epoch+1'))
+            raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE runtime_epoch SET epoch=epoch+1'))
         if fault == 'publication_row':
-            db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+            raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
                 ('{}', 'test.publication:' + row['admission_id'])))
         if fault == 'foreign_db':
-            from hermes_state import SessionDB
-            with SessionDB(tmp_path / 'foreign' / 'state.db') as foreign:
-                with foreign._read_ctx() as conn, pytest.raises(ValueError):
+            with open_persistence(profile_scope(home=tmp_path / 'foreign'), eager=True) as foreign:
+                with raw_holder(foreign)._read_ctx() as conn, pytest.raises(ValueError):
                     pub.capture(conn, tmp_path, row['admission_id'], 'text', task_id='task',
                                 context_id='context', public_reply='public final', verify=verify)
             return
         if fault == 'foreign_home':
             with pytest.raises(ValueError):
-                db._execute_write(lambda conn: pub.capture(conn, tmp_path / 'foreign', row['admission_id'], 'text',
+                raw_holder(db)._execute_write(lambda conn: pub.capture(conn, tmp_path / 'foreign', row['admission_id'], 'text',
                     task_id='task', context_id='context', public_reply='public final', verify=verify))
             return
         result = SendResult(success=fault != 'failure', message_id='foreign' if fault == 'message_id' else 'task',
@@ -138,7 +139,7 @@ async def test_publication_receipt_survives_content_expiry_without_reconstructio
         def strip(conn):
             current['parts']['text'].pop('publication_receipt')
             pf._put(conn, row['admission_id'], current)
-        db._execute_write(strip)
+        raw_holder(db)._execute_write(strip)
         with db._read_ctx() as conn:
             before = conn.total_changes
             assert pub.read(conn, tmp_path, current['binding']) is None

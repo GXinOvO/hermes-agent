@@ -243,7 +243,7 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
 
 
 def get_session_admission(db, *, admission_id: str) -> dict | None:
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         from persistence.sqlite.authority._runtime import terminal_admission
         row = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone()
         return _row(row if row is not None else terminal_admission(conn, admission_id))
@@ -251,7 +251,7 @@ def get_session_admission(db, *, admission_id: str) -> dict | None:
 
 def find_session_admission(db, *, principal_id: str, session_id: str, request_id: str) -> dict | None:
     """The admission at its exact durable identity: the UNIQUE (principal, target, request) key."""
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         return _row(conn.execute('SELECT * FROM session_admissions WHERE principal_id=? AND target_session_id=? '
                                  'AND request_id=?', (principal_id, session_id, request_id)).fetchone())
 
@@ -377,7 +377,7 @@ def cancel_session_input(db, *, epoch: int, admission_id: str) -> dict:
         if row['status'] == 'queued':
             conn.execute(_CANCEL_QUEUED, (admission_id,))
         return _row(_admission(conn, admission_id))
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 # A queued admission handed to its FIFO's running claim: terminal (never claimable, outside the queue
@@ -419,7 +419,7 @@ def steer_session_input(db, *, epoch: int, admission_id: str, generation: int) -
         conn.execute("UPDATE session_admissions SET status='terminal',outcome=?,owner_epoch=?,generation=? "
                      "WHERE admission_id=?", (STEERING, epoch, generation, admission_id))
         return _row(_admission(conn, admission_id)), True
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def settle_steer_transfers(conn, *, epoch: int, generation: int, transfers, outcome: str) -> None:
@@ -441,7 +441,7 @@ def revert_steer_input(db, *, epoch: int, admission_id: str, generation: int) ->
     def write(conn):
         _epoch(conn, epoch)
         return _requeue_transfer(conn, admission_id=admission_id, epoch=epoch, generation=generation)
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 REPLACEMENT_PREFIX = 'gateway.queued_replacement.v1.'
@@ -498,7 +498,7 @@ def rehome_queued_inputs(db, *, epoch: int, old_session_id: str, new_session_id:
             for sid in (old_session_id, new_session_id):
                 conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (sid,))
         return [row['admission_id'] for row in rows]
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def retarget_local_automation(db, *, epoch: int, session_id: str, principal_id: str,
@@ -535,7 +535,7 @@ def retarget_local_automation(db, *, epoch: int, session_id: str, principal_id: 
         if moved:
             conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (session_id,))
         return moved
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def recover_session_inputs(db, *, epoch: int) -> int:
@@ -549,7 +549,7 @@ def recover_session_inputs(db, *, epoch: int) -> int:
         conn.execute("UPDATE session_admissions SET outcome='interrupted' WHERE status='terminal' AND outcome=? "
                      "AND owner_epoch!=?", (STEERING, epoch))
         return conn.execute("UPDATE session_admissions SET status='unknown' WHERE status='started' AND owner_epoch!=?", (epoch,)).rowcount
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def mutation_receipt_key(principal_id, session_id, request_id, *, operation, payload, expected_revision,
@@ -739,7 +739,7 @@ def import_legacy_session_admissions(db, *, epoch: int, source_path, principal_i
                 _import_legacy_row(conn, row, epoch, principal_id)
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (_IMPORT_KEY, marker))
             return len(rows)
-        return db._execute_write(write)
+        return _holder_of(db)._execute_write(write)
 
 
 def resolve_unknown_session_input(db, *, epoch: int, admission_id: str, generation: int,
@@ -779,7 +779,7 @@ def resolve_unknown_session_input(db, *, epoch: int, admission_id: str, generati
                      (outcome, admission_id))
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (row['target_session_id'],))
         return _row(_admission(conn, admission_id))
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def _worker_public(row):
@@ -865,7 +865,7 @@ def adopt_worker_execution(db, *, epoch: int, execution_id: str, session_id: str
         if changed.rowcount != 1:
             raise RuntimeStoreError('stale_generation')
         return _worker_public(_worker_assignment(conn, execution_id, session_id, generation))
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 _MESSAGE_FIELDS = frozenset({

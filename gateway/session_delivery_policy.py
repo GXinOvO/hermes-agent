@@ -11,6 +11,9 @@ import hashlib
 import json
 from pathlib import Path
 import threading
+
+from hermes_state_runtime import _holder_of
+from persistence_assembly import store_location
 import asyncio
 
 _current: ContextVar[object] = ContextVar('automation_final_delivery', default=None)
@@ -78,20 +81,20 @@ def _persist_witness(witness):
             raise RuntimeError('automation execution witness lost its generation')
         conn.execute('INSERT OR REPLACE INTO state_meta(key,value) VALUES(?,?)',
                      (_WITNESS_PREFIX + claim.admission, encoded))
-    claim.db._execute_write(write)
+    _holder_of(claim.db)._execute_write(write)
 
 
 def retry_execution_safe(authority, row):
     """True only for an observed runtime turn with no tool start. Missing evidence is unknown."""
     if consume_only(row):
         return False
-    with authority.db._read_ctx() as conn:
+    with _holder_of(authority.persistence)._read_ctx() as conn:
         saved = conn.execute('SELECT value FROM state_meta WHERE key=?',
                              (_WITNESS_PREFIX + row['admission_id'],)).fetchone()
     if saved is None:
         return False
     saved = json.loads(saved[0])
-    return (saved.get('profile_home') == str(Path(authority.db.db_path).parent.resolve())
+    return (saved.get('profile_home') == str(store_location(authority.persistence.scope).parent)
         and saved.get('session_id') == row['target_session_id']
         and saved.get('admission_id') == row['admission_id']
         and saved.get('generation') == row['generation']
@@ -173,7 +176,7 @@ async def automation_delivery_scope(authority, row, event):
         yield
         return
     from hermes_state_runtime import get_session_admission
-    saved = await asyncio.to_thread(get_session_admission, authority.db, admission_id=row['admission_id'])
+    saved = await asyncio.to_thread(get_session_admission, authority.persistence, admission_id=row['admission_id'])
     keys = ('admission_id', 'request_id', 'target_session_id', 'principal_id', 'generation',
             'owner_epoch', 'status', 'payload')
     if (saved is None or any(saved.get(key) != row.get(key) for key in keys)
@@ -181,7 +184,7 @@ async def automation_delivery_scope(authority, row, event):
         raise RuntimeError('automation final claim does not match the committed admission')
     descriptor = _descriptor(row) or {}
     route = descriptor.get('route') or row['payload']['native_text_v1']['route']
-    claim = _Claim(authority.db, str(Path(authority.db.db_path).parent.resolve()),
+    claim = _Claim(authority.persistence, str(store_location(authority.persistence.scope).parent),
         row['target_session_id'], row['admission_id'], row['generation'], row['request_id'], route,
         hashlib.sha256(json.dumps(row['payload'], sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         json.dumps(event.source.to_dict(), sort_keys=True),

@@ -83,12 +83,13 @@ def finish_result(store, *, epoch, row, response, outcome, result=None, prepared
                                               generation=row['generation'])
     if current.result is not None:
         return admission_row(current.record), current.result['result'].get('final_response') or ''
+    from gateway.pending_final import prepared_value
     descriptor = None
     if isinstance(result, dict):
-        descriptor = result.get('_pending_final_v1')
+        descriptor = prepared_value(result.get('_pending_final_v1'))
         inner = result.get('result')
         if not descriptor and isinstance(inner, dict):
-            descriptor = inner.get('_pending_final_v1')
+            descriptor = prepared_value(inner.get('_pending_final_v1'))
     outcome, stored = prepared or prepare_result(row, response, outcome, result)
     stored = dict(stored)
     stored.pop('_pending_final_v1', None)

@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 from gateway.pending_final import claim, pending
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope
 
 home = Path(sys.argv[1])
 if len(sys.argv) > 2 and sys.argv[2] == 'seal':
@@ -18,7 +18,7 @@ if len(sys.argv) > 2 and sys.argv[2] == 'seal':
     db.close()
     print(json.dumps({'sealed':True}))
     raise SystemExit(0)
-db = SessionDB(home / 'state.db')
+db = open_persistence(profile_scope(home=home), eager=True)
 value = pending(db)[-1]
 receipt = claim(db, value['binding']['admission_id'], 'text', 'sealed final', recovering=True)
 print(json.dumps({'claimed':receipt[1], 'state':receipt[2]}))
