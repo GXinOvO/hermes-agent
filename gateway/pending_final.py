@@ -13,6 +13,9 @@ import os
 from pathlib import Path
 import time
 
+from hermes_state_runtime import _holder_of
+from persistence_assembly import store_location
+
 logger = logging.getLogger(__name__)
 PREFIX = 'gateway.pending_final.v1:'
 _SEAL = object()
@@ -64,7 +67,7 @@ def _binding(row, db_path):
 
 async def prepare(authority, row, event, route, response):
     """Extract exact outgoing text/media before settlement, without a transport call."""
-    binding = await asyncio.to_thread(_binding, row, authority.db.db_path)
+    binding = await asyncio.to_thread(_binding, row, store_location(authority.persistence.scope))
     if binding is None or binding['route'] != route:
         return None
     adapter = authority.runner._adapter_for_source(event.source)
@@ -218,7 +221,7 @@ def _records(conn):
 
 
 def pending(db):
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         return [value for _key, value in _records(conn)]
 
 
@@ -245,17 +248,17 @@ def reconcile_orphans(db):
                 changed = True
             if changed:
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (_json(value), key))
-    db._execute_write(write)
+    _holder_of(db)._execute_write(write)
 
 
 def settled_for_session(runner, session_id, token):
     from gateway.session_authorities import all_authorities
     return any(value['binding']['session_id'] == session_id and value.get('turn_token') == token
-               for authority in all_authorities(runner) for value in pending(authority.db))
+               for authority in all_authorities(runner) for value in pending(authority.persistence))
 
 
 def _valid(conn, value, home):
-    from hermes_state_mutation_retirement import retired_in
+    from persistence.sqlite.conversation._store.retirement import retired_in
     binding = value['binding']
     raw = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (binding['admission_id'],)).fetchone()
     if raw is None or raw['status'] != 'terminal' or raw['outcome'] != 'completed':
@@ -287,7 +290,7 @@ def _put(conn, admission_id, value):
 def claim(db, admission_id, kind, content, *, recovering=False, expected_snapshot=None):
     """One real SQLite writer wins; live owner and drift checks precede the CAS."""
     from gateway.delivery_ledger import _owner_alive as _pid_alive, _start_time
-    home = str(Path(db.db_path).resolve().parent)
+    home = str(store_location(db.scope).parent)
     def write(conn):
         value = _read(conn, admission_id)
         if value is None:
@@ -322,7 +325,7 @@ def claim(db, admission_id, kind, content, *, recovering=False, expected_snapsho
                     owner_started_at=_start_time(os.getpid()), delivery_epoch=epoch, claim_snapshot=snapshot(value))
         _put(conn, admission_id, value)
         return value, True, 'attempting'
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def finish(db, admission_id, kind, result, *, expected_snapshot=None):
@@ -361,7 +364,7 @@ def finish(db, admission_id, kind, result, *, expected_snapshot=None):
             _check_part(kind, part, expired=False)
         _put(conn, admission_id, value)
         return True
-    return db._execute_write(write)
+    return _holder_of(db)._execute_write(write)
 
 
 def db_for_event(event):
@@ -374,7 +377,7 @@ def has_pending_final(event):
     db, admission_id = db_for_event(event)
     if db is None:
         return False
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         return _read(conn, admission_id) is not None
 
 
@@ -394,7 +397,7 @@ async def prepare_event(adapter, event):
     if db is None:
         return
     def read():
-        with db._read_ctx() as conn:
+        with _holder_of(db)._read_ctx() as conn:
             return _read(conn, admission_id)
     value = await asyncio.to_thread(read)
     if value is not None:
@@ -424,7 +427,7 @@ async def claim_event(event, kind, content, *, route=None, adapter_profile=None,
     if db is None:
         return None
     def read():
-        with db._read_ctx() as conn:
+        with _holder_of(db)._read_ctx() as conn:
             return _read(conn, admission_id)
     value = await asyncio.to_thread(read)
     if value is None:
@@ -470,8 +473,8 @@ async def recover(runner):
         authorities = [runner.session_authority]
     delivered = 0
     for authority in authorities:
-        await asyncio.to_thread(reconcile_orphans, authority.db)
-        for value in await asyncio.to_thread(pending, authority.db):
+        await asyncio.to_thread(reconcile_orphans, authority.persistence)
+        for value in await asyncio.to_thread(pending, authority.persistence):
             if value.get('expired'):
                 continue
             from gateway.session_authorities import owner_scope
@@ -485,7 +488,7 @@ async def recover(runner):
                 entry = runner.session_store.lookup_by_session_key(value['binding']['route'])
                 if entry is None or entry.session_id != value['binding']['session_id'] or entry.suspended:
                     continue
-                row = await asyncio.to_thread(get_session_admission, authority.db,
+                row = await asyncio.to_thread(get_session_admission, authority.persistence,
                                                admission_id=value['binding']['admission_id'])
                 payload = deepcopy(row['payload'])
                 payload['native_text_v1'].pop('media', None)  # input bytes were released by settlement
@@ -504,11 +507,11 @@ async def recover(runner):
             for kind, part, calls in plans:
                 from gateway.pending_final_claim import current, snapshot
                 expected = snapshot(value)
-                claimed, won, state = await asyncio.to_thread(claim, authority.db, value['binding']['admission_id'],
+                claimed, won, state = await asyncio.to_thread(claim, authority.persistence, value['binding']['admission_id'],
                     kind, part['content'], recovering=True, expected_snapshot=expected)
                 if not won:
                     continue
-                receipt = authority.db, value['binding']['admission_id'], won, state, claimed
+                receipt = authority.persistence, value['binding']['admission_id'], won, state, claimed
                 results = []
                 try:
                     for method, kwargs in calls:
@@ -531,7 +534,7 @@ async def recover(runner):
                 if (kind == 'text' and value['binding']['policy'] == 'human_reply_v1'
                         and results and not result.success):
                     from gateway.delivery_ledger import record_human_final_failure
-                    await asyncio.to_thread(record_human_final_failure, claimed, str(result.error or ''), db=authority.db)
+                    await asyncio.to_thread(record_human_final_failure, claimed, str(result.error or ''), db=authority.persistence)
                 result = await finish_event(receipt, kind, result)
                 delivered += int(result.success)
                 if not result.success:

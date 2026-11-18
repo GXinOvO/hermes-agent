@@ -219,7 +219,7 @@ def return_session_claim(holder, *, epoch: int, admission_id: str, generation: i
 
 
 def settle_session_input(holder, *, epoch: int, admission_id: str, generation: int, outcome: str,
-                         result: dict | None = None, _transfers=None, boundary=None) -> dict:
+                         result: dict | None = None, _transfers=None, boundary=None, terminal_write=None) -> dict:
     """``boundary`` (a ``TurnBoundary``) closes the turn on its current transcript in this same write, before the
     result and the terminal status are stored; raising rolls the settlement back."""
     if outcome not in ('completed', 'interrupted', 'rejected', 'failed'):
@@ -236,6 +236,8 @@ def settle_session_input(holder, *, epoch: int, admission_id: str, generation: i
         if boundary is not None:
             close_discarded_turn(holder, conn, row, boundary.notice, replace_after=boundary.replace_after,
                                  display_metadata=boundary.display_metadata)
+        if terminal_write:
+            terminal_write(conn, row)
         if result is not None:
             from ._runtime import RESULT_PREFIX
             encoded = _json(encode_result(compact_result(result, user_message=json.loads(row['payload_json']).get('text'))))

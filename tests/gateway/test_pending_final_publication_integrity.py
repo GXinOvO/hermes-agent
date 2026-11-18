@@ -7,7 +7,8 @@ import pytest
 from gateway import pending_final as pf
 from gateway import pending_final_publication as publication
 from gateway.platforms.base import SendResult
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope, store_location
+from tests.fixtures.storage_holder import raw_holder
 from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
 from tests.gateway.test_pending_final_publication_receipt import prepared_claim, publication as capture
 
@@ -21,7 +22,7 @@ def erase_identity(db, row):
         saved = load_result(conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0])
         saved.pop('_pending_final_identity_v1')
         conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(saved), key))
-    db._execute_write(erase)
+    raw_holder(db)._execute_write(erase)
 
 
 @pytest.mark.asyncio
@@ -48,7 +49,7 @@ async def test_legacy_ordinary_ack_keeps_prior_delivery_without_publication_proo
         part = pf.pending(db)[0]['parts']['text']
         assert part['state'] == 'delivered' and 'delivered_at' in part
         assert 'publication_receipt' not in part
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert publication.read(conn, tmp_path, value['binding']) is None
             assert pf.read_identity_witness(conn, tmp_path, value['binding']) is None
     finally:
@@ -61,12 +62,12 @@ async def test_same_canonical_path_replaced_database_cannot_use_original_capabil
     try:
         capability, _verify = capture(db, row)
         replacement = tmp_path / 'replacement.db'
-        with db._read_ctx() as source, sqlite3.connect(replacement) as target:
+        with raw_holder(db)._read_ctx() as source, sqlite3.connect(replacement) as target:
             source.backup(target)
         original = tmp_path / 'original.db'
-        os.replace(db.db_path, original)
-        os.replace(replacement, db.db_path)
-        with SessionDB(db.db_path) as other:
+        os.replace(store_location(db.scope), original)
+        os.replace(replacement, store_location(db.scope))
+        with open_persistence(profile_scope(home=db.scope.profile_dir), eager=True) as other:
             assert pf.finish(other, row['admission_id'], 'text', SendResult(success=True, message_id='task',
                 raw_response={'publication_receipt_v1': capability})) is False
             part = pf.pending(other)[0]['parts']['text']

@@ -14,7 +14,9 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
-from hermes_state import SessionDB
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope, store_location
+from tests.fixtures.storage_holder import raw_holder
 from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
 from gateway.strict_transport import single_attempt_transport
 
@@ -39,8 +41,8 @@ class Adapter(BasePlatformAdapter):
 
 async def _sealed(tmp_path, *, human=False):
     from gateway.pending_final import prepare
-    db = SessionDB(tmp_path / 'state.db')
-    db.create_session('sid', source='slack')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
+    db.sessions.create(NewSession('sid', source='slack'))
     epoch = begin_runtime_epoch(db, instance_id='owner')
     route = 'agent:main:slack:dm:chat'
     source = SessionSource(platform=Platform.SLACK, chat_id='chat', chat_type='dm')
@@ -54,7 +56,7 @@ async def _sealed(tmp_path, *, human=False):
     row = claim_session_input(db, epoch=epoch, session_id='sid')
     event = MessageEvent(text='saved task', source=source, internal=True, message_id='task')
     adapter = Adapter()
-    authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source:adapter))
+    authority = SimpleNamespace(persistence=db, runner=SimpleNamespace(_adapter_for_source=lambda source:adapter))
     prepared = await prepare(authority, row, event, route, 'sealed final')
     return db, epoch, row, event, prepared, authority
 
@@ -68,7 +70,7 @@ async def test_terminal_commit_contains_exact_pending_final(tmp_path):
         with pytest.raises(RuntimeError, match='abort'):
             def failing(conn, raw):
                 from gateway.pending_final import persist
-                persist(conn, raw, prepared, db_path=db.db_path)
+                persist(conn, raw, prepared, db_path=store_location(db.scope))
                 raise RuntimeError('abort')
             from hermes_state_runtime import settle_session_input
             settle_session_input(db, epoch=epoch, admission_id=row['admission_id'], generation=row['generation'],
@@ -141,14 +143,14 @@ async def test_pending_final_never_sends_drift_or_uncertain_part(tmp_path, drift
                 key = {'generation':'generation', 'profile':'profile_home', 'target':'session_id'}[drift]
                 value['binding'][key] = 99 if drift=='generation' else 'foreign'
                 pf._put(conn, row['admission_id'], value)
-            db._execute_write(mutate)
+            raw_holder(db)._execute_write(mutate)
             assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1:] == (False, 'invalidated')
         elif drift == 'unknown':
             def uncertain(conn):
                 value = pf._read(conn, row['admission_id'])
                 value['parts']['text']['state'] = 'unknown'
                 pf._put(conn, row['admission_id'], value)
-            db._execute_write(uncertain)
+            raw_holder(db)._execute_write(uncertain)
             assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1:] == (False, 'unknown')
         else:
             class Unsupported(Adapter):
@@ -189,7 +191,7 @@ async def test_expired_payload_is_a_permanent_tombstone_and_cannot_be_resealed(t
         assert value['expired'] and 'response' not in value and 'content' not in value['parts']['text']
         assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1:] == (False,'expired')
         with pytest.raises(RuntimeError, match='already sealed'):
-            db._execute_write(lambda conn:pf.persist(conn, row, descriptor, db_path=db.db_path))
+            raw_holder(db)._execute_write(lambda conn:pf.persist(conn, row, descriptor, db_path=store_location(db.scope)))
     finally:
         db.close()
 
@@ -217,7 +219,7 @@ async def test_mutation_boundary_invalidates_pending_even_if_generation_is_uncha
     try:
         finish_result(db, epoch=epoch, row=row, response='sealed final', outcome='completed',
             result={'result':{'final_response':'sealed final','messages':[], '_pending_final_v1':descriptor}, 'usage':{}})
-        db._execute_write(lambda conn:invalidate_target(conn, 'sid'))
+        raw_holder(db)._execute_write(lambda conn:invalidate_target(conn, 'sid'))
         assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1:] == (False,'invalidated')
     finally:
         db.close()

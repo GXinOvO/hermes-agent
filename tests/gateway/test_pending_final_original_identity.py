@@ -5,6 +5,8 @@ import json
 import pytest
 
 from gateway import pending_final as pf
+from persistence_assembly import store_location
+from tests.fixtures.storage_holder import raw_holder
 from gateway.session_results import finish_result
 from hermes_state_runtime import RuntimeStoreError
 from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
@@ -22,7 +24,7 @@ def ingress(db, row):
     def write(conn):
         conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                      (json.dumps(payload), row['admission_id']))
-    db._execute_write(write)
+    raw_holder(db)._execute_write(write)
     row['payload'] = payload
 
 
@@ -35,7 +37,7 @@ async def test_original_final_identity_refuses_coordinated_current_binding_drift
         prepared = await pf.prepare(authority, row, event, row['payload']['native_text_v1']['route'], 'sealed final')
         settle(db, epoch, row, prepared)
         original = pf.pending(db)[0]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             result_raw = conn.execute('SELECT value FROM state_meta WHERE key=?', (RESULT_PREFIX + row['admission_id'],)).fetchone()[0]
         current = deepcopy(original)
         def mutate(conn):
@@ -59,11 +61,11 @@ async def test_original_final_identity_refuses_coordinated_current_binding_drift
             conn.execute('UPDATE session_admissions SET generation=?,principal_id=?,request_id=?,payload_json=? WHERE admission_id=?',
                 (values['generation'], values['principal_id'], values['request_id'], json.dumps(payload), row['admission_id']))
             raw = dict(conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (row['admission_id'],)).fetchone())
-            current['binding'] = pf._binding(raw, db.db_path)
+            current['binding'] = pf._binding(raw, store_location(db.scope))
             pf._put(conn, row['admission_id'], current)
         if drift != 'none':
-            db._execute_write(mutate)
-        with db._read_ctx() as conn:
+            raw_holder(db)._execute_write(mutate)
+        with raw_holder(db)._read_ctx() as conn:
             if drift == 'none':
                 witness = pf.read_identity_witness(conn, tmp_path, current['binding'])
                 assert witness['binding'] == original['binding']
@@ -88,18 +90,18 @@ async def test_identity_witness_rolls_back_with_failed_settlement(tmp_path):
         ingress(db, row)
         prepared = await pf.prepare(authority, row, event, row['payload']['native_text_v1']['route'], 'sealed final')
         def broken(conn, *args, **kwargs):
-            pf.persist(conn, row, prepared, db_path=db.db_path)
+            pf.persist(conn, row, prepared, db_path=store_location(db.scope))
             raise RuntimeError('abort witness commit')
         from hermes_state_runtime import settle_session_input
         with pytest.raises(RuntimeError, match='abort witness'):
             settle_session_input(db, epoch=epoch, admission_id=row['admission_id'], generation=row['generation'],
                 outcome='completed', _terminal_write=broken)
         assert pf.pending(db) == []
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert pf.read_identity_witness(conn, tmp_path, prepared['binding']) is None
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (RESULT_PREFIX + row['admission_id'],)).fetchone() is None
         settle(db, epoch, row, prepared)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert pf.read_identity_witness(conn, tmp_path, prepared['binding'])['ingress_sha256'] == 'a' * 64
     finally:
         db.close()
@@ -113,12 +115,12 @@ async def test_current_row_drift_before_terminal_write_rolls_back(tmp_path):
         prepared = await pf.prepare(authority, row, event, row['payload']['native_text_v1']['route'], 'sealed final')
         payload = deepcopy(row['payload'])
         payload['native_text_v1']['ingress_sha256'] = 'b' * 64
-        db._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                                    (json.dumps(payload), row['admission_id'])))
         with pytest.raises((RuntimeError, RuntimeStoreError), match='binding|identity'):
             settle(db, epoch, row, prepared)
         assert pf.pending(db) == []
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT status FROM session_admissions WHERE admission_id=?', (row['admission_id'],)).fetchone()[0] == 'started'
             assert pf.read_identity_witness(conn, tmp_path, prepared['binding']) is None
     finally:
@@ -140,8 +142,8 @@ async def test_legacy_identity_read_never_reconstructs_original_witness(tmp_path
                 saved = load_result(raw)
                 saved.pop('_pending_final_identity_v1')
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(saved), RESULT_PREFIX + row['admission_id']))
-            db._execute_write(strip)
-        with db._read_ctx() as conn:
+            raw_holder(db)._execute_write(strip)
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             witness = pf.read_identity_witness(conn, tmp_path, prepared['binding'])
             assert conn.total_changes == before
@@ -196,8 +198,8 @@ async def test_real_native_human_ingress_witness_rejects_first_prepare_generatio
                 conn.execute('UPDATE session_admissions SET generation=? WHERE admission_id=?', (generation, row['admission_id']))
                 value['binding']['generation'] = generation
                 pf._put(conn, row['admission_id'], value)
-            authority.db._execute_write(mutate)
-        with authority.db._read_ctx() as conn:
+            authority.raw_holder(db)._execute_write(mutate)
+        with authority.raw_holder(db)._read_ctx() as conn:
             if drift:
                 with pytest.raises(ValueError, match='identity witness'):
                     pf.read_identity_witness(conn, tmp_path, value['binding'])

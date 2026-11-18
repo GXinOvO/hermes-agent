@@ -269,7 +269,7 @@ class AdmissionRepository(Protocol):
         """
         ...
 
-    def settle(self, *, epoch: int, admission_id: str, generation: int, outcome: Literal['completed', 'interrupted', 'rejected', 'failed'], result: Mapping[str, Any] | None = None, transfers: Mapping[str, bool] | None = None, boundary: TurnBoundary | None = None) -> AdmissionRecord:
+    def settle(self, *, epoch: int, admission_id: str, generation: int, outcome: Literal['completed', 'interrupted', 'rejected', 'failed'], result: Mapping[str, Any] | None = None, transfers: Mapping[str, bool] | None = None, boundary: TurnBoundary | None = None, terminal_write: Callable[[Any, Mapping[str, Any]], Any] | None = None) -> AdmissionRecord:
         """Settle a started admission.
 
         Order: outcome (``invalid_params``); epoch; the row (``not_found``); its session (``not_found``); the composite fence (started, owned by ``epoch``, at ``generation``, the session at ``generation``; else ``stale_generation``); then: its workers retire, ``boundary`` closes the turn on the current physical transcript, ``result`` is stored compacted and encoded, the row goes terminal, the steering ``transfers`` settle (delivered ones ``steered`` on ``completed`` else ``interrupted``, undelivered ones queued again), the session revision bumps.

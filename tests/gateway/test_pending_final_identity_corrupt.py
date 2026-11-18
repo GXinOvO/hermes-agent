@@ -1,6 +1,8 @@
 import pytest
 
 from gateway import pending_final as pf
+from persistence_assembly import store_location
+from tests.fixtures.storage_holder import raw_holder
 from gateway.session_results import finish_result
 from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX
 from tests.gateway import test_pending_final as fixtures
@@ -13,10 +15,10 @@ async def test_corrupt_identity_result_is_rejected_and_preserved_before_claim(tm
     try:
         finish_result(db, epoch=epoch, row=row, response='sealed final', outcome='completed',
             result={'result': {'final_response': 'sealed final', 'messages': [], '_pending_final_v1': descriptor}, 'usage': {}})
-        db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
                                                    (raw, RESULT_PREFIX + row['admission_id'])))
         value = pf.pending(db)[0]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             with pytest.raises(ValueError, match='identity witness'):
                 pf.read_identity_witness(conn, tmp_path, value['binding'])

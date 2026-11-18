@@ -86,11 +86,11 @@ class SQLiteAdmissionRepository:
     def settle(self, *, epoch: int, admission_id: str, generation: int,
                outcome: Literal["completed", "interrupted", "rejected", "failed"],
                result: Mapping[str, Any] | None = None, transfers: Mapping[str, bool] | None = None,
-               boundary: TurnBoundary | None = None) -> AdmissionRecord:
+               boundary: TurnBoundary | None = None, terminal_write=None) -> AdmissionRecord:
         with refused():
             return _record(store.settle_session_input(
                 self._store.holder(), epoch=epoch, admission_id=admission_id, generation=generation, outcome=outcome,
-                result=result, _transfers=transfers, boundary=boundary))
+                result=result, _transfers=transfers, boundary=boundary, terminal_write=terminal_write))
 
     def cancel(self, *, epoch: int, admission_id: str) -> AdmissionRecord:
         with refused():

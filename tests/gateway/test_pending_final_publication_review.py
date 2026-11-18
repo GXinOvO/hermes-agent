@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from gateway import pending_final as pf
+from persistence_assembly import store_location
+from tests.fixtures.storage_holder import raw_holder
 from gateway import pending_final_publication as pub
 from gateway.platforms.base import SendResult
 from gateway.strict_transport import single_attempt_transport
@@ -43,7 +45,7 @@ async def test_recovery_bad_shape_keeps_healthy_sibling_and_ordinary_orphan(tmp_
         elif raw_kind != 'invalid_json':
             payload = {'payload_list': [], 'payload_null': None}[raw_kind]
         raw = '{broken' if raw_kind == 'invalid_json' else json.dumps(payload)
-        bad_db._execute_write(lambda c: c.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
+        raw_holder(bad_db)._execute_write(lambda c: c.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                                    (raw, bad_row['admission_id'])))
         orphan_db, orphan_row, _, _ = values[2]
         assert pf.claim(orphan_db, orphan_row['admission_id'], 'text', 'sealed final')[1]
@@ -68,7 +70,7 @@ async def test_recovery_bad_shape_keeps_healthy_sibling_and_ordinary_orphan(tmp_
         states = [pf.pending(db)[0]['parts']['text'] for db in handles]
         assert [(p['state'], p['attempts']) for p in states] == [('pending', 0), ('delivered', 1), ('unknown', 1)]
         assert all('publication_receipt' not in p for p in states)
-        with bad_db._read_ctx() as conn:
+        with raw_holder(bad_db)._read_ctx() as conn:
             assert conn.execute('SELECT payload_json FROM session_admissions WHERE admission_id=?',
                                 (bad_row['admission_id'],)).fetchone()[0] == raw
             assert pf._valid(conn, bad_value, tmp_path / 'bad') is False
@@ -86,7 +88,7 @@ async def test_legacy_pending_without_independent_identity_must_not_mint_publica
         payload = deepcopy(row['payload'])
         payload['native_text_v1']['source'].update(platform='a2a', chat_id='context')
         row['payload'] = payload
-        db._execute_write(lambda c: c.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
+        raw_holder(db)._execute_write(lambda c: c.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                                (json.dumps(payload), row['admission_id'])))
         from gateway.config import Platform
         event.source.platform = Platform('a2a')
@@ -102,10 +104,10 @@ async def test_legacy_pending_without_independent_identity_must_not_mint_publica
             saved = load_result(conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0])
             saved.pop('_pending_final_identity_v1')
             conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(saved), key))
-        db._execute_write(legacy_shape)
+        raw_holder(db)._execute_write(legacy_shape)
         assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1]
         value = pf.pending(db)[0]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert pf.read_identity_witness(conn, tmp_path, value['binding']) is None
         rejected = False
         try:
@@ -120,7 +122,7 @@ async def test_legacy_pending_without_independent_identity_must_not_mint_publica
             observation['state'] = current['parts']['text']['state']
             observation['receipt_persisted'] = 'publication_receipt' in current['parts']['text']
             try:
-                with db._read_ctx() as conn:
+                with raw_holder(db)._read_ctx() as conn:
                     observation['read'] = pub.read(conn, tmp_path, current['binding'])
             except ValueError as exc:
                 observation['read_error'] = str(exc)
@@ -158,8 +160,8 @@ async def test_present_malformed_receipt_is_valueerror_and_readonly(tmp_path, fa
             if fault in {'unknown', 'missing_ack_time'}:
                 part.pop('delivered_at')
             pf._put(conn, row['admission_id'], current)
-        db._execute_write(corrupt)
-        with db._read_ctx() as conn:
+        raw_holder(db)._execute_write(corrupt)
+        with raw_holder(db)._read_ctx() as conn:
             key = pf.PREFIX + row['admission_id']
             raw = conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0]
             changes = conn.total_changes
@@ -197,10 +199,10 @@ async def test_capability_copy_and_current_row_drift_do_not_mint_history(tmp_pat
                                   'original_content': 'sealed final'})))
             return pub.capture(conn, tmp_path, row['admission_id'], 'text', task_id='task', context_id='context',
                                public_reply=public, verify=verify)
-        cap = db._execute_write(publish)
+        cap = raw_holder(db)._execute_write(publish)
         if fault == 'same_row_hash_drift':
             changed = {'reply': 'changed', 'hash': hashlib.sha256(b'changed').hexdigest(), 'original_content': 'sealed final'}
-            db._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(changed), key)))
+            raw_holder(db)._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(changed), key)))
         candidate = copy(cap) if fault == 'copy' else cap
         accepted = pf.finish(db, row['admission_id'], 'text', SendResult(success=fault != 'failed_ack',
             message_id='task', raw_response={'publication_receipt_v1': candidate}))

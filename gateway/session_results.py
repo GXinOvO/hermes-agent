@@ -83,7 +83,24 @@ def finish_result(store, *, epoch, row, response, outcome, result=None, prepared
                                               generation=row['generation'])
     if current.result is not None:
         return admission_row(current.record), current.result['result'].get('final_response') or ''
+    descriptor = None
+    if isinstance(result, dict):
+        descriptor = result.get('_pending_final_v1')
+        inner = result.get('result')
+        if not descriptor and isinstance(inner, dict):
+            descriptor = inner.get('_pending_final_v1')
     outcome, stored = prepared or prepare_result(row, response, outcome, result)
+    stored = dict(stored)
+    stored.pop('_pending_final_v1', None)
+    if isinstance(stored.get('result'), dict):
+        stored['result'] = {k: v for k, v in stored['result'].items() if k != '_pending_final_v1'}
+    from gateway.pending_final_identity import FIELD
+    stored.pop(FIELD, None)
+
+    def terminal_write(conn, current):
+        if descriptor:
+            from gateway.pending_final import persist
+            stored[FIELD] = persist(conn, current, descriptor, db_path=store_location(store.scope))
     # A turn the owner's restart/stop interrupted: its reason commits as a Hermes transcript notice
     # in this same write, so a viewer that reconnects after the restart reads why (#134889 GW-21);
     # the live ``message.complete.warning`` carries the same copy. A retry that finds the row
@@ -92,13 +109,15 @@ def finish_result(store, *, epoch, row, response, outcome, result=None, prepared
     # error card as the transcript's failed-turn boundary in this same write too: the admission
     # result is not history, so a reopened chat would otherwise show nothing about the refusal.
     from gateway.session_settlement_recovery import gateway_refusal_boundary, owner_stop_notice
+    from persistence_assembly import store_location
     notice, display_metadata = owner_stop_notice(result, outcome, row), None
     if notice is None and (refusal := gateway_refusal_boundary(result, outcome)) is not None:
         notice, display_metadata = refusal
     boundary = None if notice is None else TurnBoundary(
         notice=notice, replace_after=row.get('transcript_mark'), display_metadata=display_metadata)
     settled = store.admissions.settle(epoch=epoch, admission_id=row['admission_id'], generation=row['generation'],
-                                      outcome=outcome, result=stored, transfers=transfers, boundary=boundary)
+                                      outcome=outcome, result=stored, transfers=transfers, boundary=boundary,
+                                      terminal_write=terminal_write if descriptor else None)
     return admission_row(settled), response
 
 
