@@ -49,7 +49,7 @@ async def test_native_cron_queue_uses_single_attempt_and_never_standalone_fallba
     async def fallback(*args, **kwargs):
         standalone.append('retry')
         return {'success':True}
-    monkeypatch.setattr('tools.send_message_tool._send_to_platform', fallback)
+    monkeypatch.setattr('gateway.outbound.send._send_to_platform', fallback)
     try:
         async with aiohttp.ClientSession() as session:
             adapter = RetryingPeer(url, session)

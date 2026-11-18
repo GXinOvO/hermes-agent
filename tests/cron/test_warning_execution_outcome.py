@@ -105,7 +105,7 @@ def test_external_worker_crash_notice_remains_queued_until_delivery(tmp_path, mo
         return {"success": outcome != "unknown", "message_id": "receipt", "error": "refused"}
 
     monkeypatch.setattr(scheduler, "run_job", crash)
-    monkeypatch.setattr("tools.send_message_tool._send_to_platform", send)
+    monkeypatch.setattr("gateway.outbound.send._send_to_platform", send)
     job = jobs.create_job(prompt="fixture only", schedule="every 1h", deliver="telegram:fixture")
     execution = executions.create_execution(job["id"], source="fixture")
     job["execution_id"] = execution["id"]

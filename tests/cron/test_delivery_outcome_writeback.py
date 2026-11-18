@@ -70,7 +70,7 @@ def test_run_bookkeeping_failure_keeps_the_drained_delivery_outcome(tmp_path, mo
         sent.append(text)
         return {"success": True, "message_id": "r"}
 
-    monkeypatch.setattr("tools.send_message_tool._send_to_platform", send)
+    monkeypatch.setattr("gateway.outbound.send._send_to_platform", send)
     monkeypatch.setattr(scheduler, "run_job", lambda job, **kw: (True, "raw", "the result", None))
     from cron import delivery_queue
     real_enqueue = delivery_queue.enqueue

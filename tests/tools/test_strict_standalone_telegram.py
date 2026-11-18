@@ -6,7 +6,7 @@ import pytest
 from gateway.config import Platform, PlatformConfig
 from gateway.strict_transport import strict_transport_scope
 from tools import send_message_strict as strict
-from tools.send_message_tool import _send_to_platform
+from gateway.outbound.send import _send_to_platform
 from tests.tools import test_strict_standalone_dispatch as fixtures
 
 
@@ -102,7 +102,7 @@ async def test_manual_standalone_telegram_keeps_canonical_sender(tmp_path, monke
     site = web.TCPSite(runner, '127.0.0.1', 0)
     await site.start()
     base = 'http://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
-    monkeypatch.setattr('tools.send_message_tool._plugin_standalone_sender', lambda name: (senders.standalone_send, None))
+    monkeypatch.setattr('gateway.outbound.senders._plugin_standalone_sender', lambda name: (senders.standalone_send, None))
     monkeypatch.setattr(senders, '_telegram_bot', lambda _token, extra=None: Bot('123:inert', base_url=base + '/bot', local_mode=True))
     try:
         result = await _send_to_platform(Platform.TELEGRAM, PlatformConfig(token='inert'),

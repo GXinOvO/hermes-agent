@@ -3,7 +3,7 @@ import pytest
 
 from gateway.config import Platform, PlatformConfig
 from gateway.strict_transport import strict_transport_scope
-from tools.send_message_tool import _send_to_platform
+from gateway.outbound.send import _send_to_platform
 
 
 @pytest.mark.asyncio
