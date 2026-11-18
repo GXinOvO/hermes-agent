@@ -48,11 +48,11 @@ def _payload(row, params, receipt, *, retired):
 
 def validate(home, params, receipt):
     from gateway.session_delivery_policy import consume_only
-    from hermes_state import SessionDB
-    from hermes_state_runtime import admission_fingerprint
+    from hermes_state_runtime import _holder_of, admission_fingerprint
+    from persistence_assembly import open_persistence_reader
     from persistence.sqlite.authority._runtime import terminal_admission
     home = Path(home).resolve()
-    with closing(SessionDB(home / 'state.db', read_only=True)) as db, db._read_ctx() as conn:
+    with open_persistence_reader(home) as db, _holder_of(db)._read_ctx() as conn:
         raw = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (receipt['admission_id'],)).fetchone()
         retired = raw is None
         row = dict(raw) if raw is not None else terminal_admission(conn, receipt['admission_id'])
