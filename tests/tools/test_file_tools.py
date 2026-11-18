@@ -370,8 +370,7 @@ class TestSensitivePathCheck:
 
     def test_hermes_config_blocked_for_write_file(self, tmp_path, monkeypatch):
         fake_config = tmp_path / "config.yaml"
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved", str(fake_config))
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved_loaded", True)
+        monkeypatch.setattr("tools.file_tools_write_guards._get_hermes_config_resolved", lambda: str(fake_config))
 
         from tools.file_tools import write_file_tool
         result = json.loads(write_file_tool(str(fake_config), "approvals:\n  mode: off\n"))
@@ -381,8 +380,7 @@ class TestSensitivePathCheck:
 
 
     def test_system_path_still_blocked(self, monkeypatch):
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved", "/some/other/path")
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved_loaded", True)
+        monkeypatch.setattr("tools.file_tools_write_guards._get_hermes_config_resolved", lambda: "/some/other/path")
 
         from tools.file_tools import write_file_tool
         result = json.loads(write_file_tool("/etc/passwd", "evil"))
@@ -405,8 +403,7 @@ class TestSensitivePathCheck:
 
     @patch("tools.file_tools._get_file_ops")
     def test_normal_file_not_blocked(self, mock_get, monkeypatch):
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved", "/home/user/.hermes/config.yaml")
-        monkeypatch.setattr("tools.file_tools_write_guards._hermes_config_resolved_loaded", True)
+        monkeypatch.setattr("tools.file_tools_write_guards._get_hermes_config_resolved", lambda: "/home/user/.hermes/config.yaml")
         mock_ops = _file_ops_mock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {"status": "ok", "path": "/tmp/other.txt", "bytes": 5}
