@@ -157,8 +157,10 @@ async def collect(connection, params):
 
 @contextmanager
 def commit_fence(graph, primary):
-    foreign = {str(store_location(read.connection.authority.persistence.scope)): read.connection.authority.persistence for read in graph['reads']
-               if read.connection.authority.persistence is not primary}
+    own = str(store_location(primary.scope))
+    foreign = {str(store_location(read.connection.authority.persistence.scope)): read.connection.authority.persistence
+               for read in graph['reads']
+               if str(store_location(read.connection.authority.persistence.scope)) != own}
     from persistence.sqlite._state.errors import StateDbReplacedError
     with ExitStack() as stack:
         for path in sorted(foreign):
