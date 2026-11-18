@@ -1862,8 +1862,21 @@ def _open_cron_session_db(job: dict):
         from persistence_assembly import open_persistence, profile_scope
 
         def acquire_store():
-            scope = owner[0].persistence.scope if owner is not None else profile_scope()
-            return open_persistence(scope, eager=True)
+            if owner is None:
+                return open_persistence(profile_scope(), eager=True)
+            owner_handle = owner[0].persistence
+            handle = open_persistence(owner_handle.scope, eager=True)
+            # A handle opened after the owner's store closed, or after its file was replaced, serves
+            # another generation: the run's writes would miss the owner's accepted-work record.
+            try:
+                same_store = owner_handle.serves_same_store(handle)
+            except Exception:
+                handle.close()
+                raise RuntimeError('cron requires the canonical owner store') from None
+            if not same_store:
+                handle.close()
+                raise RuntimeError('cron requires the canonical owner store')
+            return handle
 
         if _session_db_timeout <= 0:
             return acquire_store()
@@ -2548,6 +2561,9 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
         platform="cron",
         session_id=session_id,
         session_db=session_db,
+        # The run's store is the profile's storage handle (``_open_cron_session_db`` returns one or
+        # refuses the run), so the agent writes through the same handle the session store serves.
+        persistence=session_db,
         event_callback=event_callback,
     )
 
