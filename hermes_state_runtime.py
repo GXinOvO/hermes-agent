@@ -157,6 +157,15 @@ def _assert_profile_unowned(db) -> None:
     )
 
 
+def _store_of(db):
+    """The persistence handle behind a SessionDB; a bare handle passes through."""
+    return getattr(db, "_store", db)
+
+
+def _admission_row(record) -> dict:
+    return {name: getattr(record, name) for name in record.__slots__}
+
+
 def begin_runtime_epoch(db, *, instance_id: str) -> int:
     """Caller MUST hold the profile ownership lock, not merely an endpoint ticket.
 
@@ -165,12 +174,7 @@ def begin_runtime_epoch(db, *, instance_id: str) -> int:
     behind the fence, and every write on that store then fails with ``stale_epoch`` until
     the owner restarts (#142330). The ownership is therefore verified here, not assumed."""
     _text(instance_id)
-    _assert_profile_unowned(db)
-    def write(conn):
-        conn.execute('''INSERT INTO runtime_epoch(singleton,epoch,instance_id) VALUES(1,1,?)
-            ON CONFLICT(singleton) DO UPDATE SET epoch=runtime_epoch.epoch+1, instance_id=excluded.instance_id''', (instance_id,))
-        return conn.execute('SELECT epoch FROM runtime_epoch WHERE singleton=1').fetchone()[0]
-    return db._execute_write(write)
+    return _store_of(db).runtime.begin_epoch(instance_id=instance_id)
 
 
 # Main's busy-queue cap (GatewayRunner._BUSY_QUEUE_MAX_PENDING): queued inputs one session holds.
@@ -242,12 +246,8 @@ def find_session_admission(db, *, principal_id: str, session_id: str, request_id
 
 
 def list_session_admissions(db, *, session_id: str, pending_only: bool = True) -> list[dict]:
-    with db._read_ctx() as conn:
-        # Pending is an explicit index-range IN, not ``!='terminal'``: a negated status cannot
-        # bound the (target, status, seq) index, so every probe scanned the session's history.
-        sql = ("SELECT * FROM session_admissions WHERE target_session_id=? "
-               + ("AND status IN ('queued','started','unknown') " if pending_only else "") + "ORDER BY seq")
-        return [_row(row) for row in conn.execute(sql, (session_id,))]
+    return [_admission_row(record) for record in
+            _store_of(db).admissions.list(session_id=session_id, pending_only=pending_only)]
 
 
 _ADMISSION_STATUSES = ('queued', 'started', 'unknown', 'terminal')  # the table's status CHECK
