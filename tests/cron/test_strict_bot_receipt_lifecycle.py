@@ -57,7 +57,7 @@ async def test_cached_ack_uses_real_retirement_evidence(sealed_bot, monkeypatch,
             receipt.pop('native_admission_v1')
             test.path.write_text(json.dumps(receipt))
         frozen, _ = await asyncio.to_thread(freeze, test.target, json.loads(test.row['job_json']), test.row['content'], False)
-        assert sealed_bot.authority.db.delete_session(sealed_bot.chat, sessions_dir=sealed_bot.home / 'sessions')
+        assert sealed_bot.authority.persistence.sessions.delete(sealed_bot.chat, media_root=str(sealed_bot.home / 'native-inputs'))
         with raw_holder(sealed_bot.authority.persistence)._read_ctx() as conn:
             retired = terminal_admission(conn, receipt['admission_id'])
             assert retired['payload_json'] == '{}' and retired['status'] == 'terminal'
