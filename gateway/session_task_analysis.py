@@ -40,7 +40,7 @@ def _resolve(connection, stored_id, params):
     if _due(authority, sid) is not None:
         raise RuntimeStoreError('storage_unavailable', detail='Session compression recovery is pending')
     try:
-        authorize(connection, ref, params, 'session:read', allow_local_adoption=False)
+        authorize(connection, ref, params, 'session:read', allow_local_adoption=False, stored_read=True)
     except RuntimeStoreError as exc:
         if exc.reason != 'not_found' or not legacy_readable(authority, connection.actor, tip):
             raise

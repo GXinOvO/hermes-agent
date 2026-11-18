@@ -139,6 +139,8 @@ async def collect(connection, params):
                 limitations.append(f'{source_id}: relationship depth limit reached.')
         except (RuntimeStoreError, AuthorityRefusal) as exc:
 
+
+
             if relation == 'primary':
                 raise
             source['reason'] = exc.reason

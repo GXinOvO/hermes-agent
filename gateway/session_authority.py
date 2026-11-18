@@ -212,7 +212,7 @@ class SessionAuthority:
         # reset while that turn's admission is started, so the drain runs it once the turn settles.
         self.deferred_resets = {}
 
-    def authorize(self, actor, ref, capability, *, allow_local_adoption=True):
+    def authorize(self, actor, ref, capability, *, allow_local_adoption=True, stored_read=False):
         """Every handler calls this first, so a later ``self.sessions[ref.session_id]`` is
         safe: a deleted/evicted live entry surfaces here as ``not_found``, not as a KeyError
         deeper in the handler."""
@@ -227,17 +227,30 @@ class SessionAuthority:
             row = store.sessions.get(ref.session_id)
             if row is None:
                 raise AuthorityRefusal('not_found')
-            marks = store.bindings.binding_marks(ref.session_id)
-            if marks.policy or marks.legacy or str(row.chat_id or '').startswith('local-'):
-                from gateway.session_local_recovery import restore_local_session
-                restore_local_session(self, ref.session_id, allow_adoption=allow_local_adoption)
-            else:
-                from gateway.session_route_recovery import restore_routed_session
-                from gateway.session_history_mount import mount_history
-                if (restore_routed_session(self, ref.session_id) is None
-                        and not mount_history(self, actor, ref.session_id)):
-                    from gateway.session_api import restore_api_session
-                    restore_api_session(self, ref.session_id)
+            try:
+                marks = store.bindings.binding_marks(ref.session_id)
+                if marks.policy or marks.legacy or str(row.chat_id or '').startswith('local-'):
+                    from gateway.session_local_recovery import restore_local_session
+                    restore_local_session(self, ref.session_id, allow_adoption=allow_local_adoption)
+                else:
+                    from gateway.session_route_recovery import restore_routed_session
+                    from gateway.session_history_mount import mount_history
+                    if (restore_routed_session(self, ref.session_id) is None
+                            and not mount_history(self, actor, ref.session_id)):
+                        from gateway.session_api import restore_api_session
+                        restore_api_session(self, ref.session_id)
+            except AuthorityRefusal as exc:
+                # A stored-row read (task analysis/source/overview) reads the row as stored: a row
+                # nothing serves live is still readable, it just is not attached. Its owner still
+                # has to be this actor; a row held by another subject is never readable here.
+                if not stored_read or exc.reason != 'not_found' or ref.session_id in self.sessions:
+                    raise
+                if (row.user_id is not None and row.user_id != actor.subject
+                        and 'session:operator' not in actor.capabilities):
+                    raise AuthorityRefusal('permission_denied')
+                return
+        if ref.session_id not in self.sessions:
+            return
         from gateway.session_history_mount import is_history_mount, require_history_access
         if is_history_mount(self.sessions[ref.session_id]):
             require_history_access(self, actor, ref.session_id, capability)

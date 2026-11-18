@@ -115,7 +115,7 @@ async def test_refresh_calls_session_model_saves_evidence_and_reopens_stale(over
     with open_persistence(profile_scope(home=Path(overview.home))) as fresh:
         records = fresh.state_meta.list_prefix('gateway.task_analysis.v1:')
         assert len(records) == 1
-        assert json.loads(records[0][1])['analysis'] == analysis
+        assert json.loads(records[0].value)['analysis'] == analysis
     before = total_changes(db)
     read = await rpc(overview, 'session.task_analysis', {**overview.params, 'task_id': 't', 'title': 'Build'})
     assert read['result']['analysis'] == analysis

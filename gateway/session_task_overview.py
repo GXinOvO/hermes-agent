@@ -18,7 +18,7 @@ _TOOL_NAMES = frozenset({'todo', 'todo_list', 'patch', 'write_file', 'terminal',
 def _source_binding(authority, ref):
     live = authority.sessions.get(ref.session_id)
     if live is None:
-        raise RuntimeStoreError('session_source_changed')
+        return None, None
     return live.route, live.source.to_dict() if live.source is not None else None
 
 
@@ -32,14 +32,14 @@ def _target(authority, ref, stored_id):
     row = _session_row(db, target)
     if row is None or _session_row(db, stored_id) is None:
         raise RuntimeStoreError('not_found')
-    live = authority.sessions[ref.session_id]
+    live = authority.sessions.get(ref.session_id)
     from gateway.config import Platform
-    if live.source is not None and live.source.platform == Platform.LOCAL:
+    if live is not None and live.source is not None and live.source.platform == Platform.LOCAL:
         from gateway.session_local_recovery import owned_receipt
         _, source, route, entry = owned_receipt(authority, ref.session_id)
         if (source.to_dict() != live.source.to_dict() or route != live.route or entry.session_id != target):
             raise RuntimeStoreError('session_source_changed')
-    if row.get('session_key') and row['session_key'] != live.route:
+    if live is not None and row.get('session_key') and row['session_key'] != live.route:
         raise RuntimeStoreError('session_source_changed')
     lineage = db.lineage.resume_lineage_ids(target)
     if ((stored_id not in lineage and stored_id != ref.session_id)
@@ -50,7 +50,8 @@ def _target(authority, ref, stored_id):
 
 def _workspace(authority, ref, target):
     from gateway.session_policy import policy_for_source
-    policy = policy_for_source(authority.runner, authority.sessions[ref.session_id].source)
+    live = authority.sessions.get(ref.session_id)
+    policy = policy_for_source(authority.runner, live.source) if live is not None else None
     cwd = policy.cwd if policy is not None else (authority._session_row(db, target) or {}).get('cwd')
     return cwd if isinstance(cwd, str) and cwd and Path(cwd).is_absolute() else None
 
@@ -146,7 +147,7 @@ async def task_overview(connection, ref, params):
             raise RuntimeStoreError('storage_unavailable', detail='A stable read snapshot is unavailable')
         if _due(authority, ref.session_id) is not None:
             raise RuntimeStoreError('storage_unavailable', detail='Session compression recovery is pending')
-        authorize(connection, ref, params, 'session:read', allow_local_adoption=False)
+        authorize(connection, ref, params, 'session:read', allow_local_adoption=False, stored_read=True)
         binding = _source_binding(authority, ref)
         if not consistent():
             raise RuntimeStoreError('revision_conflict')
@@ -159,7 +160,7 @@ async def task_overview(connection, ref, params):
             or _conversation_revision(db, data['resolved_id']) !=
             data['conversation_revision']):
         raise RuntimeStoreError('revision_conflict')
-    authorize(connection, ref, params, 'session:read', allow_local_adoption=False)
+    authorize(connection, ref, params, 'session:read', allow_local_adoption=False, stored_read=True)
     guard(db.state_meta.get('store_instance_id'))
     result = {'version': 1, 'session_id': ref.session_id, 'stored_session_id': params['stored_id'],
               'owner': dict(params['expected_owner']), 'authority_epoch': authority.epoch,
