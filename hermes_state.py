@@ -364,7 +364,12 @@ class _SessionDB:
         if not session_id or not patch:
             return
         if PERMISSION_KEY in patch:
-            raise ValueError("the tool permission sidecar is reserved for the permission writer")
+            stored = self._store.sessions.get_model_config_value(session_id, PERMISSION_KEY)
+            if patch[PERMISSION_KEY] != stored:
+                raise ValueError("the tool permission sidecar is reserved for the permission writer")
+            patch = {key: value for key, value in patch.items() if key != PERMISSION_KEY}
+            if not patch:
+                return
         self._store.sessions.patch_model_config(session_id, patch)
 
     @_held
