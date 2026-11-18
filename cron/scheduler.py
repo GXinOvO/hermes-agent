@@ -1859,13 +1859,11 @@ def _open_cron_session_db(job: dict):
         raise WorkerPersistenceError('worker_cron_registration_required')
     _session_db_timeout = _get_session_db_timeout()
     try:
-        from hermes_state_registry import acquire
+        from persistence_assembly import open_persistence, profile_scope
 
         def acquire_store():
-            if owner is None:
-                return acquire()
-            from persistence_assembly import store_location
-            return acquire(store_location(owner[0].persistence.scope))
+            scope = owner[0].persistence.scope if owner is not None else profile_scope()
+            return open_persistence(scope, eager=True)
 
         if _session_db_timeout <= 0:
             return acquire_store()
