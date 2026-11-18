@@ -1001,57 +1001,17 @@ def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
 
 def apply_worker_receipt(db, *, epoch, execution_id, session_id, generation, sequence,
                          operation, payload, handlers):
-    """The one worker receipt transaction every ``worker.persist`` family shares.
+    """Fork entry point: the store's one receipt transaction, with the fork handler signature."""
+    from persistence.core.errors import AuthorityRefusal
+    from persistence.sqlite.workers._receipt import apply_worker_receipt as store_receipt
 
-    An exact (execution, sequence, digest) retry returns the stored result; otherwise the
-    epoch, assignment, live status and next sequence are fenced, ``handlers[operation]`` runs on
-    the transaction connection (it must not commit), and its result is stored as the receipt.
-    ``execution.finish`` is the only operation that makes the execution terminal.
-    """
-    from hermes_state_worker_compression import worker_receipt_assignment
-    if type(sequence) is not int or sequence < 1 or not isinstance(operation, str) or operation not in handlers:
-        raise RuntimeStoreError('invalid_params')
-    encoded = _json(payload)
-    if len(encoded.encode('utf-8', errors='surrogatepass')) > 4 * 1024 * 1024:
-        raise RuntimeStoreError('invalid_params')
-    digest = admission_fingerprint(canonical_target=session_id,
-                                  payload={'operation': operation, 'payload': json.loads(encoded)})
-    def write(conn):
-        _epoch(conn, epoch)
-        row = worker_receipt_assignment(conn, execution_id, session_id, generation, sequence, digest)
-        if row['owner_epoch'] != epoch:
-            raise RuntimeStoreError('stale_epoch')
-        old = conn.execute('SELECT * FROM worker_receipts WHERE execution_id=? AND sequence=?',
-                           (execution_id, sequence)).fetchone()
-        if old is not None:
-            if old['payload_digest'] != digest:
-                raise RuntimeStoreError('admission_conflict')
-            from hermes_state_runtime_workers import retired_receipt
-            if retired_receipt(old['result_json']):
-                raise RuntimeStoreError('stale_generation')  # a terminal execution's read copy
-            return json.loads(old['result_json'])
-        if row['status'] not in ('registered', 'running'):
-            raise RuntimeStoreError('stale_generation')
-        if sequence != row['last_sequence'] + 1:
-            raise RuntimeStoreError('invalid_params')
-        # Each SQLite retry gets fresh rows; rolled-back annotations must not escape.
-        changes = conn.total_changes
-        result = handlers[operation](db, conn, session_id, json.loads(encoded))
-        # The CAS fence moves only when the handler changed durable state (or the execution
-        # closes): a read-only receipt (context, history, lineage, lifecycle) must not make a
-        # client's mutation built on the pre-read revision fail revision_conflict.
-        changed = conn.total_changes != changes or operation == 'execution.finish'
-        conn.execute('INSERT INTO worker_receipts(execution_id,sequence,payload_digest,result_json) VALUES(?,?,?,?)',
-                     (execution_id, sequence, digest, json.dumps(result, ensure_ascii=True, allow_nan=False)))
-        conn.execute("UPDATE worker_executions SET last_sequence=?,status=? WHERE execution_id=?",
-                     (sequence, 'terminal' if operation == 'execution.finish' else 'running', execution_id))
-        if changed:
-            conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (session_id,))
-        if operation == 'execution.finish':
-            from hermes_state_runtime_workers import compact_terminal_receipts
-            compact_terminal_receipts(conn, execution_id)
-            from hermes_state_managed_results import complete_result
-            complete_result(conn, execution_id=execution_id, session_id=session_id, epoch=epoch,
-                            generation=generation, sequence=sequence)
-        return result
-    return db._execute_write(write, patience_s=db._TRANSCRIPT_WRITE_PATIENCE_S)
+    def adapted(holder, conn, sid, value):
+        return handlers[operation](db, conn, sid, value)
+    store = _store_of(db)
+    holder = getattr(store, "_store", store).holder()
+    try:
+        return store_receipt(holder, epoch=epoch, execution_id=execution_id, session_id=session_id,
+                             generation=generation, sequence=sequence, operation=operation,
+                             payload=payload, handlers={operation: adapted})
+    except AuthorityRefusal as exc:
+        raise RuntimeStoreError(exc.reason, field=exc.field, detail=exc.detail) from exc
