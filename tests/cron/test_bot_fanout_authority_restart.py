@@ -73,7 +73,7 @@ async def test_authority_restart_before_bot_admission_preserves_completed_prefix
             conn.execute("UPDATE deliveries SET owner_process_id='dead-fixture', owner_pid=2000000000, "
                          "owner_started_at=1 WHERE execution_id=?", (case.row['execution_id'],))
         if scenario == 'target_changed':
-            assert replacement.db.set_session_title(sealed_bot.chat, 'Previous Chat')
+            assert replacement.persistence.sessions.set_title(sealed_bot.chat, 'Previous Chat')
             assert await asyncio.to_thread(scheduler.drain_delivery_queue, {Platform.SLACK: case.adapter}, loop) == 0
             changed_status = queue.get_status(case.row['execution_id'])
             assert changed_status is not None and changed_status['status'] == 'pending'
