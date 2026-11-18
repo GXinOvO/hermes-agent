@@ -53,7 +53,7 @@ def standalone_send(state, content, media, *, prepared_plan=None, execution_id=N
     import asyncio
     import concurrent.futures
     import contextvars
-    from tools.send_message_tool import _send_to_platform
+    from gateway.outbound.send import _send_to_platform
     from gateway.strict_transport import strict_transport_scope
     from cron.scheduler_delivery import _get_standalone_send_timeout
     timeout = _get_standalone_send_timeout()

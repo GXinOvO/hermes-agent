@@ -91,7 +91,7 @@ def prepare(platform, pconfig, chat_id, message, *, media_files=None, execution_
         binding = _binding(name, chat_id, message, media_files, kwargs, execution_id, ticket)
         media_files = binding.media
         module = importlib.import_module('tools.send_message_strict_' + name)
-        from tools.send_message_senders import _media_caption_split
+        from gateway.outbound.senders import _media_caption_split
         caption, text = (None, message) if name == 'telegram' else _media_caption_split(message, media_files,
             max_caption_len=2000 if name == 'discord' else 39000)
         options = dict(kwargs)

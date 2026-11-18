@@ -11,7 +11,7 @@ import sqlite3
 import stat
 import time
 
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 
 
 def database_generation(path: Path) -> list[int]:

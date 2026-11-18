@@ -1503,7 +1503,7 @@ class CheckpointManager:
     # ------------------------------------------------------------------
 
     def _snapshot_before_restore(self, working_dir: str, commit_hash: str) -> None:
-        from tools.checkpoint_pruning import PruneError
+        from agent.checkpoints.pruning import PruneError
 
         saved = self._take(working_dir, f"pre-rollback snapshot (restoring to {commit_hash[:8]})", prune=False)
         if saved is None:

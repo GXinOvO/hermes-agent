@@ -8,7 +8,7 @@ import os
 import time
 from copy import deepcopy
 
-from gateway.session_admission import admission_fingerprint
+from persistence.authority.vocabulary import admission_fingerprint
 from hermes_state_runtime import RuntimeStoreError, _admission, _epoch, _json, _session
 
 PREFIX = 'managed.result.v1:'

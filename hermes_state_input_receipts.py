@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from hermes_state_keys import admission_fingerprint
+from persistence.authority.vocabulary import admission_fingerprint
 from hermes_state_messages import _INSERT_MESSAGE_SQL
 from hermes_state_runtime import ADMITTED_REQUEST_CONFLICT, RuntimeStoreError, _json, _text
 

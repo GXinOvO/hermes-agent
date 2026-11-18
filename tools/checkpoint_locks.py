@@ -15,8 +15,8 @@ _PROJECT_KEY = re.compile(r"[0-9a-f]{16}")
 
 def refuse_locked_index(store: Path, working_dir: str) -> None:
     """Stop a restore before it can plan changes using an obstructed index."""
-    from tools.checkpoint_manager import _index_path, _project_hash
-    from tools.checkpoint_pruning import PruneError
+    from agent.checkpoints.manager import _index_path, _project_hash
+    from agent.checkpoints.pruning import PruneError
 
     index = _index_path(store, _project_hash(working_dir))
     if os.path.lexists(str(index) + ".lock"):
@@ -25,7 +25,7 @@ def refuse_locked_index(store: Path, working_dir: str) -> None:
 
 def delete_restore_paths(index: Path, working_dir: str, paths: list[str]) -> list[str]:
     """Arbitrate Git writers for Python-only deletes; release only our own lock."""
-    from tools.checkpoint_pruning import PruneError
+    from agent.checkpoints.pruning import PruneError
 
     if not paths:
         return []
@@ -84,7 +84,7 @@ def index_lock_status() -> dict:
     old timestamps nor a local process scan authorizes recovery on a shared
     filesystem. A row is a point-in-time observation, not a maintenance lease.
     """
-    from tools.checkpoint_manager import _resolve_checkpoint_base, _store_path
+    from agent.checkpoints.manager import _resolve_checkpoint_base, _store_path
 
     base = _resolve_checkpoint_base()
     store = _store_path(base)

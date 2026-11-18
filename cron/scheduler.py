@@ -2276,7 +2276,7 @@ def _prepare_job_prompt(
     try:
         if audit_capture is not None and prerun_script is not None and prerun_script[0]:
             from cron import memory_audit_policy
-            from tools.cronjob_prompt_scan import _scan_cron_skill_assembled
+            from cron.prompt_scan import _scan_cron_skill_assembled
 
             _, scan_error = _scan_cron_skill_assembled(prerun_script[1])
             if scan_error:
