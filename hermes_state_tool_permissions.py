@@ -42,9 +42,19 @@ class SessionToolPermissionMixin:
         if preserve_cache and incoming is None:
             raise ValueError("Cache-preserving persistence requires explicit allowed_tools")
         allowed = incoming if incoming is not None else current
-        sessions.patch_model_config(session_id, {PERMISSION_KEY: {"version": 1, "allowed_tools": allowed}})
-        if not preserve_cache:
-            sessions.update_tool_pin(session_id, pin)
+        from persistence.core.errors import AuthorityRefusal
+        previous = dict(record.model_config or {}).get(PERMISSION_KEY)
+        try:
+            sessions.patch_model_config(session_id, {PERMISSION_KEY: {"version": 1, "allowed_tools": allowed}})
+            if not preserve_cache:
+                sessions.update_tool_pin(session_id, pin)
+        except AuthorityRefusal:
+            raise
+        except Exception:
+            # The store exposes no single write over both cells, so a failed pin write is undone
+            # here: a stored allowance must never sit beside a cache the caller was told failed.
+            sessions.patch_model_config(session_id, {PERMISSION_KEY: previous})
+            raise
 
 
 def _config(raw):

@@ -980,9 +980,13 @@ def _worker_finish(db, conn, session_id, payload):
 def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
                             sequence, operation, payload):
     """One closed durable mutation and receipt; never call a self-committing API here."""
-    return _store_of(db).worker_executions.persist_operation(
-        epoch=epoch, execution_id=execution_id, session_id=session_id, generation=generation,
-        sequence=sequence, operation=operation, payload=payload)
+    from persistence.core.errors import AuthorityRefusal
+    try:
+        return _store_of(db).worker_executions.persist_operation(
+            epoch=epoch, execution_id=execution_id, session_id=session_id, generation=generation,
+            sequence=sequence, operation=operation, payload=payload)
+    except AuthorityRefusal as exc:
+        raise RuntimeStoreError(exc.reason, field=exc.field, detail=exc.detail) from exc
 
 
 def apply_worker_receipt(db, *, epoch, execution_id, session_id, generation, sequence,
