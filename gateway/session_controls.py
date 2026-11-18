@@ -173,7 +173,7 @@ class AuthorityConnection:
         authority.events[self.actor.transport_id] = transport
 
     async def _read_store_instance_id(self):
-        return await asyncio.to_thread(self.authority.db.get_meta, 'store_instance_id')
+        return await asyncio.to_thread(self.authority.persistence.state_meta.get, 'store_instance_id')
 
     async def _expected_owner_guard(self, ref, params):
         expected = params.get('expected_owner')
@@ -206,7 +206,7 @@ class AuthorityConnection:
             raise RuntimeStoreError('permission_denied')
 
         authority = self.authority
-        database = authority.db
+        database = authority.persistence
         expected_tuple = (expected['instance_id'], expected['profile_id'], expected['authority_epoch'])
         expected_store = expected['store_instance_id']
         actual_store = await self._read_store_instance_id()
@@ -219,7 +219,7 @@ class AuthorityConnection:
                 or (current.instance_id, current.profile_id, current.epoch) != expected_tuple
                 or getattr(current, 'retired', False)
                 or getattr(current, 'retiring', False)
-                or current.db is not database
+                or current.persistence is not database
                 or store_instance_id != expected_store
             ):
                 raise RuntimeStoreError('session_owner_changed')

@@ -158,14 +158,15 @@ def _assert_profile_unowned(db) -> None:
 
 
 def _store_of(db):
-    """The persistence handle behind a SessionDB; a bare handle passes through."""
-    return getattr(db, "_store", db)
+    """The bound store behind a SessionDB or a persistence handle; a lazy handle binds here."""
+    from persistence_assembly import Persistence
+    store = db if isinstance(db, Persistence) else getattr(db, "_store", db)
+    return store._bound_store() if isinstance(store, Persistence) else store
 
 
 def _holder_of(db):
-    """The SQLite holder behind a SessionDB or a persistence handle (the stand-in wraps a handle)."""
-    store = _store_of(db)
-    return getattr(store, "_store", store).holder()
+    """The SQLite holder behind a SessionDB or a persistence handle."""
+    return _store_of(db).holder()
 
 
 def _admission_row(record) -> dict:
