@@ -2,21 +2,15 @@ import json
 import uuid
 
 from persistence.authority.vocabulary import admission_fingerprint
-from hermes_state_messages import _INSERT_MESSAGE_SQL
+from persistence.conversation.messages import NewMessage
+from persistence.sqlite.conversation._store.messages import _append_messages_in_transaction
+from persistence.sqlite.conversation.messages import _message_dict
 from hermes_state_runtime import ADMITTED_REQUEST_CONFLICT, RuntimeStoreError, _json, _text
 
 
-def _compression_lineage_ids(db, conn, session_id):
-    ids, frontier = {session_id}, [session_id]
-    for _ in range(1000):
-        if not frontier:
-            break
-        next_ids = set(db._expand_compression_lineage(conn, frontier)) - ids
-        if not next_ids:
-            break
-        ids.update(next_ids)
-        frontier = list(next_ids)
-    return ids
+def _store_handles(db):
+    store = getattr(db, "_store", db)
+    return store, getattr(store, "_store", store)
 
 
 def append_received_input(db, session_id, message, *, principal_id, request_id, active=True):
@@ -28,38 +22,49 @@ def append_received_input(db, session_id, message, *, principal_id, request_id, 
         'message_uid': message['message_uid'], 'received_at': message['timestamp']}}
     encoded = _json(payload)
     admission_id = uuid.uuid4().hex
+    store, inner = _store_handles(db)
+    holder = inner.holder()
+    lineage = sorted({session_id, *store.lineage.lineage(session_id)})
+    target = session_id if active else store.lineage.tip(session_id)
+    marks = ','.join('?' for _ in lineage)
+    fingerprints = {candidate: admission_fingerprint(canonical_target=candidate,
+                                                     payload={'input': payload, 'intent': 'queue'})
+                    for candidate in lineage}
 
     def write(conn):
-        target = db._compression_tip_on(conn, session_id) if not active else session_id
-        db._check_transcript_write_guards(conn, target, None)
-        params = db._message_row_params(target, 'user', message, None, message['timestamp'], keep_reasoning=False)
-        lineage = _compression_lineage_ids(db, conn, session_id)
-        fingerprint_payload = {'input': payload, 'intent': 'queue'}
-        old = conn.execute('''SELECT payload_digest FROM session_admissions
-            WHERE principal_id=? AND target_session_id IN ({}) AND request_id=?'''.format(
-                ','.join('?' for _ in lineage)),
+        old = conn.execute(f'''SELECT payload_digest FROM session_admissions
+            WHERE principal_id=? AND target_session_id IN ({marks}) AND request_id=?''',
             (principal_id, *lineage, request_id)).fetchone()
         if old is not None:
-            if not any(admission_fingerprint(canonical_target=candidate, payload=fingerprint_payload)
-                       == old['payload_digest'] for candidate in lineage):
+            if old['payload_digest'] not in fingerprints.values():
                 raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
-            row = conn.execute('''SELECT id FROM messages WHERE session_id IN ({}) AND message_uid=?
-                AND json_extract(display_metadata,'$.submission_id')=? ORDER BY id LIMIT 1'''.format(
-                    ','.join('?' for _ in lineage)),
+            row = conn.execute(f'''SELECT id FROM messages WHERE session_id IN ({marks}) AND message_uid=?
+                AND json_extract(display_metadata,'$.submission_id')=? ORDER BY id LIMIT 1''',
                 (*lineage, message['message_uid'], request_id)).fetchone()
             if row is None:
                 raise RuntimeStoreError('admission_conflict')
             return row['id']
-        digest = admission_fingerprint(canonical_target=session_id, payload=fingerprint_payload)
         conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,
             target_session_id,lineage_json,payload_json,payload_digest,intent,status,outcome)
             VALUES(?,?,?,?,?,?,?,'queue','terminal','recorded')''',
-            (admission_id, request_id, principal_id, target, json.dumps([target]), encoded, digest))
-        row_id = conn.execute(_INSERT_MESSAGE_SQL, params).lastrowid
-        witness_id = conn.execute(_INSERT_MESSAGE_SQL, params).lastrowid if active else row_id
-        conn.execute('UPDATE messages SET active=0 WHERE id=?', (witness_id,))
-        db._bump_session_counters(conn, target, 1 if active else 0, 0, unit=False)
-        return row_id
+            (admission_id, request_id, principal_id, target, json.dumps([target]),
+             encoded, fingerprints[session_id]))
+        _append_messages_in_transaction(holder, conn, target, [_message_dict(NewMessage(
+            role='user', content=message['content'], timestamp=message['timestamp'],
+            message_uid=message['message_uid'], display_metadata=metadata))])
+        row = conn.execute('SELECT id FROM messages WHERE session_id=? AND message_uid=? ORDER BY id DESC LIMIT 1',
+                           (target, message['message_uid'])).fetchone()
+        if row is None:
+            raise RuntimeStoreError('admission_conflict')
+        if active:
+            columns = [info[1] for info in conn.execute('PRAGMA table_info(messages)') if info[1] != 'id']
+            names = ', '.join(columns)
+            conn.execute(f'INSERT INTO messages ({names}) SELECT {names} FROM messages WHERE id=?', (row['id'],))
+            conn.execute('UPDATE messages SET active=0 WHERE id=last_insert_rowid()')
+        else:
+            conn.execute('UPDATE messages SET active=0 WHERE id=?', (row['id'],))
+            conn.execute('UPDATE sessions SET message_count=MAX(message_count-1,0) WHERE id=?', (target,))
+        return row['id']
 
-    row_id = db._execute_write(write, patience_s=db._TRANSCRIPT_WRITE_PATIENCE_S)
+    row_id = holder._execute_write(write, patience_s=holder._TRANSCRIPT_WRITE_PATIENCE_S)
     return row_id, metadata

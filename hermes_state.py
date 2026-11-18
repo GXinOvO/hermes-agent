@@ -361,8 +361,7 @@ class _SessionDB:
     def update_session_meta(self, session_id: "str", model_config_json: "str", model: "Optional[str]" = None) -> None:
         """Fork entry point: merge a whole config in, keeping the reserved permission sidecar."""
         from hermes_state_runtime import _store_of
-        from hermes_state_sessions import _parse_model_config
-        from hermes_state_tool_permissions import preserve_tool_permission
+        from hermes_state_tool_permissions import _parse_model_config, preserve_tool_permission
         sessions = _store_of(self).sessions
         record = sessions.get(session_id)
         if record is None:

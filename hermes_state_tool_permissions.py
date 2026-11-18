@@ -9,11 +9,20 @@ import json
 PERMISSION_KEY = "_tool_permissions"
 
 
+def _parse_model_config(raw):
+    """Tolerant ``model_config`` decode: JSON text or dict -> dict copy; anything else -> {}."""
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 class SessionToolPermissionMixin:
     """SessionDB write entry points for the durable tool-permission sidecar."""
 
     def update_session_meta(self, session_id, model_config_json, model=None):
-        from hermes_state_sessions import _parse_model_config
         self.flush_token_counts()
 
         def _do(conn):
