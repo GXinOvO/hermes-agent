@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from persistence.conversation.messages import TranscriptRead, TranscriptView
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_read import transcript_rows
+
 from tests.gateway.test_session_authorities_multiplex import _reserve_homes, _runner
 
 
@@ -17,7 +21,7 @@ async def _moved_home(tmp_path, monkeypatch, profile, alias='valid'):
     from gateway.session_authority import SessionAuthority
     from gateway.session_contract import SessionActor
     from gateway.session_local import create_local_session
-    from hermes_state_local import POLICY_PREFIX
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX
 
     monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
     monkeypatch.setattr(SessionAuthority, '_schedule', lambda self, ref: None)
@@ -29,7 +33,7 @@ async def _moved_home(tmp_path, monkeypatch, profile, alias='valid'):
         from gateway.session_cron import unbind_owner
         for authority in getattr(runner, 'session_authorities', ()):
             unbind_owner(authority)
-            authority.db.close()
+            authority.persistence.close()
         for db in runner.session_store._db_handles.values():
             db.close()
 
@@ -47,7 +51,7 @@ async def _moved_home(tmp_path, monkeypatch, profile, alias='valid'):
             original = create_local_session(authority, actor, {
                 'request_id': 'before-move', 'source': 'gui', 'cwd': str(tmp_path),
                 'model': 'fixture', 'toolsets': []})
-        with authority.db._read_ctx() as conn:
+        with raw_holder(authority.persistence)._read_ctx() as conn:
             raw = conn.execute('SELECT value FROM state_meta WHERE key=?',
                                (POLICY_PREFIX + original.session_id,)).fetchone()[0]
         close(first)
@@ -86,8 +90,9 @@ async def test_native_home_alias_cold_restore_and_automation_note(tmp_path, monk
     from gateway.session_contract import SessionRef
     from gateway.session_cron import _admit_local_delivery
     from gateway.session_local_recovery import restore_local_session
-    from hermes_state_keys import local_identity
-    from hermes_state_local import POLICY_PREFIX, local_receipt
+    from persistence.sqlite._state.keys import local_identity
+    from persistence.sqlite.authority._local import local_receipt
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX
     from hermes_state_runtime import list_session_admissions
 
     async with _moved_home(tmp_path, monkeypatch, profile) as moved:
@@ -112,19 +117,19 @@ async def test_native_home_alias_cold_restore_and_automation_note(tmp_path, monk
         runner._handle_message = no_turn
         assert await _admit_local_delivery(authority, ref.session_id, 'ALIAS_NATIVE_NOTE', {})
         await authority._drain(ref)
-        notes = [m for m in authority.db.get_messages(ref.session_id)
+        notes = [m for m in transcript_rows(authority.persistence, ref.session_id, TranscriptRead(view=TranscriptView.ALL))
                  if m.get('content') == 'ALIAS_NATIVE_NOTE']
         assert len(notes) == 1
         assert notes[0]['display_kind'] == 'internal_notification'
-        rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+        rows = list_session_admissions(authority.persistence, session_id=ref.session_id, pending_only=False)
         assert len(rows) == 1 and rows[0]['outcome'] == 'completed'
-        with authority.db._read_ctx() as conn:
+        with raw_holder(authority.persistence)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?',
                                 (POLICY_PREFIX + ref.session_id,)).fetchone()[0] == raw
-        assert local_receipt(authority.db, ref.session_id) == receipt
+        assert local_receipt(raw_holder(authority.persistence), ref.session_id) == receipt
         for name, home in homes:
             if name != profile:
-                assert runner.session_authorities.for_home(home).db.get_session(ref.session_id) is None
+                assert runner.session_authorities.for_home(home).persistence.sessions.get(ref.session_id) is None
 
 
 @pytest.mark.asyncio
@@ -134,7 +139,7 @@ async def test_alias_note_fifo_and_retry_keep_original_owner(tmp_path, monkeypat
     from gateway.session_authorities import owner_scope
     from gateway.session_contract import SessionRef
     from gateway.session_cron import _admit_local_delivery
-    from hermes_state_local import local_receipt
+    from persistence.sqlite.authority._local import local_receipt
     from hermes_state_runtime import admit_session_input, list_session_admissions
 
     async with _moved_home(tmp_path, monkeypatch, profile) as moved:
@@ -145,21 +150,21 @@ async def test_alias_note_fifo_and_retry_keep_original_owner(tmp_path, monkeypat
         seen = []
 
         def notes():
-            return [m for m in authority.db.get_messages(ref.session_id)
+            return [m for m in transcript_rows(authority.persistence, ref.session_id, TranscriptRead(view=TranscriptView.ALL))
                     if m.get('content') == 'ALIAS_FIFO_NOTE']
 
         async def turn(event):
             seen.append((event.text, len(notes())))
             return 'ok'
         runner._handle_message = turn
-        admit_session_input(authority.db, epoch=authority.epoch, principal_id='alias-owner',
+        admit_session_input(authority.persistence, epoch=authority.epoch, principal_id='alias-owner',
                             session_id=ref.session_id, request_id='before', payload={'text': 'BEFORE'})
         assert await _admit_local_delivery(authority, ref.session_id, 'ALIAS_FIFO_NOTE', {})
-        rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+        rows = list_session_admissions(authority.persistence, session_id=ref.session_id, pending_only=False)
         identity = rows[1]['request_id']
         assert rows[1]['payload']['local_automation_v1']['owner'] == original.session_id
         assert notes() == []
-        admit_session_input(authority.db, epoch=authority.epoch, principal_id='alias-owner',
+        admit_session_input(authority.persistence, epoch=authority.epoch, principal_id='alias-owner',
                             session_id=ref.session_id, request_id='after', payload={'text': 'AFTER'})
         await authority._drain(ref)
         assert seen == [('BEFORE', 0), ('AFTER', 1)]
@@ -170,10 +175,10 @@ async def test_alias_note_fifo_and_retry_keep_original_owner(tmp_path, monkeypat
                 'gateway_session_key': live.route, 'gateway_session_id': ref.session_id})
             await authority.admit_automation(runner._adapter_for_source(live.source), event, identity)
         await authority._drain(ref)
-        rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+        rows = list_session_admissions(authority.persistence, session_id=ref.session_id, pending_only=False)
         assert len(rows) == 3 and [r['outcome'] for r in rows] == ['completed'] * 3
         assert len(notes()) == 1 and seen == [('BEFORE', 0), ('AFTER', 1)]
-        assert local_receipt(authority.db, ref.session_id) == json.loads(raw)
+        assert local_receipt(raw_holder(authority.persistence), ref.session_id) == json.loads(raw)
 
 
 def _damage_alias(old, other, tmp_path, db_path, variant):
@@ -203,13 +208,13 @@ def _hide_database(db_path, symlink=False):
 
 
 def _use_foreign_database(authority, other):
-    from hermes_state import SessionDB
-    foreign = SessionDB(other / 'state.db')
-    original_path = authority.db.db_path
-    authority.db.db_path = foreign.db_path
+    from persistence_assembly import open_persistence, profile_scope
+    original = authority.persistence
+    foreign = open_persistence(profile_scope(home=other), eager=True)
+    authority.persistence = foreign
     def undo():
-        authority.db.db_path = original_path
         foreign.close()
+        authority.persistence = original
     return undo
 
 
@@ -221,7 +226,7 @@ async def test_moved_store_does_not_depend_on_old_alias(tmp_path, monkeypatch, v
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, raw, old, _new, _homes = moved
-        db_path = Path(authority.db.db_path)
+        db_path = Path(raw_holder(authority.persistence).db_path)
         other = tmp_path / 'other'
         other.mkdir()
         undo = (_hide_database(db_path, symlink=True) if variant == 'db_symlink'
@@ -249,7 +254,7 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
         owned_receipt(authority, ref.session_id)
         other = tmp_path / 'other'
         other.mkdir()
-        db_path = Path(authority.db.db_path)
+        db_path = Path(raw_holder(authority.persistence).db_path)
         def undo():
             pass
         actions = {
@@ -275,7 +280,7 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
                     owned_receipt(authority, ref.session_id)
                 with pytest.raises(RuntimeStoreError):
                     await _admit_local_delivery(authority, ref.session_id, 'MUST_NOT_WRITE', {})
-                assert not list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+                assert not list_session_admissions(authority.persistence, session_id=ref.session_id, pending_only=False)
         finally:
             undo()
 
@@ -284,7 +289,7 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
 @pytest.mark.parametrize('variant', ['route', 'entry', 'principal', 'lineage', 'identity', 'origin_profile'])
 async def test_alias_keeps_native_receipt_identity_checks(tmp_path, monkeypatch, variant):
     from gateway.session_local_recovery import restore_local_session
-    from hermes_state_local import POLICY_PREFIX
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX
     from hermes_state_runtime import RuntimeStoreError
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
@@ -300,12 +305,12 @@ async def test_alias_keeps_native_receipt_identity_checks(tmp_path, monkeypatch,
         }[variant]
         node[key] = value
         changed = json.dumps(receipt)
-        authority.db.set_meta(POLICY_PREFIX + original.session_id, changed)
+        raw_holder(authority.persistence).set_meta(POLICY_PREFIX + original.session_id, changed)
         authority.sessions.pop(original.session_id)
         with pytest.raises(RuntimeStoreError):
             restore_local_session(authority, original.session_id)
         assert original.session_id not in authority.sessions
-        assert authority.db.get_meta(POLICY_PREFIX + original.session_id) == changed
+        assert raw_holder(authority.persistence).get_meta(POLICY_PREFIX + original.session_id) == changed
 
 
 @pytest.mark.asyncio
@@ -314,9 +319,9 @@ async def test_alias_keeps_unknown_inode_with_a_valid_store_generation(tmp_path,
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, raw, _old, _new, _homes = moved
-        assert authority.db._db_file_application_id
+        assert raw_holder(authority.persistence)._db_file_application_id
         monkeypatch.setattr(authority.db, '_db_file_identity', None)
-        assert not authority.db._db_file_was_replaced()
+        assert not raw_holder(authority.persistence)._db_file_was_replaced()
         assert owned_receipt(authority, original.session_id)[0] == json.loads(raw)
 
 
@@ -324,16 +329,16 @@ async def test_alias_keeps_unknown_inode_with_a_valid_store_generation(tmp_path,
 @pytest.mark.parametrize('alias', ['missing', 'foreign'])
 async def test_cold_restore_does_not_need_the_old_alias(tmp_path, monkeypatch, alias):
     from gateway.session_cron import _admit_local_delivery
-    from hermes_state_local import POLICY_PREFIX
+    from persistence.sqlite.conversation._store.local import POLICY_PREFIX
     from hermes_state_runtime import list_session_admissions
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha', alias=alias) as moved:
         _runner, authority, original, raw, _old, _new, _homes = moved
         assert original.session_id in authority.sessions
         assert await _admit_local_delivery(authority, original.session_id, 'MOVED_STORE_NOTE', {})
-        rows = list_session_admissions(authority.db, session_id=original.session_id, pending_only=False)
+        rows = list_session_admissions(authority.persistence, session_id=original.session_id, pending_only=False)
         assert len(rows) == 1
-        assert authority.db.get_meta(POLICY_PREFIX + original.session_id) == raw
+        assert raw_holder(authority.persistence).get_meta(POLICY_PREFIX + original.session_id) == raw
 
 
 @pytest.mark.asyncio
@@ -347,7 +352,7 @@ async def test_retargeted_old_alias_is_not_consulted_for_ownership(tmp_path, mon
         target = other / 'profiles' / 'alpha'
         target.mkdir(parents=True)
         if linked_db:
-            os.link(authority.db.db_path, target / 'state.db')
+            os.link(raw_holder(authority.persistence).db_path, target / 'state.db')
         old.unlink()
         old.symlink_to(other, target_is_directory=True)
 
