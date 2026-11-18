@@ -43,7 +43,9 @@ async def consume(home, url, stop):
         from gateway.session_authority import SessionAuthority, initialize_session_authority
         from gateway.session_contract import SessionActor
         from gateway.session_local import create_local_session
+        from persistence.conversation.messages import TranscriptRead, TranscriptView
         from persistence_assembly import open_persistence, profile_scope
+        from tests.fixtures.storage_read import transcript_rows
         runner = GatewayRunner(GatewayConfig(sessions_dir=Path(home) / 'local-sessions'))
         database = open_persistence(profile_scope(home=Path(home)), eager=True)
         runner.session_store._db = database
@@ -196,7 +198,7 @@ async def consume(home, url, stop):
             await authority._drain(SessionRef('default', local_id.read_text()))
     adapter._session_store._ensure_loaded()
     print(json.dumps({'processed': count, 'pid': os.getpid(), 'row': queue.get_status('fanout-exec'),
-        'local_messages': database.get_messages(local_id.read_text()) if settings.get('local') else [],
+        'local_messages': transcript_rows(database, local_id.read_text(), TranscriptRead(view=TranscriptView.ALL)) if settings.get('local') else [],
         'local_admissions': local_admissions if settings.get('local') else [],
         'serialized': serialized,
         'sessions': {key: {'id': entry.session_id, 'transcript': adapter._session_store.load_transcript(entry.session_id)}

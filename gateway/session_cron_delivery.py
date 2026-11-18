@@ -6,6 +6,7 @@ from hermes_state_runtime import RuntimeStoreError
 def snapshot(authority, chat_id):
     from gateway.config import Platform
     from gateway.session_detached import route_entry
+    from persistence_assembly import store_location
     live = authority.sessions.get(chat_id)
     entry = route_entry(authority, live.route) if live is not None else None
     if (live is None or live.source is None or live.source.platform != Platform.LOCAL
