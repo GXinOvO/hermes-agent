@@ -6,11 +6,11 @@ import psutil
 import pytest
 
 from agent.runtime_session_store import RuntimeSessionStore
-from gateway.session_worker_child import reserve_child_execution
+from persistence.sqlite.workers._gateway import reserve_child_execution
 from hermes_cli.process_identity import worker_birth
 from hermes_state import SessionDB
 import hermes_state_runtime as runtime
-from tests.hermes_state import test_tool_permission_recovery_r2 as fixtures
+from tests.persistence_sqlite.core import test_tool_permission_recovery_r2 as fixtures
 
 
 @pytest.fixture

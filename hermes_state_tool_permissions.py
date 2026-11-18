@@ -27,7 +27,24 @@ class SessionToolPermissionMixin:
         self._execute_write(_do)
 
     def update_session_tool_names(self, session_id, pin, *, preserve_cache=False):
-        self._execute_write(lambda conn: write_tool_pin(self, conn, session_id, pin, preserve_cache=preserve_cache))
+        """Persist the pin and the durable permission sidecar through the store's own writes."""
+        from hermes_state_runtime import _store_of
+        sessions = _store_of(self).sessions
+        record = sessions.get(session_id)
+        if record is None:
+            if preserve_cache or (isinstance(pin, dict) and "allowed_tools" in pin):
+                raise ValueError("Cannot persist tool permission: session row is missing")
+            return
+        current = saved_tool_permission(record.model_config_json, record.tool_pin)
+        incoming = _allowed(pin["allowed_tools"]) if isinstance(pin, dict) and "allowed_tools" in pin else None
+        if current is not None and incoming is not None and not set(incoming) <= set(current):
+            raise ValueError("Tool permission cannot expand an existing allowed_tools restriction")
+        if preserve_cache and incoming is None:
+            raise ValueError("Cache-preserving persistence requires explicit allowed_tools")
+        allowed = incoming if incoming is not None else current
+        sessions.patch_model_config(session_id, {PERMISSION_KEY: {"version": 1, "allowed_tools": allowed}})
+        if not preserve_cache:
+            sessions.update_tool_pin(session_id, pin)
 
 
 def _config(raw):

@@ -331,6 +331,12 @@ class _SessionDB:
         return None if record is None else record.as_session_row()
 
     @_held
+    def update_session_tool_names(self, session_id: "str", pin: "Any", *, preserve_cache: "bool" = False) -> None:
+        """Fork entry point: the pin plus the durable `_tool_permissions` sidecar."""
+        from hermes_state_tool_permissions import SessionToolPermissionMixin
+        SessionToolPermissionMixin.update_session_tool_names(self, session_id, pin, preserve_cache=preserve_cache)
+
+    @_held
     def list_sessions_rich(
         self, source: "Optional[str]" = None, sources: "Optional[list[str]]" = None,
         exclude_sources: "Optional[list[str]]" = None, cwd_prefix: "Optional[str]" = None, limit: "int" = 20,
