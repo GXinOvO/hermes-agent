@@ -350,6 +350,9 @@ class _SessionDB:
     @_held
     def update_conversation_model_config_value(self, session_id: "str", key: "str", update: "Any") -> "Optional[str]":
         """Fork entry point: read one ``model_config`` key and write ``update(value)`` back."""
+        from hermes_state_tool_permissions import PERMISSION_KEY
+        if key == PERMISSION_KEY:
+            raise ValueError("the tool permission sidecar is reserved for the permission writer")
         sessions = self._store.sessions
         sessions.patch_model_config(session_id, {key: update(sessions.get_model_config_value(session_id, key))})
         return session_id
@@ -357,8 +360,11 @@ class _SessionDB:
     @_held
     def patch_session_model_config(self, session_id: "str", patch: dict) -> None:
         """Fork entry point: merge ``patch`` into ``model_config`` (None removes a key)."""
+        from hermes_state_tool_permissions import PERMISSION_KEY
         if not session_id or not patch:
             return
+        if PERMISSION_KEY in patch:
+            raise ValueError("the tool permission sidecar is reserved for the permission writer")
         self._store.sessions.patch_model_config(session_id, patch)
 
     @_held

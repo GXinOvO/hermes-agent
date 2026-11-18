@@ -15,6 +15,15 @@ from hermes_state_runtime import (
 )
 
 
+def _scalar(db, sql):
+    """A physical scalar read: receipts/sequences have no public read on the store interface."""
+    from persistence_assembly import store_location
+    conn = sqlite3.connect(store_location(db._target), isolation_level=None)
+    try:
+        return conn.execute(sql).fetchone()[0]
+    finally:
+        conn.close()
+
 def _sql(db, statement, params=()):
     """Physical write on the store's file: corruption and trigger injection live here, not in the facade."""
     from persistence_assembly import store_location
@@ -55,7 +64,7 @@ def test_receiving_writer_rejects_expansion_without_any_write(db, writer, record
     db.update_session_tool_names("owned", _pin(["read_file"]))
     scope = _scope(db)
     before = _raw(db)
-    receipts = db._read_one("SELECT COUNT(*) FROM worker_receipts")[0]
+    receipts = _scalar(db, "SELECT COUNT(*) FROM worker_receipts")
     with pytest.raises((ValueError, RuntimeStoreError), match="permission|widen|expand"):
         if writer == "session":
             db.update_session_tool_names("owned", _pin(["read_file", "terminal"]))
@@ -63,11 +72,11 @@ def test_receiving_writer_rejects_expansion_without_any_write(db, writer, record
             mutate_worker_execution(db, **scope, sequence=1, operation="session.tools",
                                     payload={"tool_names": _pin(["read_file", "terminal"])})
     assert _raw(db) == before
-    assert db._read_one("SELECT COUNT(*) FROM worker_receipts")[0] == receipts
-    assert db._read_one("SELECT last_sequence FROM worker_executions")[0] == 0
+    assert _scalar(db, "SELECT COUNT(*) FROM worker_receipts") == receipts
+    assert _scalar(db, "SELECT last_sequence FROM worker_executions") == 0
     record_property("rejected_expansion_sql_readback", json.dumps({
         "writer": writer, "before": before, "after": _raw(db), "receipts": receipts,
-        "last_sequence": db._read_one("SELECT last_sequence FROM worker_executions")[0]}))
+        "last_sequence": _scalar(db, "SELECT last_sequence FROM worker_executions")}))
     if writer == "worker":
         result = mutate_worker_execution(db, **scope, sequence=1, operation="session.tools",
                                          payload={"tool_names": _pin([])})
