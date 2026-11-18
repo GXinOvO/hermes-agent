@@ -42,10 +42,12 @@ async def test_cycles_and_compression_aliases_read_each_conversation_once(linked
 async def test_delegated_child_uses_durable_parent_marker_not_random_id(linked, monkeypatch):
     from agent import oneshot
     db, parent = linked.db, linked.ref.session_id
-    db.sessions.create(NewSession('child', source='subagent''subagent'))
+    db.sessions.create(NewSession('child', source='subagent', parent_session_id=parent,
+                                  model_config={'_delegate_from': parent, '_subagent_id': 'sa-real'}))
     append_message(db, 'child', 'tool', '2 integration tests passed', tool_name='terminal', tool_call_id='integration')
-    db.sessions.create(NewSession('unrelated', source='desktop''desktop'))
-    db.sessions.create(NewSession('foreign', source='subagent''subagent'))
+    db.sessions.create(NewSession('unrelated', source='desktop'))
+    db.sessions.create(NewSession('foreign', source='subagent', parent_session_id='unrelated',
+                                  model_config={'_delegate_from': 'unrelated', '_subagent_id': 'sa-fake'}))
     append_message(db, 'foreign', 'user', 'This belongs to another task')
     append_message(db, parent, 'assistant', '', tool_calls=[{'id': 'dispatch', 'type': 'function',
                       'function': {'name': 'delegate_task', 'arguments': '{}'}}])
@@ -101,7 +103,7 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
                                      {'user_id': linked.connection.actor.subject, 'provider': 'local', 'profile_scope': 'host',
                                       'profile_id': linked.authority.profile_id, 'instance_id': linked.authority.instance_id,
                                       'capabilities': list(linked.connection.actor.capabilities)})
-    db.sessions.create(NewSession('shared', source='subagent''subagent'))
+    db.sessions.create(NewSession('shared', source='subagent'))
     append_message(db, 'shared', 'user', 'Reference-only task. Do not add its todo to the release')
     append_message(db, 'shared', 'tool', '4 remote tests passed', tool_name='terminal', tool_call_id='remote')
     seed_read(linked, 'shared', profile='other')

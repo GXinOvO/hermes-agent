@@ -82,7 +82,7 @@ async def test_rpc_automatically_reads_related_native_rows_and_caches_without_ma
     assert cached['result']['analysis'] == analysis
     assert len(captured) == 1 and total_changes(linked.db) == before
     assert not linked.connection.subscriptions
-    linked.append_message(db, 'related', 'user', 'One more check is needed')
+    append_message(linked.db, 'related', 'user', 'One more check is needed')
     stale = await run_linked(linked)
     assert stale['result']['analysis']['stale'] is True
 
@@ -90,7 +90,7 @@ async def test_rpc_automatically_reads_related_native_rows_and_caches_without_ma
 @pytest.mark.asyncio
 async def test_missing_related_source_is_visible_incomplete_not_fabricated(linked, monkeypatch):
     from agent import oneshot
-    linked.append_message(db, linked.ref.session_id, 'user', 'Also consult @session:default/missing-source')
+    append_message(linked.db, linked.ref.session_id, 'user', 'Also consult @session:default/missing-source')
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     response = await run_linked(linked, refresh=True)
     assert 'result' in response, response
@@ -117,12 +117,12 @@ async def test_related_change_while_model_runs_cannot_commit_late_result(linked,
                                                              'refresh': True, 'follow_sources': True})
         assert response is None, response
         await async_wait_until(entered.is_set)
-        linked.append_message(db, 'related', 'user', 'Updated requirement during analysis')
-        before = linked.db.list_meta_prefix('gateway.task_analysis.v2:')
+        append_message(linked.db, 'related', 'user', 'Updated requirement during analysis')
+        before = linked.db.state_meta.list_prefix('gateway.task_analysis.v2:')
         gate.set()
         failed = await asyncio.wait_for(linked.connection.transport.replies.get(), 8)
         assert failed['error']['data']['reason'] in ('revision_conflict', 'session_source_changed')
-        assert linked.db.list_meta_prefix('gateway.task_analysis.v2:') == before
+        assert linked.db.state_meta.list_prefix('gateway.task_analysis.v2:') == before
     finally:
         gate.set()
         await linked.connection.close()

@@ -589,7 +589,7 @@ def _resolve_profile_db(profile: str, handles: ExitStack):
         return None
     from hermes_cli import profiles as profiles_mod
     from hermes_constants import get_hermes_home, hermes_home_key
-    from persistence_assembly import open_persistence_reader
+    from persistence_assembly import Persistence, open_persistence_reader
     canon = profiles_mod.normalize_profile_name(profile)
     profiles_mod.validate_profile_name(canon)
     target = profiles_mod.get_profile_dir(canon)
@@ -777,7 +777,7 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int |
     stores opened here. Positional order is frozen for old callers; new parameters are appended after ``detail``."""
     from hermes_constants import get_hermes_home
     from storage_user_copy import format_session_db_unavailable
-    from persistence_assembly import open_persistence_reader
+    from persistence_assembly import Persistence, open_persistence_reader
     # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
     # split on it and adopt the embedded profile only when none was passed.
     if isinstance(session_id, str) and "/" in session_id:
@@ -800,6 +800,8 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int |
         # No handle: recall reads the store file ``db`` holds through its own read-only handle, or the home's
         # store when ``db`` has no file (a managed worker's RuntimeSessionStore, whose every read is an owner
         # RPC without the FTS read API, #141705).
+        if persistence is None and isinstance(db, Persistence):
+            persistence = db
         if persistence is None:
             db_path = getattr(db, "db_path", None)
             target = Path(db_path) if isinstance(db_path, (str, Path)) else get_hermes_home()

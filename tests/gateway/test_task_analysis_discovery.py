@@ -72,9 +72,10 @@ async def test_scroll_rebound_to_branch_reads_actual_source(linked, monkeypatch)
     from tools.session_search_tool import session_search
 
     db, sid = linked.db, linked.ref.session_id
-    db.sessions.create(NewSession('scroll-parent', source='cli''cli'))
+    db.sessions.create(NewSession('scroll-parent', source='cli'))
     append_message(db, 'scroll-parent', 'user', 'Parent context')
-    db.sessions.create(NewSession('scroll-child', source='cli''cli'))
+    db.sessions.create(NewSession('scroll-child', source='cli', parent_session_id='scroll-parent',
+                                  model_config={'_branched_from': 'scroll-parent'}))
     anchor = append_message(db, 'scroll-child', 'user', 'Actual branched session contains the requirement')
     args = {'session_id': 'scroll-parent', 'around_message_id': anchor}
     native_result = session_search(db=db, current_session_id=sid, **args)
@@ -107,7 +108,8 @@ async def test_joined_delegate_results_recall_owned_children(linked, monkeypatch
     from agent import oneshot
 
     db, parent = linked.db, linked.ref.session_id
-    db.sessions.create(NewSession('joined-child', source='subagent''subagent'))
+    db.sessions.create(NewSession('joined-child', source='subagent', parent_session_id=parent,
+                                  model_config={'_delegate_from': parent, '_subagent_id': 'sa-joined'}))
     append_message(db, 'joined-child', 'user', 'Joined child requirement')
     entries = [{'task_index': 0, 'status': 'completed', 'subagent_id': 'sa-joined', 'summary': 'done'}]
     value = {'results': entries} if shape == 'joined' else {'status': 'dispatched', 'subagent_ids': [], 'inline_results': entries}
@@ -127,7 +129,8 @@ async def test_unrelated_wrapped_tool_cannot_be_mistaken_for_delegation(linked, 
     from agent import oneshot
 
     db, parent = linked.db, linked.ref.session_id
-    db.sessions.create(NewSession('unrelated-child', source='subagent''subagent'))
+    db.sessions.create(NewSession('unrelated-child', source='subagent', parent_session_id=parent,
+                                  model_config={'_delegate_from': parent, '_subagent_id': 'sa-unrelated'}))
     append_message(db, 'unrelated-child', 'user', 'Not consulted by this call')
     args = {'calls': [{'name': 'some_other_tool', 'arguments': {}}]}
     result = {'results': [{'subagent_id': 'sa-unrelated', 'status': 'completed'}]}
