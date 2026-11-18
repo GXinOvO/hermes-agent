@@ -13,6 +13,7 @@ from hermes_cli.gateway_client import GATEWAY_WS_PROTOCOL
 from plugins.platforms.slack.adapter import SlackAdapter
 from tests.cron.test_strict_mixed_fanout import peer
 from tests.gateway.test_session_bot_retry import _settle_quietly
+from tests.fixtures.storage_holder import raw_holder
 
 
 @asynccontextmanager
@@ -100,4 +101,4 @@ def mutate_native(bot, receipt, case):
         }[case]
         container[key] = value
         conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?', (json.dumps(payload), receipt['admission_id']))
-    bot.authority.db._execute_write(corrupt)
+    raw_holder(bot.authority.persistence)._execute_write(corrupt)

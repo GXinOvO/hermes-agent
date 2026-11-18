@@ -15,6 +15,7 @@ from hermes_cli.gateway_client import GATEWAY_WS_PROTOCOL
 from plugins.platforms.slack.adapter import SlackAdapter
 from tests.cron.test_strict_mixed_fanout import peer
 from tests.gateway.test_session_bot_retry import _admissions, _settle_quietly
+from tests.fixtures.storage_holder import raw_holder
 
 pytest_plugins = ['tests.cron.test_sealed_bot_consumer']
 
@@ -102,7 +103,7 @@ async def test_public_mixed_fanout_boundary(sealed_bot, monkeypatch, case):
             if case == 'nonexistent_admission':
                 receipt['admission_id'] = 'f' * 32
             elif case.startswith('db_'):
-                with bot.authority.db._read_ctx() as conn:
+                with raw_holder(bot.authority.persistence)._read_ctx() as conn:
                     admission = dict(conn.execute('SELECT * FROM session_admissions WHERE admission_id=?',
                                                   (receipt['admission_id'],)).fetchone())
                 payload = json.loads(admission['payload_json'])
@@ -117,7 +118,7 @@ async def test_public_mixed_fanout_boundary(sealed_bot, monkeypatch, case):
                     else:
                         conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                      (json.dumps(payload), receipt['admission_id']))
-                bot.authority.db._execute_write(corrupt)
+                raw_holder(bot.authority.persistence)._execute_write(corrupt)
             path = receipt_path
             mutations = {
                 'malformed_receipt': lambda: receipt.pop('admission_id'),
@@ -129,7 +130,7 @@ async def test_public_mixed_fanout_boundary(sealed_bot, monkeypatch, case):
             }
             if case in mutations:
                 mutations[case]()
-            with bot.authority.db._read_ctx() as conn:
+            with raw_holder(bot.authority.persistence)._read_ctx() as conn:
                 committed = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?',
                                         (receipt.get('admission_id'),)).fetchone()
             print('COMMITTED_NATIVE ' + json.dumps({'case': case,

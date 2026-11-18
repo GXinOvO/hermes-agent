@@ -146,7 +146,7 @@ def test_native_human_a2a_result_target_lifecycle(tmp_path, monkeypatch, operati
                 assert entry.session_id == value['binding']['session_id']
                 reset = store.reset_session(route)
                 assert reset.session_id != entry.session_id
-                old = store._db.get_session(entry.session_id)
+                old = store._scoped_persistence().sessions.get(entry.session_id)
                 assert old['end_reason'] == 'session_reset'
                 observations.append({'canonical_reset': {'old': entry.session_id, 'new': reset.session_id,
                     'old_end_reason': old['end_reason']}})

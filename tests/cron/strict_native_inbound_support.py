@@ -21,7 +21,7 @@ async def check(adapter, config, platform, mode):
     if mode == 'reset':
         store.reset_session(key)
     elif mode == 'ended':
-        store._db.end_session(seeded, 'completed')
+        store._scoped_persistence().sessions.end(seeded, 'completed')
     runner = object.__new__(GatewayRunner)
     runner.adapters, runner.config, runner.pairing_store = {Platform(platform): adapter}, config, None
     auth, routes = [], []

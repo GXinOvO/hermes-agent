@@ -6,6 +6,7 @@ import pytest
 from cron import delivery_queue as queue, scheduler
 from gateway.config import Platform
 from tests.cron.test_strict_bot_receipt_cases import cached_fanout, admit_cached, drain_cached, mutate_native
+from tests.fixtures.storage_holder import raw_holder
 
 pytest_plugins = ['tests.cron.test_sealed_bot_consumer']
 
@@ -57,13 +58,13 @@ async def test_cached_ack_uses_real_retirement_evidence(sealed_bot, monkeypatch,
             test.path.write_text(json.dumps(receipt))
         frozen, _ = await asyncio.to_thread(freeze, test.target, json.loads(test.row['job_json']), test.row['content'], False)
         assert sealed_bot.authority.db.delete_session(sealed_bot.chat, sessions_dir=sealed_bot.home / 'sessions')
-        with sealed_bot.authority.db._read_ctx() as conn:
+        with raw_holder(sealed_bot.authority.persistence)._read_ctx() as conn:
             retired = terminal_admission(conn, receipt['admission_id'])
             assert retired['payload_json'] == '{}' and retired['status'] == 'terminal'
             assert conn.execute('SELECT 1 FROM session_admissions WHERE admission_id=?', (receipt['admission_id'],)).fetchone() is None
         if case.startswith('retired_'):
             retired['payload_digest' if case == 'retired_digest' else 'principal_id'] = 'foreign'
-            sealed_bot.authority.db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+            raw_holder(sealed_bot.authority.persistence)._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
                 (json.dumps(retired), ADMISSION_PREFIX + receipt['admission_id'])))
         before = test.path.read_bytes()
         if case == 'normal':
@@ -225,7 +226,7 @@ async def test_ambiguous_bot_receipt_finishes_fanout_unknown_without_replay(seal
             assert await asyncio.to_thread(scheduler.drain_delivery_queue, {Platform.SLACK: test.adapter}, loop) == 1
             await asyncio.wait_for(started.wait(), timeout=10)
             admission_id = _admissions(sealed_bot)[0]['admission_id']
-            sealed_bot.authority.db._execute_write(lambda conn: conn.execute(
+            raw_holder(sealed_bot.authority.persistence)._execute_write(lambda conn: conn.execute(
                 "UPDATE session_admissions SET status='unknown' WHERE admission_id=?", (admission_id,)))
             _, receipt = await session_bot.read_receipt(sealed_bot.home, test.identity['params']['id'])
             result = await session_bot._publish_result(sealed_bot.authority, sealed_bot.home, receipt)
@@ -240,7 +241,7 @@ async def test_ambiguous_bot_receipt_finishes_fanout_unknown_without_replay(seal
             assert len(_admissions(sealed_bot)) == 1
         finally:
             if admission_id is not None:
-                sealed_bot.authority.db._execute_write(lambda conn: conn.execute(
+                raw_holder(sealed_bot.authority.persistence)._execute_write(lambda conn: conn.execute(
                     "UPDATE session_admissions SET status='started' WHERE admission_id=?", (admission_id,)))
             release.set()
             await _settle_quietly(sealed_bot)
