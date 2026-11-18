@@ -80,17 +80,17 @@ def _set_cron_session_title(session_db, session_id, base_title):
     if not title:
         return None
     try:
-        session_db.set_session_title(session_id, title)
+        session_db.set_title(session_id, title)
         return title
     except ValueError:
         # Unique-title collision: fall back to the next lineage title (base #2, #3, ...).
-        next_title_fn = getattr(session_db, "get_next_title_in_lineage", None)
+        next_title_fn = getattr(session_db, "next_title_in_lineage", None)
         if next_title_fn is None:
             raise
         deduped = next_title_fn(title)
         if not deduped or deduped == title:
             raise
-        session_db.set_session_title(session_id, deduped)
+        session_db.set_title(session_id, deduped)
         return deduped
 
 
@@ -2129,17 +2129,11 @@ def _cron_finalizer_store(handle):
         def get_compression_tip(self, session_id):
             return handle.lineage.tip(session_id)
 
-        def set_session_title(self, session_id, title):
+        def set_title(self, session_id, title):
             handle.sessions.set_title(session_id, title)
 
-        def get_next_title_in_lineage(self, base_title):
-            titles = [row.title for row in handle.sessions.search_sessions() if row.session.title]
-            candidate = base_title
-            index = 2
-            while candidate in titles:
-                candidate = f"{base_title} #{index}"
-                index += 1
-            return candidate
+        def next_title_in_lineage(self, base_title):
+            return handle.sessions.next_title_in_lineage(base_title)
 
         def session_lifecycle_statuses(self, session_ids):
             statuses = handle.sessions.lifecycle_statuses(list(session_ids))
