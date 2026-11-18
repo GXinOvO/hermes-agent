@@ -91,12 +91,15 @@ def scheduled_post_kind(actor: Mapping[str, Any] | None) -> str | None:
     return "post" if actor_id.startswith(SCHEDULED_POST_PREFIX) else None
 
 
-def post_scheduled_message(
+def prepare_scheduled_message(
     store: Persistence, *, placement: HostedPlacement, room_id: Any, job_id: str, job_name: str, run_key: str,
-    text: str, notice: bool = False, now: float | None = None,
+    text: str, notice: bool = False,
 ) -> dict[str, Any]:
-    """Append one cron output to a room. Idempotent per ``run_key``: a retried delivery of the same run
-    returns the original event instead of posting twice."""
+    """The room event a cron run would post, frozen WITHOUT writing.
+
+    The strict transport prepares the whole frame first and posts only after its ACK, so the plan must be
+    reproducible from this dict alone: every field ``append_event`` needs is resolved here.
+    """
     from gateway.hosted_room_discussion import MAX_USER_TEXT_BYTES, validate_user_payload
 
     state = _local_authority(store, placement, room_id)
@@ -110,15 +113,28 @@ def post_scheduled_message(
     actor = {"kind": "user", "id": f"{prefix}{job_label}",
              "display_name": (job_name or job_id)[: hosted_rooms.MAX_ACTOR_LABEL_CHARS]}
     event_id = f"cron-post:{digest[:40]}"
+    return {
+        "room_id": state["room_id"], "event_id": event_id, "kind": "message.user", "actor": actor,
+        "payload": payload, "authority_gateway_id": state["authority_gateway_id"],
+        "authority_epoch": state["authority_epoch"],
+    }
+
+
+def post_scheduled_message(
+    store: Persistence, *, placement: HostedPlacement, room_id: Any, job_id: str, job_name: str, run_key: str,
+    text: str, notice: bool = False, now: float | None = None,
+) -> dict[str, Any]:
+    """Append one cron output to a room. Idempotent per ``run_key``: a retried delivery of the same run
+    returns the original event instead of posting twice."""
+    plan = prepare_scheduled_message(store, placement=placement, room_id=room_id, job_id=job_id,
+                                    job_name=job_name, run_key=run_key, text=text, notice=notice)
+    event_id = plan["event_id"]
     try:
-        return hosted_rooms.append_event(
-            store, placement=placement, room_id=room_id, event_id=event_id, kind="message.user", actor=actor,
-            payload=payload, authority_gateway_id=state["authority_gateway_id"],
-            authority_epoch=state["authority_epoch"], now=now)
+        return hosted_rooms.append_event(store, placement=placement, now=now, **plan)
     except hosted_rooms.EventConflictError:
         # A retry of the same run re-rendered different text (a re-run agent, a new timestamp): the first
         # post already landed and the run is delivered, so report that post rather than a failure.
-        event = store.hosted_rooms.event_by_id(placement=placement, room_id=state["room_id"], event_id=event_id)
+        event = store.hosted_rooms.event_by_id(placement=placement, room_id=plan["room_id"], event_id=event_id)
         if event is None:
             raise
         return {**event, "idempotent": True}

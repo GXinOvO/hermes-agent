@@ -505,6 +505,7 @@ def _freeze_local(target, text, failure):
 
 
 def _freeze_room(target, job, content, failure):
+    from pathlib import Path
     from cron.scheduler_delivery import _redact_cron_payload
     from cron.scheduler_delivery_room import _ROOM_TOKEN_RE, _find_room_store
     from gateway.hosted_room_context import prepare_scheduled_message
@@ -515,12 +516,15 @@ def _freeze_room(target, job, content, failure):
     store = _find_room_store(match['room'], match['profile'])
     if store is None or not job.get('execution_id'):
         raise RuntimeError('strict room target unavailable')
-    store = store.resolve()
-    plan = prepare_scheduled_message(store, room_id=match['room'], job_id=str(job.get('id') or 'job'),
-        job_name=_redact_cron_payload(str(job.get('name') or job.get('id') or 'job'), 'job name'),
-        run_key=job['execution_id'], text=_redact_cron_payload(content, 'room payload'), notice=failure)
-    stat = store.stat()
-    identity = {'store': str(store), 'inode': [stat.st_dev, stat.st_ino], 'event': plan}
+    from cron.scheduler_delivery_room import _handle
+    with _handle(store) as handle:
+        plan = prepare_scheduled_message(handle, placement=store[1], room_id=match['room'],
+            job_id=str(job.get('id') or 'job'),
+            job_name=_redact_cron_payload(str(job.get('name') or job.get('id') or 'job'), 'job name'),
+            run_key=job['execution_id'], text=_redact_cron_payload(content, 'room payload'), notice=failure)
+    path = Path(store[0]) / 'state.db'
+    stat = path.stat()
+    identity = {'store': str(path), 'inode': [stat.st_dev, stat.st_ino], 'event': plan}
     return {'kind': 'room', 'identity': identity}, identity
 
 
