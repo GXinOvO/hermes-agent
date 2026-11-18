@@ -101,8 +101,8 @@ async def consume(home, url, mode):
             entry.suspended = True
             store._save()
 
-        change = {'inactive': inactive, 'ended': lambda: store._db.end_session(seeded_id, 'session_reset'),
-                  'ended_mention': lambda: store._db.end_session(seeded_id, 'completed'),
+        change = {'inactive': inactive, 'ended': lambda: store._scoped_persistence().sessions.end(seeded_id, 'session_reset'),
+                  'ended_mention': lambda: store._scoped_persistence().sessions.end(seeded_id, 'completed'),
                   'reset': lambda: store.reset_session(key), 'reset_mention': lambda: store.reset_session(key),
                   'suspended': suspended}.get(mode)
         if change:

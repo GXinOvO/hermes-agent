@@ -405,11 +405,12 @@ def freeze_thread(adapter, state, calls, retained):
     from plugins.platforms.slack.adapter import SlackAdapter, _slack_unfurl_kwargs
     from gateway.strict_transport import require_strict_transport
     from gateway.session import SessionStore
-    from hermes_state import SessionDB
+    from persistence_assembly import Persistence
 
     if type(adapter) is not SlackAdapter or 'create_handoff_thread' in adapter.__dict__:
         raise RuntimeError('strict Slack thread creator unsupported')
-    if not isinstance(getattr(adapter, '_session_store', None), SessionStore) or not isinstance(adapter._session_store._db, SessionDB):
+    store = getattr(adapter, '_session_store', None)
+    if not isinstance(store, SessionStore) or not isinstance(store._scoped_persistence(), Persistence):
         raise RuntimeError('strict Slack continuation store unavailable')
     team = adapter._metadata_team_id(calls[0][1].get('metadata')) or adapter.scope_id_for_chat(str(state.chat_id))
     if not team or team not in adapter._team_clients:
