@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.core.errors import PermanentStoreError
 from hermes_state import SessionDB
 from hermes_state_runtime import (
     RuntimeStoreError, begin_runtime_epoch, mutate_worker_execution, register_worker_execution,
@@ -165,7 +166,7 @@ def test_restricted_persist_failure_is_not_silently_ignored(db):
     agent.allowed_tools = []
     _sql(db, "CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
                   "BEGIN SELECT RAISE(ABORT, 'pin-write-failed'); END")
-    with pytest.raises(sqlite3.IntegrityError, match="pin-write-failed"):
+    with pytest.raises(PermanentStoreError, match="pin-write-failed"):
         persist_agent_tool_names(agent)
     assert _raw(db) == (None, None)
 
@@ -187,7 +188,7 @@ def test_restore_does_not_ignore_restricted_pin_write_failure(db):
     agent.allowed_tools = []
     _sql(db, "CREATE TRIGGER reject_pin BEFORE UPDATE OF tool_names ON sessions "
                   "BEGIN SELECT RAISE(ABORT, 'restore-write-failed'); END")
-    with pytest.raises(sqlite3.IntegrityError, match="restore-write-failed"):
+    with pytest.raises(PermanentStoreError, match="restore-write-failed"):
         _restore_pinned_tools(agent, db.get_session("owned"))
     assert _raw(db) == (None, None)
 

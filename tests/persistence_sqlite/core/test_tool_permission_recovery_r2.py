@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from persistence.core.errors import PermanentStoreError
 from hermes_state import SessionDB
 from run_agent import AIAgent
 import sqlite3
@@ -219,7 +220,7 @@ def test_corrupt_cache_permission_write_failure_propagates(state):
         _restore_pinned_tools(first, state.get_session("owned"))
         _sql(state, "CREATE TRIGGER reject_permission BEFORE UPDATE OF model_config ON sessions "
                          "BEGIN SELECT RAISE(ABORT, 'permission-write-failed'); END")
-        with pytest.raises(sqlite3.IntegrityError, match="permission-write-failed"):
+        with pytest.raises(PermanentStoreError, match="permission-write-failed"):
             persist_agent_tool_names(first)
         assert _raw_owned(state) == before
     finally:
