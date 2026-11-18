@@ -90,3 +90,27 @@ def append_messages(store, session_id, rows):
 def total_changes(store):
     """The writer connection's ``total_changes``, for write-count assertions."""
     return raw_holder(store)._write_generation()[1]
+
+
+def compact_rows(store, session_id, replacement, *, tail_count=0, lock_holder=None):
+    """Archive the active rows and insert ``replacement`` live message dicts (``messages.compact``)."""
+    return store.messages.compact(session_id, [NewMessage.from_live(dict(row)) for row in replacement],
+                                  carried_tail_count=tail_count, lock_holder=lock_holder)
+
+
+def rotate_compression(store, session_id, child_session_id, source, replacement, *, holder):
+    """Publish a compression child carrying ``replacement`` as its transcript, under the compression lock ``holder``."""
+    from persistence.conversation.lineage import CompressionChild
+    return store.lineage.publish_compression_child(
+        session_id, CompressionChild(child_session_id, source),
+        [NewMessage.from_live(dict(row)) for row in replacement], compression_lock_holder=holder)
+
+
+def write_sql(store, sql, params=()):
+    """Run one raw statement on the writer connection (fixture for column-level damage)."""
+    return raw_holder(store)._execute_write(lambda conn: conn.execute(sql, params))
+
+
+def read_one(store, sql, params=()):
+    """The first row of one raw query on the writer connection."""
+    return raw_holder(store)._execute_write(lambda conn: conn.execute(sql, params).fetchone())

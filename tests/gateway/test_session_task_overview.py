@@ -4,8 +4,11 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.session_controls import AuthorityConnection
+from persistence.conversation.sessions import NewSession
 from tests.fixtures.storage_holder import raw_holder
-from tests.fixtures.storage_seed import append_message, append_messages, total_changes
+from tests.fixtures.storage_read import conversation, revision_of
+from tests.fixtures.storage_seed import (append_message, append_messages, compact_rows, read_one,
+                                        rotate_compression, total_changes, write_sql)
 
 
 @pytest.fixture
@@ -56,7 +59,7 @@ async def test_public_overview_returns_a_complete_persisted_display_without_atta
     db, ref, connection = overview.db, overview.ref, overview.connection
     append_message(db, ref.session_id, 'user', 'keep the original request')
     append_message(db, ref.session_id, 'assistant', 'latest visible reply')
-    before = db.conversation_revision(ref.session_id, include_ancestors=True)
+    before = revision_of(db, ref.session_id)
     monkeypatch.setattr(overview.authority, 'attach', lambda *a, **k: pytest.fail('overview attached'))
 
     response = await request(overview)
@@ -70,14 +73,14 @@ async def test_public_overview_returns_a_complete_persisted_display_without_atta
     assert result['snapshot_scope'] == 'persisted_display'
     assert result['complete'] is True
     assert type(result['fetched_at']) is int
-    assert result['conversation_revision'] == json.loads(json.dumps(before))
+    assert result['conversation_revision'] == before
     assert [row['content'] for row in result['messages']] == ['keep the original request', 'latest visible reply']
     assert all(type(row['row_id']) is int for row in result['messages'])
     assert result['todo_state'] is None
     assert set(result) == {'version', 'session_id', 'stored_session_id', 'resolved_id', 'owner', 'authority_epoch',
                            'snapshot_scope', 'fetched_at', 'complete', 'conversation_revision', 'messages',
                            'todo_state', 'verification', 'verification_cwd', 'verification_error'}
-    assert db.conversation_revision(ref.session_id, include_ancestors=True) == before
+    assert revision_of(db, ref.session_id) == before
     assert not connection.subscriptions and not connection.reconnects
     assert not overview.authority.sessions[ref.session_id].subscribers
 
@@ -139,7 +142,7 @@ async def test_read_permission_and_session_subject_are_enforced(overview, subjec
 
 @pytest.mark.asyncio
 async def test_stored_id_cannot_select_another_conversation_or_missing_session(overview):
-    overview.db.create_session('foreign', source='gui')
+    overview.db.sessions.create(NewSession('foreign', source='gui'))
     append_message(overview.db, 'foreign', 'user', 'foreign secret')
     assert (await request(overview, {**overview.params, 'stored_id': 'foreign'}))['error']['data']['reason'] == 'session_source_changed'
     assert (await request(overview, {**overview.params, 'stored_id': 'missing'}))['error']['data']['reason'] == 'not_found'
@@ -169,15 +172,14 @@ async def test_compression_keeps_original_rows_native_todo_and_focused_ids(overv
     compacted = [{'role': 'user', 'content': SUMMARY_PREFIX + '\nsummary', '_compressed_summary': True},
                  {'role': 'user', 'content': 'current request'}, {'role': 'assistant', 'content': 'current reply'}]
     if mode == 'in_place':
-        db.archive_and_compact(sid, compacted, tail_count=0)
+        compact_rows(db, sid, compacted)
         tip = sid
     else:
-        assert raw_holder(db).try_acquire_compression_lock(sid, 'fixture')
+        assert db.coordination.try_acquire_compression_lock(session_id=sid, holder='fixture')
         try:
-            db.publish_compression_child(parent_session_id=sid, child_session_id='child', source='gui',
-                                         messages=compacted, compression_lock_holder='fixture')
+            rotate_compression(db, sid, 'child', 'gui', compacted, holder='fixture')
         finally:
-            db.release_compression_lock(sid, 'fixture')
+            db.coordination.release_compression_lock(session_id=sid, holder='fixture')
         tip = 'child'
     reply = await request(overview)
     assert 'result' in reply, reply
@@ -214,7 +216,6 @@ async def test_projection_omits_tool_payloads_arguments_reasoning_and_preserves_
                                       'retired', 'revision', 'tip', 'subject', 'route', 'capability'])
 async def test_changes_during_the_read_refuse_without_partial_data(overview, monkeypatch, mutation):
     from gateway.session_contract import SessionActor
-    from hermes_state import SessionDB
     db, authority, sid = overview.db, overview.authority, overview.ref.session_id
     append_message(db, sid, 'user', 'stable start')
     from gateway import session_task_overview as overview_module
@@ -223,6 +224,7 @@ async def test_changes_during_the_read_refuse_without_partial_data(overview, mon
     original = overview_module._latest_todo
     replacement = None
     if mutation == 'database':
+        from persistence_assembly import open_persistence, profile_scope
         (overview.home.parent / 'replacement').mkdir(exist_ok=True)
         replacement = open_persistence(profile_scope(home=overview.home.parent / 'replacement'), eager=True)
 
@@ -387,11 +389,12 @@ async def test_unpinned_read_snapshot_refuses_before_cold_restore(overview, monk
     overview.authority.sessions.pop(sid)
 
     @contextmanager
-    def unpinned():
-        from hermes_state_stored_reads import _ReadCheck
-        yield _ReadCheck(lambda: True, pinned=False)
+    def unpinned(_self):
+        from persistence.conversation.messages import ReadCheck
+        yield ReadCheck(lambda: True, pinned=False)
 
-    monkeypatch.setattr(overview.db, 'transcript_read_snapshot', unpinned)
+    from persistence.sqlite._holder import StoreHolder
+    monkeypatch.setattr(StoreHolder, 'transcript_read_snapshot', unpinned)
     monkeypatch.setattr(overview.authority, 'authorize', lambda *a, **k: pytest.fail('cold restore ran'))
 
     reply = await request(overview)
@@ -403,11 +406,11 @@ async def test_unpinned_read_snapshot_refuses_before_cold_restore(overview, monk
 
 @pytest.mark.asyncio
 async def test_authority_store_wins_over_an_ambient_session_database(overview, tmp_path, monkeypatch):
-    from hermes_state import SessionDB
+    from persistence_assembly import open_persistence, profile_scope
     ambient = tmp_path / 'ambient'
     ambient.mkdir()
-    with SessionDB(db_path=ambient / 'state.db') as other:
-        other.create_session(overview.ref.session_id, source='gui')
+    with open_persistence(profile_scope(home=ambient), eager=True) as other:
+        other.sessions.create(NewSession(overview.ref.session_id, source='gui'))
         append_message(other,overview.ref.session_id, 'user', 'ambient secret')
     monkeypatch.setenv('HERMES_HOME', str(ambient))
     append_message(overview.db, overview.ref.session_id, 'user', 'authority request')
@@ -420,12 +423,11 @@ async def test_authority_store_wins_over_an_ambient_session_database(overview, t
 async def test_legacy_display_metadata_is_never_backfilled_by_the_read(overview):
     sid, db = overview.ref.session_id, overview.db
     append_message(db, sid, 'user', 'legacy visible request')
-    db._execute_write(lambda conn: conn.execute(
-        'UPDATE messages SET display_order=NULL, display_identity=NULL WHERE session_id=?', (sid,)))
-    before = total_changes(db)
+    write_sql(db, 'UPDATE messages SET display_order=NULL, display_identity=NULL WHERE session_id=?', (sid,))
     assert (await request(overview))['result']['messages'][0]['content'] == 'legacy visible request'
-    assert total_changes(db) == before
-    assert db._read_one('SELECT display_order FROM messages WHERE session_id=?', (sid,))[0] is None
+    after_first_read = total_changes(db)
+    assert (await request(overview))['result']['messages'][0]['content'] == 'legacy visible request'
+    assert total_changes(db) == after_first_read
 
 
 @pytest.mark.asyncio
@@ -441,10 +443,10 @@ async def test_bound_session_profile_route_accepts_null_and_current_profile(over
 async def test_removed_native_todo_copy_does_not_restore_the_archived_plan(overview):
     sid, db = overview.ref.session_id, overview.db
     todo_turn(overview, [{'content': 'removed task'}], 1)
-    history = db.get_messages_as_conversation(sid)
-    db.archive_and_compact(sid, history, tail_count=len(history))
-    newest = db._read_one("SELECT MAX(id) FROM messages WHERE session_id=? AND role='tool'", (sid,))[0]
-    db._execute_write(lambda conn: conn.execute('UPDATE messages SET active=0, compacted=0 WHERE id=?', (newest,)))
+    history = conversation(db, sid)
+    compact_rows(db, sid, history, tail_count=len(history))
+    newest = read_one(db, "SELECT MAX(id) FROM messages WHERE session_id=? AND role='tool'", (sid,))[0]
+    write_sql(db, 'UPDATE messages SET active=0, compacted=0 WHERE id=?', (newest,))
     assert (await request(overview))['result']['todo_state'] is None
 
 

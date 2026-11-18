@@ -4,6 +4,8 @@ and the OpenAI-format replay.
 The other reading operations are plain calls on the handle that return typed records: ``admissions.list``,
 ``admissions.get``, ``bindings.receipt`` and ``sessions.list_sessions``.
 """
+import json
+
 from persistence.conversation.messages import ConversationRequest, Reaction, TranscriptRead
 
 
@@ -30,3 +32,9 @@ def message_reactions(store, session_id, message_id):
         if message.row_id == message_id:
             return tuple(Reaction(**reaction) for reaction in (message.display_metadata or {}).get("reactions", ()))
     return ()
+
+
+def revision_of(store, session_id):
+    """The conversation revision as the JSON list the overview reports (``ConversationRevision.as_tuple``)."""
+    return json.loads(json.dumps(store.messages.conversation_revision(
+        session_id, include_lineage=True).as_tuple()))
