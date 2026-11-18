@@ -164,7 +164,6 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
 
     def finalize(analysis):
         from gateway.session_authorities import owner_scope
-        from hermes_state_stored_reads import _pins
         from hermes_state_runtime import _epoch
         with owner_scope(authority):
             def write(conn):
@@ -175,14 +174,14 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
                 saved = conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()
                 if (saved[0] if saved else None) != previous:
                     raise RuntimeStoreError('analysis_conflict')
-                pins = _pins()
-                pins[id(db)] = conn
+                pins = _holder_of(db)._snapshot_pins
+                pins.conn = conn
                 try:
                     _checked(connection, params, guard, target, binding, revision)
                     if graph is not None:
                         check(graph)
                 finally:
-                    pins.pop(id(db), None)
+                    pins.conn = None
                 record = {'generation': generation,
                           'binding': [cache_id, params['stored_id'], params['task_id'], params['title']],
                           'analysis': analysis}
@@ -193,11 +192,11 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
                 conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                              (key, json.dumps(record, ensure_ascii=False)))
             if graph is None:
-                db._execute_write(write, patience_s=0)
+                _holder_of(db)._execute_write(write, patience_s=0)
             else:
                 from gateway.session_task_sources import commit_fence
                 with commit_fence(graph, db):
-                    db._execute_write(write, patience_s=0)
+                    _holder_of(db)._execute_write(write, patience_s=0)
             saved = json.loads(db.state_meta.get(key))
             if saved['generation'] != generation:
                 raise RuntimeStoreError('analysis_conflict')

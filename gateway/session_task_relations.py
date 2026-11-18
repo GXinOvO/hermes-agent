@@ -171,7 +171,7 @@ def _delegates(db, target, function, result, profile):
         if isinstance(entries, list):
             ids.extend(entry.get('subagent_id') for entry in entries if isinstance(entry, dict))
     from tools.delegate_tool_sessions import stored_child_session
-    lineage = db._resume_lineage_ids(target)
+    lineage = db.lineage.resume_lineage_ids(target)
     found, missing = [], []
     for subagent_id in dict.fromkeys(item for item in ids if isinstance(item, str) and item):
         child = stored_child_session(db, subagent_id, lineage)
@@ -185,8 +185,9 @@ def _delegates(db, target, function, result, profile):
 def _continuations(db, target, rows, profile):
     via = next((row['id'] for row in rows if row['role'] == 'user'), None)
     found = []
-    for sid in db._resume_lineage_ids(target):
-        row = db.get_session(sid) or {}
+    for sid in db.lineage.resume_lineage_ids(target):
+        record = db.sessions.get(sid)
+        row = record.as_session_row() if record is not None else {}
         parent = row.get('parent_session_id')
         cfg = _object(row.get('model_config')) or {}
         if parent and (cfg.get('_branched_from') == parent or cfg.get('_reset_from') == parent):

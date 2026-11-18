@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from gateway.session_task_analysis_input import _text, stored_rows
 from gateway.session_task_relations import candidates, copied_session_results
-from hermes_state_runtime import _conversation_revision, RuntimeStoreError
+from hermes_state_runtime import _conversation_revision, _holder_of, RuntimeStoreError
 
 MAX_SOURCES = 8
 MAX_DEPTH = 4
@@ -155,35 +155,34 @@ async def collect(connection, params):
 def commit_fence(graph, primary):
     foreign = {str(store_location(read.connection.authority.persistence.scope)): read.connection.authority.persistence for read in graph['reads']
                if read.connection.authority.persistence is not primary}
-    from hermes_state_errors import StateDbReplacedError
-    from hermes_state_stored_reads import _pins
+    from persistence.sqlite._state.errors import StateDbReplacedError
     with ExitStack() as stack:
-        pins = _pins()
         for path in sorted(foreign):
-            db = foreign[path]
-            if not db._lock.acquire(blocking=False):
+            holder = _holder_of(foreign[path])
+            if not holder._lock.acquire(blocking=False):
                 raise RuntimeStoreError('storage_unavailable')
-            stack.callback(db._lock.release)
-            if db._conn is None:
+            stack.callback(holder._lock.release)
+            if holder._conn is None:
                 raise RuntimeStoreError('session_owner_changed')
             try:
-                db._raise_if_db_corrupt(storage=True)
-                db._raise_if_db_replaced()
+                holder._raise_if_db_corrupt(storage=True)
+                holder._raise_if_db_replaced()
             except StateDbReplacedError as exc:
                 raise RuntimeStoreError('session_owner_changed') from exc
             except sqlite3.DatabaseError as exc:
                 raise RuntimeStoreError('storage_unavailable') from exc
-            previous_timeout = db._conn.execute('PRAGMA busy_timeout').fetchone()[0]
+            previous_timeout = holder._conn.execute('PRAGMA busy_timeout').fetchone()[0]
             try:
-                db._conn.execute('PRAGMA busy_timeout=0')
-                db._conn.execute('BEGIN IMMEDIATE')
-                stack.callback(db._conn.rollback)
+                holder._conn.execute('PRAGMA busy_timeout=0')
+                holder._conn.execute('BEGIN IMMEDIATE')
+                stack.callback(holder._conn.rollback)
             except sqlite3.OperationalError as exc:
                 raise RuntimeStoreError('storage_unavailable') from exc
             finally:
-                db._conn.execute(f'PRAGMA busy_timeout={int(previous_timeout)}')
-            pins[id(db)] = db._conn
-            stack.callback(pins.pop, id(db), None)
+                holder._conn.execute(f'PRAGMA busy_timeout={int(previous_timeout)}')
+            pins = holder._snapshot_pins
+            pins.conn = holder._conn
+            stack.callback(setattr, pins, 'conn', None)
         yield
 
 

@@ -1,4 +1,5 @@
 """Consume-only owner-startup recovery for sealed managed turn completions."""
+from hermes_state_runtime import _holder_of
 import json
 import logging
 
@@ -8,7 +9,7 @@ from hermes_state_runtime import RuntimeStoreError
 
 def recover_completed_managed_results(db, *, profile_id, epoch):
     expire_results(db, profile_id=profile_id, epoch=epoch)
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         keys = [row[0] for row in conn.execute('SELECT key FROM state_meta WHERE key LIKE ?', (PREFIX + '%',))]
     recovered = 0
     for key in keys:

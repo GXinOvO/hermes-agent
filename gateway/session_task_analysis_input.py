@@ -1,6 +1,6 @@
 import json
 
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import _holder_of, RuntimeStoreError
 
 MAX_ROWS = 20000
 MAX_INPUT_CHARS = 100000
@@ -43,18 +43,19 @@ def _text(content):
 
 
 def stored_rows(db, target):
-    ids = db._resume_lineage_ids(target)
+    ids = db.lineage.resume_lineage_ids(target)
     columns = ('session_id,id,role,content,timestamp,tool_call_id,tool_calls,tool_name,display_kind,'
                'display_metadata,message_uid,absorbed_message_uids,display_identity,active,compacted,'
                'display_order,_compressed_summary,tool_call_uids,tool_call_uid')
     marks = ','.join('?' for _ in ids)
-    with db._read_ctx() as conn:
+    with _holder_of(db)._read_ctx() as conn:
         count = conn.execute(f'SELECT COUNT(*) FROM messages WHERE session_id IN ({marks})', ids).fetchone()[0]
         if count > MAX_ROWS:
             raise RuntimeStoreError('analysis_too_large', detail='Conversation exceeds the 20000 row limit')
         raw = conn.execute(f"SELECT {columns} FROM messages WHERE session_id IN ({marks}) "
                            "AND role IN ('user','assistant','tool') AND COALESCE(display_kind,'') != 'hidden' ORDER BY id", ids).fetchall()
-    return db._dedupe_display_generations(raw, drop_removed=True)
+    from persistence.sqlite.conversation._store.messages import _dedupe_display_generations
+    return _dedupe_display_generations(_holder_of(db), raw, drop_removed=True)
 
 
 def messages(db, target):

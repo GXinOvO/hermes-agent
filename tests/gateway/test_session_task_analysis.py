@@ -4,6 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
+from tests.fixtures.storage_seed import append_message, rotate_compression, total_changes
+
 from tests.gateway import test_session_task_overview as overview_fixture
 
 overview = overview_fixture.overview
@@ -17,9 +21,9 @@ async def rpc(env, method, params):
 async def test_source_resolves_without_attaching_or_writing(overview, monkeypatch):
     from gateway import session_local_adoption
     sid = overview.ref.session_id
-    overview.db.append_message(sid, 'user', 'original requirement')
+    append_message(overview.db, sid, 'user', 'original requirement')
     overview.authority.sessions.pop(sid)
-    before = overview.db._conn.total_changes
+    before = total_changes(overview.db)
     monkeypatch.setattr(session_local_adoption, 'adopt_before_restore', lambda *a, **k: pytest.fail('adoption'))
     monkeypatch.setattr(overview.authority, 'attach', lambda *a, **k: pytest.fail('attach'))
     response = await rpc(overview, 'session.task_source', {'session_id': sid})
@@ -27,7 +31,7 @@ async def test_source_resolves_without_attaching_or_writing(overview, monkeypatc
     result = response['result']
     assert result == {'session_id': sid, 'stored_session_id': sid, 'resolved_id': sid,
                       'owner': overview.params['expected_owner'], 'authority_epoch': overview.authority.epoch}
-    assert overview.db._conn.total_changes == before
+    assert total_changes(overview.db) == before
     assert not overview.connection.subscriptions
 
 
@@ -35,7 +39,7 @@ async def test_source_resolves_without_attaching_or_writing(overview, monkeypatc
 async def test_analysis_read_is_empty_without_model_or_store_writes(overview, monkeypatch):
     from agent import oneshot
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **k: pytest.fail('read called model'))
-    before = overview.db._conn.total_changes
+    before = total_changes(overview.db)
     response = await rpc(overview, 'session.task_analysis', {**overview.params, 'task_id': 't', 'title': 'Build'})
     assert 'result' in response, response
     assert response['result'] == {'session_id': overview.ref.session_id,
@@ -43,7 +47,7 @@ async def test_analysis_read_is_empty_without_model_or_store_writes(overview, mo
                                   'owner': overview.params['expected_owner'],
                                   'authority_epoch': overview.authority.epoch,
                                   'task_id': 't', 'analysis': None}
-    assert overview.db._conn.total_changes == before
+    assert total_changes(overview.db) == before
 
 
 class Transport:
@@ -79,11 +83,11 @@ async def test_refresh_calls_session_model_saves_evidence_and_reopens_stale(over
     from hermes_state import SessionDB
     db, sid = overview.db, overview.ref.session_id
     overview.authority.runner.config = SimpleNamespace(multiplex_profiles=True)
-    db.append_message(sid, 'system', 'system secret')
-    db.append_message(sid, 'user', 'hidden secret', display_kind='hidden')
-    db.append_message(sid, 'user', 'Build and test the feature')
-    db.append_message(sid, 'assistant', 'I finished', reasoning='reasoning secret')
-    db.append_message(sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
+    append_message(db, sid, 'system', 'system secret')
+    append_message(db, sid, 'user', 'hidden secret', display_kind='hidden')
+    append_message(db, sid, 'user', 'Build and test the feature')
+    append_message(db, sid, 'assistant', 'I finished', reasoning='reasoning secret')
+    append_message(db, sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
     captured = []
     from gateway import run_turn_prepare
     monkeypatch.setattr(run_turn_prepare, '_resolve_policy_agent_runtime',
@@ -107,15 +111,15 @@ async def test_refresh_calls_session_model_saves_evidence_and_reopens_stale(over
     assert type(analysis['analyzed_at']) is int
     assert analysis['message_count'] == analysis['analyzed_messages'] == 3
     assert analysis['completed'][0]['evidence'][0]['quote'] == '3 passed'
-    with SessionDB(db_path=db.db_path) as fresh:
-        records = fresh.list_meta_prefix('gateway.task_analysis.v1:')
+    with open_persistence(profile_scope(home=Path(overview.home))) as fresh:
+        records = fresh.state_meta.list_prefix('gateway.task_analysis.v1:')
         assert len(records) == 1
         assert json.loads(records[0][1])['analysis'] == analysis
-    before = db._conn.total_changes
+    before = total_changes(db)
     read = await rpc(overview, 'session.task_analysis', {**overview.params, 'task_id': 't', 'title': 'Build'})
     assert read['result']['analysis'] == analysis
-    assert db._conn.total_changes == before and len(captured) == 1
-    db.append_message(sid, 'user', 'Please also check the docs')
+    assert total_changes(db) == before and len(captured) == 1
+    append_message(db, sid, 'user', 'Please also check the docs')
     stale = await rpc(overview, 'session.task_analysis', {**overview.params, 'task_id': 't', 'title': 'Build'})
     assert stale['result']['analysis']['stale'] is True
     renamed = await rpc(overview, 'session.task_analysis', {**overview.params, 'task_id': 't', 'title': 'Renamed'})
@@ -128,24 +132,24 @@ async def test_source_accepts_legacy_lineage_and_guards_owner(overview):
     from gateway.session_controls import AuthorityConnection
     db = overview.db
     overview.authority._native_legacy_transports = {overview.connection.actor.transport_id: overview.connection.actor}
-    db.create_session('legacy-root', source='cli')
-    db.create_session('legacy-tip', source='cli', parent_session_id='legacy-root')
-    db.end_session('legacy-root', 'compression')
-    db.append_message('legacy-tip', 'user', 'Continue the requested feature')
-    before = db._conn.total_changes
+    db.sessions.create(NewSession('legacy-root', source='cli'))
+    db.sessions.create(NewSession('legacy-tip', source='cli', parent_session_id='legacy-root'))
+    db.sessions.end('legacy-root', 'compression')
+    append_message(db, 'legacy-tip', 'user', 'Continue the requested feature')
+    before = total_changes(db)
     source = await rpc(overview, 'session.task_source', {'session_id': 'legacy-tip',
                                                        'expected_owner': overview.params['expected_owner']})
     assert 'result' in source, source
     assert source['result']['session_id'] == 'legacy-tip'
     assert source['result']['stored_session_id'] == source['result']['resolved_id'] == 'legacy-tip'
-    assert db._conn.total_changes == before
+    assert total_changes(db) == before
     for owner in ({**overview.params['expected_owner'], 'store_instance_id': 'other'},
                   {**overview.params['expected_owner'], 'authority_epoch': True}):
         denied = await rpc(overview, 'session.task_source', {'session_id': 'legacy-tip', 'expected_owner': owner})
         assert 'error' in denied
     denied = await rpc(overview, 'session.task_source', {'session_id': 'legacy-tip', 'profile': 'not-this-profile'})
     assert 'error' in denied
-    db.create_session('private', source='cli', user_id='foreign-principal')
+    db.sessions.create(NewSession('private', source='cli', user_id='foreign-principal'))
     denied = await rpc(overview, 'session.task_source', {'session_id': 'private'})
     assert 'error' in denied
     connection = AuthorityConnection(overview.authority, object(), {'user_id': 'owner', 'capabilities': []})
@@ -160,15 +164,15 @@ async def test_invalid_analysis_preserves_success(overview, monkeypatch, bad):
     from agent import oneshot
     from gateway import run_turn_prepare
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'Build and test the feature')
-    db.append_message(sid, 'assistant', 'I finished')
-    db.append_message(sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
+    append_message(db, sid, 'user', 'Build and test the feature')
+    append_message(db, sid, 'assistant', 'I finished')
+    append_message(db, sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
     monkeypatch.setattr(run_turn_prepare, '_resolve_policy_agent_runtime',
                         lambda *a, **k: ('frozen', {'provider': 'custom', 'base_url': 'https://model.invalid/v1', 'api_key': 'fixture'}))
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **k: json.dumps(answer(json.loads(k['user_input'])['messages'])))
     first = await refresh(overview)
     assert 'result' in first, first
-    before = db.list_meta_prefix('gateway.task_analysis.v1:')
+    before = db.state_meta.list_prefix('gateway.task_analysis.v1:')
 
     def model(**kwargs):
         rows = json.loads(kwargs['user_input'])['messages']
@@ -191,7 +195,7 @@ async def test_invalid_analysis_preserves_success(overview, monkeypatch, bad):
     monkeypatch.setattr(oneshot, 'run_oneshot', model)
     invalid = await refresh(overview)
     assert invalid['error']['data']['reason'] == 'invalid_analysis', invalid
-    assert db.list_meta_prefix('gateway.task_analysis.v1:') == before
+    assert db.state_meta.list_prefix('gateway.task_analysis.v1:') == before
 
 
 @pytest.mark.asyncio
@@ -202,7 +206,7 @@ async def test_model_cannot_run_before_source_permission_or_owner_checks(overvie
                    {'expected_owner': {**overview.params['expected_owner'], 'store_instance_id': 'other'}}):
         refused = await refresh(overview, **params)
         assert 'error' in refused
-    assert overview.db.list_meta_prefix('gateway.task_analysis.v1:') == []
+    assert overview.db.state_meta.list_prefix('gateway.task_analysis.v1:') == ()
 
 
 @pytest.mark.asyncio
@@ -211,10 +215,10 @@ async def test_unrestored_legacy_analysis_uses_saved_main_route_without_adoption
     from hermes_cli import runtime_provider
     db = overview.db
     overview.authority._native_legacy_transports = {overview.connection.actor.transport_id: overview.connection.actor}
-    db.create_session('old', source='cli', model='legacy-main', model_config={
-        'provider': 'custom', 'base_url': 'https://legacy.invalid/v1'})
-    db.append_message('old', 'user', 'Build and test the feature')
-    db.append_message('old', 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
+    db.sessions.create(NewSession('old', source='cli', model='legacy-main', model_config={
+        'provider': 'custom', 'base_url': 'https://legacy.invalid/v1'}))
+    append_message(db, 'old', 'user', 'Build and test the feature')
+    append_message(db, 'old', 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
     calls = []
 
     def resolve(**kwargs):
@@ -223,12 +227,12 @@ async def test_unrestored_legacy_analysis_uses_saved_main_route_without_adoption
 
     monkeypatch.setattr(runtime_provider, 'resolve_runtime_provider', resolve)
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **k: json.dumps(answer(json.loads(k['user_input'])['messages'])))
-    before = db.get_session('old')
+    before = db.sessions.get('old')
     result = await refresh(overview, session_id='old', stored_id='old')
     assert 'result' in result, result
     assert result['result']['analysis']['completed']
     assert calls[0]['target_model'] == 'legacy-main'
-    assert db.get_session('old') == before
+    assert db.sessions.get('old') == before
     assert 'old' not in overview.authority.sessions
 
 
@@ -238,10 +242,10 @@ async def test_cold_readonly_session_uses_its_saved_main_route(overview, monkeyp
     from hermes_cli import runtime_provider
     db = overview.db
     overview.authority._native_legacy_transports = {overview.connection.actor.transport_id: overview.connection.actor}
-    db.create_session('cold', source='cron', model='cold-main', model_config={
-        'provider': 'custom', 'base_url': 'https://cold.invalid/v1'})
-    db.append_message('cold', 'user', 'Build and test the feature')
-    db.append_message('cold', 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
+    db.sessions.create(NewSession('cold', source='cron', model='cold-main', model_config={
+        'provider': 'custom', 'base_url': 'https://cold.invalid/v1'}))
+    append_message(db, 'cold', 'user', 'Build and test the feature')
+    append_message(db, 'cold', 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
     monkeypatch.setattr(runtime_provider, 'resolve_runtime_provider', lambda **k: {
         'provider': 'custom', 'base_url': 'https://cold.invalid/v1', 'api_key': 'fixture'})
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **k: json.dumps(answer(json.loads(k['user_input'])['messages'])))
@@ -255,10 +259,10 @@ async def test_bounded_input_keeps_original_and_latest_requests_and_marks_tool_t
     from agent import oneshot
     from gateway import run_turn_prepare
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'Original: implement the feature')
+    append_message(db, sid, 'user', 'Original: implement the feature')
     for index in range(12):
-        db.append_message(sid, 'tool', f'Tool output {index}: ' + 'x' * 15000, tool_name='terminal', tool_call_id=str(index))
-    db.append_message(sid, 'user', 'Latest: cancel publishing; only test locally')
+        append_message(db, sid, 'tool', f'Tool output {index}: ' + 'x' * 15000, tool_name='terminal', tool_call_id=str(index))
+    append_message(db, sid, 'user', 'Latest: cancel publishing; only test locally')
     monkeypatch.setattr(run_turn_prepare, '_resolve_policy_agent_runtime',
                         lambda *a, **k: ('frozen', {'provider': 'custom', 'base_url': 'https://model.invalid/v1', 'api_key': 'fixture'}))
 
@@ -294,7 +298,7 @@ async def test_describe_advertises_analysis_and_main_resolution_failure_never_ca
     monkeypatch.setattr(run_turn_prepare, '_resolve_policy_agent_runtime', unavailable)
     response = await refresh(overview)
     assert response['error']['data']['reason'] == 'analysis_failed'
-    assert overview.db.list_meta_prefix('gateway.task_analysis.v1:') == []
+    assert overview.db.state_meta.list_prefix('gateway.task_analysis.v1:') == ()
 
 
 @pytest.mark.asyncio
@@ -302,21 +306,20 @@ async def test_compacted_source_resolves_root_and_analyzes_original_and_tool_row
     from agent import oneshot
     from gateway import run_turn_prepare
     db, sid = overview.db, overview.ref.session_id
-    db.append_message(sid, 'user', 'Original request')
-    db.append_message(sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
-    assert db.try_acquire_compression_lock(sid, 'analysis')
+    append_message(db, sid, 'user', 'Original request')
+    append_message(db, sid, 'tool', '3 passed', tool_name='terminal', tool_call_id='run')
+    assert db.coordination.try_acquire_compression_lock(session_id=sid, holder='analysis')
     try:
-        db.publish_compression_child(parent_session_id=sid, child_session_id='analysis-tip', source='gui',
-                                     messages=[{'role': 'user', 'content': 'Current requirement'}],
-                                     compression_lock_holder='analysis')
+        rotate_compression(db, sid, 'analysis-tip', 'gui',
+                           [{'role': 'user', 'content': 'Current requirement'}], holder='analysis')
     finally:
-        db.release_compression_lock(sid, 'analysis')
-    before = db._conn.total_changes
+        db.coordination.release_compression_lock(session_id=sid, holder='analysis')
+    before = total_changes(db)
     source = await rpc(overview, 'session.task_source', {'session_id': 'analysis-tip'})
     assert 'result' in source, source
     assert source['result']['session_id'] == sid
     assert source['result']['stored_session_id'] == source['result']['resolved_id'] == 'analysis-tip'
-    assert db._conn.total_changes == before
+    assert total_changes(db) == before
     monkeypatch.setattr(run_turn_prepare, '_resolve_policy_agent_runtime',
                         lambda *a, **k: ('frozen', {'provider': 'custom', 'base_url': 'https://model.invalid/v1', 'api_key': 'fixture'}))
 

@@ -4,6 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, open_persistence_reader, profile_scope, store_location
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_seed import (append_message, append_messages, rotate_compression, seed_session,
+                                        total_changes)
+
 from tests.gateway import test_task_analysis_linked as fixtures
 from tests.gateway.test_task_analysis_linked import linked_answer, run_linked, seed_read
 
@@ -15,14 +21,14 @@ overview = fixtures.overview
 async def test_cycles_and_compression_aliases_read_each_conversation_once(linked, monkeypatch):
     from agent import oneshot
     db = linked.db
-    db.append_message('related', 'user', f'Return to @session:default/{linked.ref.session_id}')
-    assert db.try_acquire_compression_lock('related', 'linked')
+    append_message(db, 'related', 'user', f'Return to @session:default/{linked.ref.session_id}')
+    assert db.coordination.try_acquire_compression_lock(session_id='related', holder='linked')
     try:
-        db.publish_compression_child(parent_session_id='related', child_session_id='related-tip', source='subagent',
-                                     messages=[{'role': 'user', 'content': 'Continue checks'}], compression_lock_holder='linked')
+        rotate_compression(db, 'related', 'related-tip', 'subagent',
+                           [{'role': 'user', 'content': 'Continue checks'}], holder='linked')
     finally:
-        db.release_compression_lock('related', 'linked')
-    linked.db.append_message(linked.ref.session_id, 'user', 'Also read @session:default/related-tip')
+        db.coordination.release_compression_lock(session_id='related', holder='linked')
+    append_message(linked.db, linked.ref.session_id, 'user', 'Also read @session:default/related-tip')
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     result = await run_linked(linked, refresh=True)
     assert 'result' in result, result
@@ -35,16 +41,14 @@ async def test_cycles_and_compression_aliases_read_each_conversation_once(linked
 async def test_delegated_child_uses_durable_parent_marker_not_random_id(linked, monkeypatch):
     from agent import oneshot
     db, parent = linked.db, linked.ref.session_id
-    db.create_session('child', source='subagent', parent_session_id=parent,
-                      model_config={'_delegate_from': parent, '_subagent_id': 'sa-real'})
-    db.append_message('child', 'tool', '2 integration tests passed', tool_name='terminal', tool_call_id='integration')
-    db.create_session('unrelated', source='desktop')
-    db.create_session('foreign', source='subagent', parent_session_id='unrelated',
-                      model_config={'_delegate_from': 'unrelated', '_subagent_id': 'sa-fake'})
-    db.append_message('foreign', 'user', 'This belongs to another task')
-    db.append_message(parent, 'assistant', '', tool_calls=[{'id': 'dispatch', 'type': 'function',
+    db.sessions.create(NewSession('child', source='subagent''subagent'))
+    append_message(db, 'child', 'tool', '2 integration tests passed', tool_name='terminal', tool_call_id='integration')
+    db.sessions.create(NewSession('unrelated', source='desktop''desktop'))
+    db.sessions.create(NewSession('foreign', source='subagent''subagent'))
+    append_message(db, 'foreign', 'user', 'This belongs to another task')
+    append_message(db, parent, 'assistant', '', tool_calls=[{'id': 'dispatch', 'type': 'function',
                       'function': {'name': 'delegate_task', 'arguments': '{}'}}])
-    db.append_message(parent, 'tool', json.dumps({'status': 'dispatched', 'subagent_ids': ['sa-real', 'sa-fake']}),
+    append_message(db, parent, 'tool', json.dumps({'status': 'dispatched', 'subagent_ids': ['sa-real', 'sa-fake']}),
                       tool_name='delegate_task', tool_call_id='dispatch')
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     result = await run_linked(linked, refresh=True)
@@ -78,14 +82,13 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
     from hermes_cli import profiles
     home = linked.home / 'profiles' / 'other'
     home.mkdir(parents=True)
-    from hermes_state import SessionDB
     store = SessionStore(home / 'sessions', GatewayConfig())
-    db = SessionDB(db_path=home / 'state.db')
+    db = open_persistence(profile_scope(home=home), eager=True)
     store._db = db
-    assert db.db_path != linked.db.db_path
+    assert store_location(db.scope) != store_location(linked.db.scope)
     runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None)
-    authority = SessionAuthority(runner, profile_id=str(home), instance_id='other-owner', db=db,
+    authority = SessionAuthority(runner, profile_id=str(home), instance_id='other-owner', persistence=db,
                                  epoch=begin_runtime_epoch(db, instance_id='other-owner'))
     registry = SessionAuthorities(linked.home, multiplexed=True)
     registry.add(linked.home, linked.authority)
@@ -97,9 +100,9 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
                                      {'user_id': linked.connection.actor.subject, 'provider': 'local', 'profile_scope': 'host',
                                       'profile_id': linked.authority.profile_id, 'instance_id': linked.authority.instance_id,
                                       'capabilities': list(linked.connection.actor.capabilities)})
-    db.create_session('shared', source='subagent')
-    db.append_message('shared', 'user', 'Reference-only task. Do not add its todo to the release')
-    db.append_message('shared', 'tool', '4 remote tests passed', tool_name='terminal', tool_call_id='remote')
+    db.sessions.create(NewSession('shared', source='subagent''subagent'))
+    append_message(db, 'shared', 'user', 'Reference-only task. Do not add its todo to the release')
+    append_message(db, 'shared', 'tool', '4 remote tests passed', tool_name='terminal', tool_call_id='remote')
     seed_read(linked, 'shared', profile='other')
     linked.connection = connection
     captured = []
@@ -120,7 +123,7 @@ async def test_host_scoped_connection_uses_served_sibling_and_keeps_same_row_num
         assert any(row['source_id'] == source['id'] and row['content'] == '4 remote tests passed'
                    for row in captured[0]['messages'])
         before = db.conversation_revision('shared', include_ancestors=True)
-        db.append_message('shared', 'user', 'New remote requirement')
+        append_message(db, 'shared', 'user', 'New remote requirement')
         changed = db.conversation_revision('shared', include_ancestors=True)
         assert changed != before
         cached = await run_linked(linked)
@@ -155,9 +158,9 @@ async def test_bounds_are_visible_and_v1_cache_stays_available(linked, monkeypat
     from agent import oneshot
     from gateway import session_task_sources
     monkeypatch.setattr(session_task_sources, 'MAX_SOURCES', 2)
-    linked.db.append_message(linked.ref.session_id, 'user', 'Also check @session:default/third')
-    linked.db.create_session('third', source='subagent')
-    linked.db.append_message('third', 'user', 'More work')
+    append_message(linked.db, linked.ref.session_id, 'user', 'Also check @session:default/third')
+    linked.db.sessions.create(NewSession('third', source='subagent''subagent'))
+    linked.append_message(db, 'third', 'user', 'More work')
     monkeypatch.setattr(oneshot, 'run_oneshot', lambda **kwargs: json.dumps(linked_answer(json.loads(kwargs['user_input']))))
     result = await run_linked(linked, refresh=True)
     assert result['result']['analysis']['complete'] is False

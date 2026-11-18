@@ -23,18 +23,21 @@ async def test_explicit_profile_selects_native_source_when_ids_collide(linked, m
     from gateway.session_authorities import SessionAuthorities
     from gateway.session_controls import AuthorityConnection
     from hermes_cli import profiles
-    from hermes_state import SessionDB
     from hermes_state_runtime import begin_runtime_epoch
+    from persistence.conversation.sessions import NewSession
+    from persistence_assembly import open_persistence, open_persistence_reader, profile_scope, store_location
+    from tests.fixtures.storage_holder import raw_holder
+    from tests.fixtures.storage_seed import append_message
     from tools import session_search_tool
 
     home = linked.home / 'profiles' / 'other'
     home.mkdir(parents=True)
     store = SessionStore(home / 'sessions', GatewayConfig())
-    other = SessionDB(db_path=home / 'state.db')
+    other = open_persistence(profile_scope(home=home), eager=True)
     store._db = other
     runner = SimpleNamespace(session_store=store, _session_db=other, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None)
-    authority = SessionAuthority(runner, profile_id=str(home), instance_id='other-owner', db=other,
+    authority = SessionAuthority(runner, profile_id=str(home), instance_id='other-owner', persistence=other,
                                  epoch=begin_runtime_epoch(other, instance_id='other-owner'))
     registry = SessionAuthorities(linked.home, multiplexed=True)
     registry.add(linked.home, linked.authority)
@@ -45,16 +48,17 @@ async def test_explicit_profile_selects_native_source_when_ids_collide(linked, m
     monkeypatch.setattr(session_search_tool, '_cross_profile_reads_confined', lambda: False)
     resolve_profile = session_search_tool._resolve_profile_db
     monkeypatch.setattr(session_search_tool, '_resolve_profile_db',
-                        lambda name: SessionDB(db_path=linked.db.db_path, read_only=True)
-                        if profiles.normalize_profile_name(name) == 'default' else resolve_profile(name))
+                        lambda name, handles: handles.enter_context(
+                            open_persistence_reader(store_location(linked.db.scope)))
+                        if profiles.normalize_profile_name(name) == 'default' else resolve_profile(name, handles))
     connection = AuthorityConnection(linked.authority, linked.connection.transport,
                                      {'user_id': linked.connection.actor.subject, 'provider': 'local', 'profile_scope': 'host',
                                       'profile_id': linked.authority.profile_id, 'instance_id': linked.authority.instance_id,
                                       'capabilities': list(linked.connection.actor.capabilities)})
     linked.connection = connection
     for db, text in ((linked.db, 'default collision evidence'), (other, 'other collision evidence')):
-        db.create_session('collision', source='cli')
-        db.append_message('collision', 'user', text)
+        db.sessions.create(NewSession('collision', source='cli'))
+        append_message(db, 'collision', 'user', text)
 
     args = {'session_id': f'{embedded}/collision'}
     if supplied is not None:
@@ -64,9 +68,9 @@ async def test_explicit_profile_selects_native_source_when_ids_collide(linked, m
     assert payload['success'], payload
     assert payload['link'] == f'@session:{supplied or embedded}/collision'
     assert payload['messages'][0]['content'] == f'{selected} collision evidence'
-    linked.db.append_message(linked.ref.session_id, 'assistant', '', tool_calls=[{'id': 'collision-call', 'type': 'function',
+    append_message(linked.db, linked.ref.session_id, 'assistant', '', tool_calls=[{'id': 'collision-call', 'type': 'function',
                              'function': {'name': 'session_search', 'arguments': json.dumps(args)}}])
-    linked.db.append_message(linked.ref.session_id, 'tool', native, tool_name='session_search', tool_call_id='collision-call')
+    append_message(linked.db, linked.ref.session_id, 'tool', native, tool_name='session_search', tool_call_id='collision-call')
     captured = []
 
     def model(**kwargs):

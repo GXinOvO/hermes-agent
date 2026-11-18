@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
 from gateway.session_llm_oneshot import _session_runtime
-from hermes_state_runtime import RuntimeStoreError, _session_row
+from hermes_state_runtime import RuntimeStoreError
 
 
 def runtime_for(authority, ref, target):
     live_runtime = _session_runtime(authority, ref) if ref.session_id in authority.sessions else lambda: None
     from gateway.session_local_migration import legacy_launch_params
-    row = _session_row(authority.persistence, target)
+    row = authority.persistence.sessions.get(target)
     params, api_mode = legacy_launch_params(row)
     model = params.get('model')
     def resolve():
