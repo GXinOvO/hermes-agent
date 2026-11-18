@@ -1165,39 +1165,60 @@ def _append_model_switch_marker(session: dict | None, *, model: str, provider: s
         "metadata when answering questions about what model/provider is active.]")
     # A user message, not system: strict OpenAI-compatible providers (vLLM, Qwen) reject non-leading system messages.
     # See #48338.
-    entry: dict[str, Any] = {"role": "user", "content": marker, "display_kind": "model_switch"}
+    # The pivot's time is stamped on the live entry before it is durable, so the in-memory history and
+    # the stored row carry the same instant instead of the entry replaying without one until a reload.
+    from agent.context_compressor import _DB_PERSISTED_MARKER
+    from agent.message_metadata import stamp_message_timestamp, stamp_message_uid
+    from persistence.sqlite.conversation._store.messages import _append_messages_in_transaction
+    from hermes_state_runtime import _holder_of
+    entry: dict[str, Any] = stamp_message_timestamp(
+        {"role": "user", "content": marker, "display_kind": "model_switch"})
+    stamp_message_uid(entry)
     with session.get("history_lock") or contextlib.nullcontext():
         history = session.setdefault("history", [])
-        history[:] = [h for h in history if not _is_model_switch_marker(h)]
-        history.append(entry)
-        session["history_version"] = int(session.get("history_version", 0)) + 1
-    try:
-        agent = session.get("agent")
-        db = getattr(agent, "_session_db", None) if agent is not None else None
-        if db is None:
-            _ensure_session_db_row(session)
-        with (contextlib.nullcontext(db) if db is not None else _session_db(session)) as db, \
-                _persistence_for(db) as persistence:
-            if persistence is not None:
-                from agent.context_compressor import _DB_PERSISTED_MARKER
-                from persistence.conversation.messages import NewMessage
+        try:
+            agent = session.get("agent")
+            db = getattr(agent, "_session_db", None) if agent is not None else None
+            if db is None and _ensure_session_db_row(session) is False:
+                raise RuntimeError("session store unavailable")
+            with (contextlib.nullcontext(db) if db is not None else _session_db(session)) as db, \
+                    _persistence_for(db) as persistence:
+                if persistence is None:
+                    raise RuntimeError("session store unavailable")
                 # Same stale-key hazard as the submit row: this durable pivot must land in the session the
                 # live agent writes to, or a model switch between turns on a rotated session files the notice
                 # under a parent the conversation no longer reads from (#123545).
                 target = _submit_row_target_key(session)
-                # The in-memory strip above keeps one marker; the durable rows need the same invariant or N
-                # switches leave N active rows that all replay on resume (#65891 kept it in memory only).
-                persistence.messages.deactivate_messages_by_display_kind(target, "model_switch")
-                from agent.message_metadata import stamp_message_uid
-                entry["_row_id"] = persistence.messages.append(target, NewMessage(
-                    role="user", content=marker, display_kind="model_switch", message_uid=stamp_message_uid(entry)))
-                entry[_DB_PERSISTED_MARKER] = True
-    except Exception:
-        # warning, not debug: filing the pivot in the LIVE session (#123545) means this write can now hit
-        # CompressionSessionClosedError on a closed parent, which the old session_key target could not.
-        # Swallowed at debug, a model switch silently loses its durable notice — the next resume replays
-        # without it and nothing lands in errors.log. Matches _persist_live_session_system_prompt above.
-        logger.warning("failed to persist model switch marker", exc_info=True)
+                if not target:
+                    raise RuntimeError("session store unavailable")
+                # A live handle proves nothing about the ROW: a draft chat persists its ``sessions`` row on
+                # the first submit, so inserting this pivot first violates ``messages.session_id``'s foreign
+                # key and the switch loses the very notice it describes.
+                if persistence.sessions.get(target) is None and _ensure_session_db_row(session) is False:
+                    raise RuntimeError("session store unavailable")
+                holder = _holder_of(persistence)
+                def persist(conn):
+                    # Retire/insert atomically: the in-memory strip keeps one marker, and the durable rows
+                    # need the same invariant or N switches leave N active rows replaying on resume (#65891).
+                    conn.execute("UPDATE messages SET active = 0 WHERE session_id = ? "
+                                 "AND display_kind = 'model_switch' AND active = 1", (target,))
+                    _append_messages_in_transaction(holder, conn, target, [entry])
+                holder._execute_write(persist)
+        except Exception:
+            # warning, not debug: a swallowed failure silently loses the durable notice, and the next
+            # resume replays without it.
+            logger.warning("failed to persist model switch marker", exc_info=True)
+        else:
+            entry[_DB_PERSISTED_MARKER] = True
+            history[:] = [h for h in history if not _is_model_switch_marker(h)]
+            history.append(entry)
+            session["history_version"] = int(session.get("history_version", 0)) + 1
+            return
+    # The model already switched: let its pin/--once restore finish, but keep this UID out of live
+    # merges. The existing model selector is the recovery entry once storage returns.
+    _emit("error", _lifecycle_own_sid(session), {
+        "message": f"Model switched to {model}{provider_part}, but its history notice could not "
+                   "be saved. Restore session storage and retry this model selection."})
 
 
 def _write_config_changes(sets: dict, unsets: tuple = ()) -> None:
