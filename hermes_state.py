@@ -315,7 +315,18 @@ class _SessionDB:
         origin_json = kwargs.pop("origin_json", None)
         if origin_json is not None:
             kwargs["origin"] = _json.loads(origin_json)
-        return self._store.sessions.create(NewSession(session_id=session_id, source=source, **kwargs))
+        incoming = kwargs.get("model_config")
+        existing = self._store.sessions.get(session_id) if incoming else None
+        created = self._store.sessions.create(NewSession(session_id=session_id, source=source, **kwargs))
+        if incoming and existing is not None:
+            # The store's upsert keeps the stored config, so a re-created child would lose the
+            # keys its constructor just passed (the fork's contract: earlier keys win, new ones land).
+            current = dict(existing.model_config or {})
+            if set(current) != {"_reset_from"}:
+                added = {key: value for key, value in incoming.items() if key not in current}
+                if added:
+                    self._store.sessions.patch_model_config(session_id, added)
+        return created
 
     @_held
     def end_session(self, session_id: "str", end_reason: "str") -> None:
