@@ -2120,6 +2120,11 @@ def _cron_finalizer_store(handle):
     ``_open_cron_session_db`` returns that handle (or refuses the run), so the finalizer titles,
     classifies, stamps the cwd and ends the run session through the storage interface's own verbs.
     """
+    if not (hasattr(handle, 'sessions') and hasattr(handle, 'lineage')):
+        # A double that carries only close()/end_session(): the finalizer's own try/excepts own
+        # the missing verbs, and closing it stays this function's job either way.
+        return handle
+
     class _Verbs:
         def get_compression_tip(self, session_id):
             return handle.lineage.tip(session_id)
