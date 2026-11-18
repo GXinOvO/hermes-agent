@@ -4,6 +4,13 @@ import os
 
 import pytest
 
+from persistence.conversation.sessions import NewSession
+
+
+def _titled(store, title):
+    return [row for row in (entry.session for entry in store.sessions.search_sessions())
+            if getattr(row, 'title', None) == title]
+
 from gateway.session_controls import AuthorityConnection
 from tests.cron import test_sealed_bot_consumer as fixtures
 from tests.gateway.test_session_bot_retry import _admissions, _settle_quietly
@@ -27,16 +34,16 @@ async def test_native_prepare_creates_no_admission_and_freezes_exact_target(seal
     await asyncio.to_thread(fixtures._produce, bot)
     params = {**fixtures._params(bot), 'create_missing': True}
     if case in {'missing', 'empty'}:
-        assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
+        assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
         if case == 'empty':
             params['session_id'] = ''
             params['sealed_cron_result_v1'].update(target_session_id='', target_live_session_id='')
     elif case == 'deleted':
-        assert bot.authority.db.delete_session(bot.chat)
+        assert bot.authority.persistence.sessions.delete(bot.chat, media_root=str(bot.home / 'native-inputs'))
     elif case == 'displaced':
-        assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
-        bot.authority.db.create_session('api_displaced', source='api', user_id=bot.connection.actor.subject)
-        assert bot.authority.db.set_session_title('api_displaced', 'Bot Chat')
+        assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
+        bot.authority.persistence.sessions.create(NewSession('api_displaced', source='api'))
+        assert bot.authority.persistence.sessions.set_title('api_displaced', 'Bot Chat')
     conn = connection(bot)
     response = await conn.dispatch({'id': 1, 'method': 'bot_relay.prepare', 'params': params})
     assert 'result' in response, response
@@ -71,7 +78,7 @@ async def test_prepare_refuses_before_creating_chat(sealed_bot, monkeypatch, cas
         'platform_toolsets': {'cli': []}, 'model': {'default': 'fixture'}})
     await asyncio.to_thread(fixtures._produce, bot)
     params = {**copy.deepcopy(fixtures._params(bot)), 'create_missing': True}
-    assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
+    assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
     if case == 'foreign_profile':
         params['profile'] = 'foreign'
     elif case == 'forged':
@@ -81,7 +88,7 @@ async def test_prepare_refuses_before_creating_chat(sealed_bot, monkeypatch, cas
     conn = connection(bot, native=case != 'remote', operator=case != 'nonoperator')
     response = await conn.dispatch({'id': 1, 'method': 'bot_relay.prepare', 'params': params})
     assert response['error']['data']['reason'] in {'permission_denied', 'profile_mismatch', 'admission_conflict'}, response
-    assert bot.authority.db.get_session_by_title('Bot Chat') is None
+    assert _titled(bot.authority.persistence, 'Bot Chat') == []
     assert not _admissions(bot)
 
 
@@ -90,10 +97,10 @@ async def test_saved_prepare_refuses_retarget_without_creating_chat(sealed_bot):
     bot = sealed_bot
     await asyncio.to_thread(fixtures._produce, bot)
     params = fixtures._params(bot)
-    assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
+    assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
     response = await connection(bot).dispatch({'id': 1, 'method': 'bot_relay.prepare', 'params': params})
     assert response['error']['data']['reason'] == 'admission_conflict', response
-    assert bot.authority.db.get_session_by_title('Bot Chat') is None
+    assert _titled(bot.authority.persistence, 'Bot Chat') == []
     assert not _admissions(bot)
 
 
@@ -107,8 +114,8 @@ async def test_prepared_delivery_target_drift_refuses_without_creating_chat(seal
     conn = connection(bot)
     prepared = await conn.dispatch({'id': 1, 'method': 'bot_relay.prepare', 'params': params})
     assert 'result' in prepared, prepared
-    assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
+    assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
     response = await conn.dispatch({'id': 2, 'method': 'bot_relay.deliver', 'params': params})
     assert response['error']['data']['reason'] == 'admission_conflict', response
-    assert bot.authority.db.get_session_by_title('Bot Chat') is None
+    assert _titled(bot.authority.persistence, 'Bot Chat') == []
     assert not _admissions(bot)

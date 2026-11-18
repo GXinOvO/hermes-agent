@@ -5,6 +5,13 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+
+from persistence.conversation.sessions import NewSession
+
+
+def _titled(store, title):
+    return [row for row in (entry.session for entry in store.sessions.search_sessions())
+            if getattr(row, 'title', None) == title]
 from slack_sdk.web.async_client import AsyncWebClient
 from websockets.asyncio.server import serve
 from cron import delivery_queue as queue, jobs, scheduler
@@ -35,8 +42,8 @@ async def test_public_mixed_fanout_boundary(sealed_bot, monkeypatch, case):
     bot = sealed_bot
     monkeypatch.setattr('gateway.run._load_gateway_config', lambda *a, **kw: {'platform_toolsets': {'cli': []}, 'model': {'default': 'fixture'}})
     if case == 'new_bot':
-        assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
-        assert bot.authority.db.get_session_by_title('Bot Chat') is None
+        assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
+        assert _titled(bot.authority.persistence, 'Bot Chat') == []
     connection = AuthorityConnection(bot.authority, lambda *a: None, {
         'user_id': bot.connection.actor.subject, 'provider': 'local', 'profile_id': bot.authority.profile_id,
         'capabilities': ['session:create', 'session:read', 'session:submit'],
@@ -167,7 +174,7 @@ async def test_public_mixed_fanout_boundary(sealed_bot, monkeypatch, case):
 async def test_empty_bot_native_ordinary_door(sealed_bot, monkeypatch):
     bot = sealed_bot
     monkeypatch.setattr('gateway.run._load_gateway_config', lambda *a, **kw: {'platform_toolsets': {'cli': []}, 'model': {'default': 'fixture'}})
-    assert bot.authority.db.set_session_title(bot.chat, 'Previous Chat')
+    assert bot.authority.persistence.sessions.set_title(bot.chat, 'Previous Chat')
     connection = AuthorityConnection(bot.authority, lambda *a: None, {
         'user_id': bot.connection.actor.subject, 'provider': 'local', 'profile_id': bot.authority.profile_id,
         'capabilities': ['session:create', 'session:read', 'session:submit'],
