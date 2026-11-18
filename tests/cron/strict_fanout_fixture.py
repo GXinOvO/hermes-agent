@@ -43,13 +43,14 @@ async def consume(home, url, stop):
         from gateway.session_authority import SessionAuthority, initialize_session_authority
         from gateway.session_contract import SessionActor
         from gateway.session_local import create_local_session
-        from hermes_state import AsyncSessionDB, SessionDB
+        from persistence_assembly import open_persistence, profile_scope
         runner = GatewayRunner(GatewayConfig(sessions_dir=Path(home) / 'local-sessions'))
-        database = SessionDB(Path(home) / 'state.db')
+        database = open_persistence(profile_scope(home=Path(home)), eager=True)
         runner.session_store._db = database
-        runner._session_db = AsyncSessionDB(database)
+        runner._session_db = database
         with patch.object(SessionAuthority, '_schedule', lambda *args: None):
-            authority = await initialize_session_authority(runner, profile_id='default', instance_id='fanout', db=database)
+            authority = await initialize_session_authority(runner, profile_id='default', instance_id='fanout',
+                                                           persistence=database)
         local_id = Path(home) / 'fanout-local-id'
         if not local_id.exists():
             actor = SessionActor('fanout-owner', 'default', frozenset({'session:create', 'session:read', 'session:submit'}), 'fixture')
