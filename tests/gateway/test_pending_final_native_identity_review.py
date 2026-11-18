@@ -198,7 +198,8 @@ async def test_native_bad_admission_is_value_error_and_preserves_raw(native, raw
 async def test_native_terminal_atomic_abort_retry_and_idempotency(native):
     db, _epoch, row, _descriptor, home, fingerprint = native
     raw_holder(db)._execute_write(lambda conn: conn.execute("CREATE TRIGGER sol_abort_result BEFORE INSERT ON state_meta WHEN NEW.key LIKE 'gateway.admission.result.v1.%' BEGIN SELECT RAISE(ABORT,'sol result insert fault'); END"))
-    with pytest.raises(sqlite3.IntegrityError, match='sol result insert fault'):
+    from persistence.core.errors import PermanentStoreError
+    with pytest.raises(PermanentStoreError, match='sol result insert fault'):
         settle(native)
     assert pf.pending(db) == []
     with raw_holder(db)._read_ctx() as conn:
@@ -266,7 +267,8 @@ async def test_native_ack_result_write_failure_does_not_consume(native):
 
 @pytest.mark.asyncio
 async def test_native_result_compaction_retirement_and_pruning_fail_closed(native):
-    from hermes_state_mutation_retirement import _compact_result, retire_sessions, prune_retired_tombstones
+    from persistence.sqlite.conversation._store.retirement import _compact_result, retire_sessions
+    from persistence.sqlite.housekeeping._retirement import prune_retired_tombstones
     db, _epoch, row, _descriptor, home, _fingerprint = native
     settle(native)
     value = pf.pending(db)[0]
@@ -274,7 +276,8 @@ async def test_native_result_compaction_retirement_and_pruning_fail_closed(nativ
     raw_holder(db)._execute_write(lambda conn: _compact_result(conn,row['admission_id']))
     with raw_holder(db)._read_ctx() as conn:
         assert pf.read_identity_witness(conn,home,value['binding']) == original
-    raw_holder(db)._execute_write(lambda conn: retire_sessions(conn,[row['target_session_id']]))
+    raw_holder(db)._execute_write(lambda conn: retire_sessions(conn,[row['target_session_id']],
+                                                              media_root=str(home / 'native-inputs')))
     assert load_result(result_raw(db,row))['_pending_final_identity_v1'] == original
     assert pf.claim(db,row['admission_id'],'text','sol sealed answer')[1:] == (False,'invalidated')
     raw_holder(db)._execute_write(lambda conn: prune_retired_tombstones(conn,older_than=-1))
