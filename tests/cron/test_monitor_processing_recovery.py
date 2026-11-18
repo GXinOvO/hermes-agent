@@ -23,9 +23,6 @@ def _produce_terminal_monitor(home, job):
         job = json.loads(sys.stdin.read())
         assert executions.adopt_claimed_execution(job['execution_id'])
         patch = pytest.MonkeyPatch()
-        from hermes_state_registry import acquire
-        from tests.cron import test_cron_recovery as fixtures
-        patch.setattr(fixtures, 'SessionDB', acquire)
         owner, db = _owner(Path(os.environ['HERMES_HOME']), patch)
         observed = {}
         _install_agent_stubs(patch, observed)
