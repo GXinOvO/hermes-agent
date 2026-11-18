@@ -7,16 +7,30 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.agent_runtime_helpers import _merge_consecutive_users
+from session_rules.turns import _merge_consecutive_users
 from agent.context_compressor import _DB_PERSISTED_MARKER
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope, store_location
+from persistence.conversation.messages import ConversationRequest, TranscriptRead, TranscriptView
+from persistence.conversation.sessions import NewSession
+from persistence.sqlite.conversation._store.messages import append_messages_batch, archive_and_compact
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_read import conversation, transcript_rows
 from tui_gateway import server
+
+
+def _all_rows(db, sid='chat'):
+    return transcript_rows(db, sid, TranscriptRead(view=TranscriptView.ALL))
+
+
+def _row(db, sid='chat'):
+    record = db.sessions.get(sid)
+    return None if record is None else record.as_session_row()
 
 
 @pytest.fixture
 def marker_session(tmp_path, monkeypatch):
-    db = SessionDB(db_path=tmp_path / "state.db")
-    db.create_session("chat", "desktop")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
+    db.sessions.create(NewSession("chat", source="desktop"))
     agent = SimpleNamespace(_session_db=db, session_id="chat", model="new-model", provider="test-provider")
     session = {"session_key": "chat", "_sid": "marker-test", "agent": agent, "history": [],
                "history_lock": threading.RLock(), "history_version": 0}
@@ -29,7 +43,7 @@ def marker_session(tmp_path, monkeypatch):
 
 
 def _block_marker_writes(db):
-    db._execute_write(lambda conn: conn.execute(
+    raw_holder(db)._execute_write(lambda conn: conn.execute(
         "CREATE TRIGGER reject_model_marker BEFORE INSERT ON messages "
         "WHEN NEW.display_kind = 'model_switch' "
         "BEGIN SELECT RAISE(ABORT, 'marker storage unavailable'); END"))
@@ -46,12 +60,12 @@ def _try_pivot(session):
 
 def _merge_and_archive(session, db, text):
     human = {"role": "user", "content": text}
-    db.append_messages_batch(session["agent"].session_id, [human])
+    append_messages_batch(raw_holder(db), session["agent"].session_id, [human])
     human[_DB_PERSISTED_MARKER] = True
     original = copy.deepcopy(human)
     live, repairs = _merge_consecutive_users([*session["history"], human])
-    db.archive_and_compact(session["agent"].session_id, live)
-    rows = db.get_messages(session["agent"].session_id, include_inactive=True)
+    archive_and_compact(raw_holder(db), session["agent"].session_id, live)
+    rows = _all_rows(db, session["agent"].session_id)
     # Independent store-side oracle: no reconstruction of a missing marker from composite text.
     composites = [row for row in rows if row.get("absorbed_message_uids")]
     for row in composites:
@@ -77,7 +91,7 @@ def test_failed_marker_cannot_become_a_missing_prior_merge_member(marker_session
     assert "switched" in error.lower() and "retry" in error.lower()
 
     # The existing selection entry can retry the already-selected model after storage recovers.
-    db._execute_write(lambda conn: conn.execute("DROP TRIGGER reject_model_marker"))
+    raw_holder(db)._execute_write(lambda conn: conn.execute("DROP TRIGGER reject_model_marker"))
     _pivot(session)
     marker = copy.deepcopy(session["history"][-1])
     human, merged, repairs, rows = _merge_and_archive(session, db, "next request")
@@ -95,7 +109,7 @@ def test_marker_time_and_uid_survive_native_merge_archive_and_reopen(marker_sess
     monkeypatch.setattr("agent.message_metadata.wall_time", lambda: 1700000000.25)
     _pivot(session)
     marker = copy.deepcopy(session["history"][-1])
-    stored = db.get_messages("chat")[0]
+    stored = transcript_rows(db, "chat")[0]
     assert marker.get("timestamp") == stored["timestamp"] == 1700000000.25
     assert marker["message_uid"] == stored["message_uid"]
     assert marker["_row_id"] == stored["id"] and marker[_DB_PERSISTED_MARKER] is True
@@ -107,8 +121,11 @@ def test_marker_time_and_uid_survive_native_merge_archive_and_reopen(marker_sess
     assert merged[0]["_absorbed_message_uids"] == [human["message_uid"]]
     assert any(row["message_uid"] == human["message_uid"]
                and row["timestamp"] == human["timestamp"] and row["content"] == human["content"] for row in rows)
-    with SessionDB(db_path=db.db_path) as reader:
-        restored = reader.get_messages_as_conversation("chat", repair_alternation=False)
+    reader = open_persistence(profile_scope(home=store_location(db.scope).parent))
+    try:
+        restored = conversation(reader, "chat", ConversationRequest(repair_alternation=False))
+    finally:
+        reader.close()
     assert restored[0]["timestamp"] == marker["timestamp"]
     assert restored[0]["content"] == marker["content"] + "\n\n" + human["content"]
     assert restored[0]["message_uid"] == marker["message_uid"]
@@ -119,13 +136,13 @@ def test_failed_replacement_preserves_the_previous_marker(marker_session, failur
     session, db = marker_session
     _pivot(session, "previous-model")
     prior_history = copy.deepcopy(session["history"])
-    prior_rows = db.get_messages("chat", include_inactive=True)
+    prior_rows = _all_rows(db)
     version = session["history_version"]
     if failure_stage == "insert":
         _block_marker_writes(db)
     else:
         # The INSERT has run and stamped its tentative row id, but the transaction still must roll back.
-        db._execute_write(lambda conn: conn.execute(
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             "CREATE TRIGGER reject_marker_counter BEFORE UPDATE OF message_count ON sessions "
             "WHEN NEW.message_count > OLD.message_count "
             "BEGIN SELECT RAISE(ABORT, 'marker counter commit unavailable'); END"))
@@ -134,7 +151,7 @@ def test_failed_replacement_preserves_the_previous_marker(marker_session, failur
 
     assert session["history"] == prior_history
     assert session["history_version"] == version
-    assert db.get_messages("chat", include_inactive=True) == prior_rows
+    assert _all_rows(db) == prior_rows
     assert "switched" in error.lower() and "retry" in error.lower()
     assert session["agent"].model == "new-model"
 
@@ -150,7 +167,7 @@ def test_no_store_refuses_a_live_marker_and_can_retry(marker_session, monkeypatc
     assert "switched" in error.lower() and "retry" in error.lower()
     session["agent"]._session_db = db
     _pivot(session)
-    assert len(session["history"]) == len(db.get_messages("chat")) == 1
+    assert len(session["history"]) == len(transcript_rows(db, "chat")) == 1
 
 
 @pytest.mark.parametrize("once", [False, True])
@@ -188,11 +205,11 @@ def test_storage_failure_preserves_the_applied_switch_and_retry_entry(marker_ses
               if event == "error" and sid == "marker-test"]
     assert len(errors) == 1 and "Model switched" in errors[0] and "retry" in errors[0]
 
-    db._execute_write(lambda conn: conn.execute("DROP TRIGGER reject_model_marker"))
+    raw_holder(db)._execute_write(lambda conn: conn.execute("DROP TRIGGER reject_model_marker"))
     # Recover through the actual selector after storage returns.
     server._apply_model_switch("marker-test", session, "new-model --provider test-provider --session",
                                confirm_expensive_model=True, count_switch=False)
-    assert len(session["history"]) == len(db.get_messages("chat")) == 1
+    assert len(session["history"]) == len(transcript_rows(db, "chat")) == 1
 
 
 def test_failed_notice_resolves_session_outside_history_lock(marker_session, monkeypatch):
@@ -218,7 +235,7 @@ def test_publication_holds_history_lock_until_native_commit(marker_session, monk
     session, db = marker_session
     acquired = threading.Event()
     release = threading.Event()
-    original_execute = db._execute_write
+    original_execute = raw_holder(db)._execute_write
     failures = []
 
     def hold_commit(callback, **kwargs):
@@ -232,7 +249,7 @@ def test_publication_holds_history_lock_until_native_commit(marker_session, monk
         except BaseException as exc:
             failures.append(exc)
 
-    monkeypatch.setattr(db, "_execute_write", hold_commit)
+    monkeypatch.setattr(type(raw_holder(db)), "_execute_write", lambda self, fn, **kw: hold_commit(fn, **kw))
     worker = threading.Thread(target=write_pivot)
     worker.start()
     try:
@@ -246,14 +263,14 @@ def test_publication_holds_history_lock_until_native_commit(marker_session, monk
         release.set()
         worker.join(5)
     assert not worker.is_alive() and not failures
-    assert len(session["history"]) == len(db.get_messages("chat")) == 1
+    assert len(session["history"]) == len(transcript_rows(db, "chat")) == 1
 
 
 def test_first_switch_in_a_draft_chat_creates_the_row_it_writes_to(tmp_path, monkeypatch):
     """A draft chat has no ``sessions`` row until its first submit, and ``messages.session_id`` is a hard
     foreign key — "the agent holds a live db handle" says nothing about the row behind it, so the pivot
     must create that row or the switch loses the very notice it describes."""
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     agent = SimpleNamespace(_session_db=db, session_id="chat", model="new-model", provider="test-provider")
     session = {"session_key": "chat", "_sid": "marker-test", "agent": agent, "history": [],
                "history_lock": threading.RLock(), "history_version": 0, "test_notices": []}
@@ -262,10 +279,10 @@ def test_first_switch_in_a_draft_chat_creates_the_row_it_writes_to(tmp_path, mon
     # The lazily persisted row is written through the launch handle, not the agent's copy of it.
     monkeypatch.setattr(server, "_db", db, raising=False)
     try:
-        assert db.get_session("chat") is None
+        assert _row(db) is None
         _pivot(session)
-        assert db.get_session("chat") is not None
-        assert [(row["role"], row["display_kind"]) for row in db.get_messages("chat", include_inactive=True)] == [
+        assert _row(db) is not None
+        assert [(row["role"], row["display_kind"]) for row in _all_rows(db)] == [
             ("user", "model_switch")]
         assert session["history"][-1].get(_DB_PERSISTED_MARKER) is True
         assert [payload for event, _sid, payload in session["test_notices"] if event == "error"] == []
@@ -275,8 +292,8 @@ def test_first_switch_in_a_draft_chat_creates_the_row_it_writes_to(tmp_path, mon
 
 def test_switch_after_the_row_exists_does_not_recreate_it(tmp_path, monkeypatch):
     """The existing-row path stays a no-op: one row, one marker, same ``started_at``."""
-    db = SessionDB(db_path=tmp_path / "state.db")
-    db.create_session("chat", "desktop")
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
+    db.sessions.create(NewSession("chat", source="desktop"))
     agent = SimpleNamespace(_session_db=db, session_id="chat", model="new-model", provider="test-provider")
     session = {"session_key": "chat", "_sid": "marker-test", "agent": agent, "history": [],
                "history_lock": threading.RLock(), "history_version": 0, "test_notices": []}
@@ -284,11 +301,11 @@ def test_switch_after_the_row_exists_does_not_recreate_it(tmp_path, monkeypatch)
                         lambda event, sid, payload: session["test_notices"].append((event, sid, payload)))
     monkeypatch.setattr(server, "_db", db, raising=False)
     try:
-        before = db.get_session("chat")
+        before = _row(db)
         _pivot(session)
-        after = db.get_session("chat")
+        after = _row(db)
         assert after is not None and before is not None
         assert after["started_at"] == before["started_at"]
-        assert [row["display_kind"] for row in db.get_messages("chat", include_inactive=True)] == ["model_switch"]
+        assert [row["display_kind"] for row in _all_rows(db)] == ["model_switch"]
     finally:
         db.close()
