@@ -74,7 +74,7 @@ finally:
 '''
     def race(read):
         original(read)
-        if read.connection.authority is authority and raw_holder(linked.db)._execute_write(lambda conn: conn.in_transaction) and not injected:
+        if read.connection.authority is authority and raw_holder(linked.db)._conn.in_transaction and not injected:
             child = subprocess.run([sys.executable, '-c', probe, str(store_location(db.scope))],
                                    capture_output=True, text=True, timeout=5, check=True)
             injected.append(child.stdout.strip())
@@ -90,8 +90,8 @@ finally:
 
         locked = await fixtures.run_linked(linked, refresh=True)
         assert 'result' in locked, locked
-        before = linked.db.list_meta_prefix('gateway.task_analysis.v2:')
-        timeout_before = raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0])
+        before = linked.db.state_meta.list_prefix('gateway.task_analysis.v2:')
+        timeout_before = raw_holder(db)._conn.execute('PRAGMA busy_timeout').fetchone()[0]
         hold_script = '''import sqlite3,sys
 connection = sqlite3.connect(sys.argv[1], timeout=0, isolation_level=None)
 connection.execute("BEGIN IMMEDIATE")
@@ -125,9 +125,9 @@ connection.close()
             assert delay < 0.5, f'Gateway event loop waited {delay:.2f}s for the foreign database lock'
             refused = await asyncio.wait_for(pending, 5)
             assert refused['error']['data']['reason'] == 'storage_unavailable', refused
-            assert linked.db.list_meta_prefix('gateway.task_analysis.v2:') == before
-            assert raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0]) == timeout_before
-            assert not raw_holder(db)._execute_write(lambda conn: conn.in_transaction)
+            assert linked.db.state_meta.list_prefix('gateway.task_analysis.v2:') == before
+            assert raw_holder(db)._conn.execute('PRAGMA busy_timeout').fetchone()[0] == timeout_before
+            assert not raw_holder(db)._conn.in_transaction
         finally:
             if holder.returncode is None:
                 holder.stdin.write(b'\n')
@@ -140,17 +140,17 @@ connection.close()
         from gateway.session_task_sources import commit_fence
         from hermes_state_runtime import RuntimeStoreError
         read = SimpleNamespace(connection=SimpleNamespace(authority=authority))
-        timeout_before = raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0])
-        db._db_wal_generation_lost = True
+        timeout_before = raw_holder(db)._conn.execute('PRAGMA busy_timeout').fetchone()[0]
+        raw_holder(db)._db_wal_generation_lost = True
         try:
             with pytest.raises(RuntimeStoreError) as stopped:
                 with commit_fence({'reads': [read]}, linked.db):
                     pytest.fail('retired WAL generation was accepted')
             assert stopped.value.reason == 'session_owner_changed'
-            assert raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0]) == timeout_before
-            assert not raw_holder(db)._execute_write(lambda conn: conn.in_transaction)
+            assert raw_holder(db)._conn.execute('PRAGMA busy_timeout').fetchone()[0] == timeout_before
+            assert not raw_holder(db)._conn.in_transaction
         finally:
-            db._db_wal_generation_lost = False
+            raw_holder(db)._db_wal_generation_lost = False
     finally:
         await connection.close()
         db.close()
