@@ -23,6 +23,7 @@ async def test_authority_restart_before_bot_admission_preserves_completed_prefix
     from gateway.config import GatewayConfig
     from gateway.session import SessionStore
     from gateway.session_authority import initialize_session_authority
+    from persistence_assembly import open_persistence, profile_scope
     from hermes_state import SessionDB
     from hermes_cli import gateway_runtime
 
@@ -54,12 +55,13 @@ async def test_authority_restart_before_bot_admission_preserves_completed_prefix
         assert old_endpoint is not None
         old_authority = sealed_bot.authority
         store = SessionStore(sealed_bot.home / 'sessions', GatewayConfig())
-        store._db = SessionDB(db_path=sealed_bot.home / 'state.db')
-        runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
+        handle = open_persistence(profile_scope(home=sealed_bot.home), eager=True)
+        store._db = handle
+        runner = SimpleNamespace(session_store=store, _session_db=handle, adapters={}, _draining=False,
                                  _evict_cached_agent=lambda route: None)
         runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
         replacement = await initialize_session_authority(runner,
-            profile_id=old_authority.profile_id, instance_id='replacement-owner')
+            profile_id=old_authority.profile_id, instance_id='replacement-owner', persistence=handle)
         old_authority.retired = True
         sealed_bot.authority = replacement
         case.connection.authority = replacement
