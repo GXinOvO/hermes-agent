@@ -119,7 +119,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
     instructions, validator, version, analysis_revision = INSTRUCTIONS, validate_output, 1, revision
     if graph is not None:
         from gateway.session_task_linked_input import LINKED_INSTRUCTIONS, validate_linked_output
-        from gateway.session_task_sources import revisions
+        from gateway.session_task_sources import check, revisions
+        check(graph)
         rows, count, limitations = graph['messages'], graph['message_count'], graph['limitations']
         instructions, version, analysis_revision = LINKED_INSTRUCTIONS, 2, revisions(graph)
         validator = lambda text, _: validate_linked_output(text, graph)
@@ -138,6 +139,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
         from agent.auxiliary_task_config import session_auxiliary_scope
         from gateway.session_authorities import owner_scope
         with owner_scope(authority):
+            if graph is not None:
+                check(graph)
             main = runtime()
             if (not isinstance(main, dict) or not main.get('model')
                     or main.get('provider') in (None, '', 'auto')):
@@ -175,6 +178,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
                 pins.conn = conn
                 try:
                     _checked(connection, params, guard, target, binding, revision)
+                    if graph is not None:
+                        check(graph)
                 finally:
                     pins.conn = None
                 record = {'generation': generation,
@@ -189,12 +194,8 @@ def _refresh(connection, ref, params, target, binding, guard, result, previous, 
             if graph is None:
                 _holder_of(db)._execute_write(write, patience_s=0)
             else:
-                from gateway.session_task_sources import check, commit_fence
-                # The last verification runs with every foreign store locked and BEFORE the primary
-                # write: a writer that slipped in since collection is refused here, and the primary's
-                # own commit still re-checks the rows it stamps.
+                from gateway.session_task_sources import commit_fence
                 with commit_fence(graph, db):
-                    check(graph)
                     _holder_of(db)._execute_write(write, patience_s=0)
             saved = json.loads(db.state_meta.get(key))
             if saved['generation'] != generation:

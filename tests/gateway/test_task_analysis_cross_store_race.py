@@ -90,7 +90,7 @@ finally:
 
         locked = await fixtures.run_linked(linked, refresh=True)
         assert 'result' in locked, locked
-        before = linked.db.state_meta.list_prefix('gateway.task_analysis.v2:')
+        before = linked.db.list_meta_prefix('gateway.task_analysis.v2:')
         timeout_before = raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0])
         hold_script = '''import sqlite3,sys
 connection = sqlite3.connect(sys.argv[1], timeout=0, isolation_level=None)
@@ -125,7 +125,7 @@ connection.close()
             assert delay < 0.5, f'Gateway event loop waited {delay:.2f}s for the foreign database lock'
             refused = await asyncio.wait_for(pending, 5)
             assert refused['error']['data']['reason'] == 'storage_unavailable', refused
-            assert linked.db.state_meta.list_prefix('gateway.task_analysis.v2:') == before
+            assert linked.db.list_meta_prefix('gateway.task_analysis.v2:') == before
             assert raw_holder(db)._execute_write(lambda conn: conn.execute('PRAGMA busy_timeout').fetchone()[0]) == timeout_before
             assert not raw_holder(db)._execute_write(lambda conn: conn.in_transaction)
         finally:
