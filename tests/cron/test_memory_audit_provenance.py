@@ -122,9 +122,10 @@ def test_compression_child_restatement_uses_parent_witness(collector):
     replay = _INFLIGHT_TASK_REPLAY_HEADER + '\n' + request
     try:
         db.sessions.create(NewSession('compression-root', source='desktop'))
-        db.append_message(
-            'compression-root', 'user', request, timestamp=START.timestamp() - 60,
-            message_uid='compression-uid')
+        db.messages.append(
+            'compression-root', NewMessage(role='user', content=request,
+                                           timestamp=START.timestamp() - 60,
+                                           message_uid='compression-uid'))
         db.sessions.end('compression-root', 'compression')
         db.sessions.create(NewSession('compression-child', source='desktop', parent_session_id='compression-root'))
         epoch = begin_runtime_epoch(db, instance_id='compression-fixture')
@@ -132,10 +133,12 @@ def test_compression_child_restatement_uses_parent_witness(collector):
             db, epoch=epoch, principal_id='human:fixture', session_id='compression-root',
             request_id='compression-replay', payload={'text': replay})
         from agent.message_metadata import INFLIGHT_TASK_RESTATEMENT
-        db.append_message(
-            'compression-child', 'user', replay, timestamp=START.timestamp() + 60,
-            message_uid='compression-uid',
-            display_metadata={'submission_id': 'compression-replay', INFLIGHT_TASK_RESTATEMENT: True})
+        db.messages.append(
+            'compression-child', NewMessage(role='user', content=replay,
+                                            timestamp=START.timestamp() + 60,
+                                            message_uid='compression-uid',
+                                            display_metadata={'submission_id': 'compression-replay',
+                                                              INFLIGHT_TASK_RESTATEMENT: True}))
     finally:
         db.close()
     result = module.collect_history(home / 'state.db', START, END)
