@@ -6,7 +6,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope
+from persistence.conversation.sessions import NewSession
+from persistence.sqlite.conversation._store.messages import append_messages_batch as _append_batch
+from tests.fixtures.storage_holder import raw_holder
 
 
 CANDIDATE = Path(__file__).resolve().parents[2]
@@ -29,15 +32,15 @@ def collector(tmp_path, monkeypatch):
 
 
 def append(db, session, content, uid):
-    db.append_messages_batch(session, [{'role': 'user', 'content': content,
+    _append_batch(raw_holder(db), session, [{'role': 'user', 'content': content,
                                         'timestamp': START.timestamp() + 60, 'message_uid': uid}])
 
 
 def test_legacy_interactive_row_without_origin_is_uncertain(collector):
     module, home = collector
-    db = SessionDB(home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     try:
-        db.create_session('desktop', source='desktop')
+        db.sessions.create(NewSession('desktop', source='desktop'))
         append(db, 'desktop', 'Unmarked message could be a background event.', 'legacy-1')
     finally:
         db.close()
@@ -50,11 +53,11 @@ def test_legacy_interactive_row_without_origin_is_uncertain(collector):
 @pytest.mark.parametrize('created_source', ['desktop', None, 'unknown'])
 def test_local_session_rows_are_not_silently_excluded(collector, created_source):
     module, home = collector
-    db = SessionDB(home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     try:
-        db.create_session('visible', source='desktop')
-        db.create_session('local', source='local')
-        db._execute_write(lambda conn: conn.execute(
+        db.sessions.create(NewSession('visible', source='desktop'))
+        db.sessions.create(NewSession('local', source='local'))
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             'UPDATE sessions SET created_source=? WHERE id=?', (created_source, 'local')))
         append(db, 'visible', 'Unmarked ordinary desktop row.', 'visible-1')
         append(db, 'local', 'Unmarked local row may be a human turn.', 'local-1')
@@ -69,10 +72,10 @@ def test_local_session_rows_are_not_silently_excluded(collector, created_source)
 
 def test_out_of_scope_cron_does_not_erase_interactive_unknown(collector):
     module, home = collector
-    db = SessionDB(home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     try:
-        db.create_session('visible', source='desktop')
-        db.create_session('automation', source='cron')
+        db.sessions.create(NewSession('visible', source='desktop'))
+        db.sessions.create(NewSession('automation', source='cron'))
         append(db, 'visible', 'Unmarked interactive row.', 'visible-1')
         append(db, 'automation', 'Synthetic cron machinery.', 'cron-1')
     finally:
@@ -87,14 +90,14 @@ def test_malformed_admission_principal_is_uncertain_not_collection_failure(colle
     from hermes_state_runtime import admit_session_input, begin_runtime_epoch
 
     module, home = collector
-    db = SessionDB(home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     try:
-        db.create_session('malformed', source='desktop')
+        db.sessions.create(NewSession('malformed', source='desktop'))
         epoch = begin_runtime_epoch(db, instance_id='malformed-fixture')
         receipt = admit_session_input(
             db, epoch=epoch, principal_id='human:fixture', session_id='malformed',
             request_id='malformed-request', payload={'text': 'malformed principal input'})
-        db._execute_write(lambda conn: conn.execute(
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             'UPDATE session_admissions SET principal_id=? WHERE admission_id=?',
             ('', receipt['admission_id'])))
         db.append_message(
@@ -114,11 +117,11 @@ def test_compression_child_restatement_uses_parent_witness(collector):
     from hermes_state_runtime import admit_session_input, begin_runtime_epoch
 
     module, home = collector
-    db = SessionDB(home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     request = 'Continue the unfinished deployment investigation.'
     replay = _INFLIGHT_TASK_REPLAY_HEADER + '\n' + request
     try:
-        db.create_session('compression-root', source='desktop')
+        db.sessions.create(NewSession('compression-root', source='desktop'))
         db.append_message(
             'compression-root', 'user', request, timestamp=START.timestamp() - 60,
             message_uid='compression-uid')
