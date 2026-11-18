@@ -35,7 +35,8 @@ def _scope(db):
 
 
 def _raw(db):
-    return tuple(db._read_one("SELECT tool_names, model_config FROM sessions WHERE id='owned'"))
+    row = db.get_session("owned")
+    return (row["tool_names"], row["model_config"])
 
 
 @pytest.mark.parametrize("writer", ["session", "worker"])
@@ -260,8 +261,8 @@ def test_worker_compression_publication_and_replay_keep_limit(db, record_propert
     result = mutate_worker_execution(db, **scope, sequence=2, operation="compression.publish", payload=payload)
     assert mutate_worker_execution(db, **scope, sequence=2, operation="compression.publish", payload=payload) == result
     row = db.get_session("worker-tip")
-    record_property("worker_compression_sql_readback", json.dumps(dict(db._read_one(
-        "SELECT id, parent_session_id, tool_names, model_config FROM sessions WHERE id='worker-tip'"))))
+    record_property("worker_compression_sql_readback", json.dumps({
+        key: row[key] for key in ("id", "parent_session_id", "tool_names", "model_config")}))
     assert json.loads(row["model_config"])["_tool_permissions"]["allowed_tools"] == ["read_file"]
     agent = _receiver(db)
     agent.session_id = "worker-tip"

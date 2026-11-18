@@ -13,6 +13,11 @@ from hermes_state import SessionDB
 from run_agent import AIAgent
 
 
+def _raw_owned(state):
+    row = state.get_session("owned")
+    return (row["tool_names"], row["model_config"])
+
+
 def _pin(allowed):
     return {"version": "recovery-r2", "tools": [], "allowed_tools": allowed}
 
@@ -121,10 +126,10 @@ def test_conversation_key_writer_refuses_permission_edits(state, tmp_path, repla
     state.create_session("owned", "cli")
     state.update_session_tool_names("owned", _pin([]))
     state.update_session_tool_names("owned", None)
-    before = tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'"))
+    before = _raw_owned(state)
     with pytest.raises(ValueError, match="reserved"):
         state.update_conversation_model_config_value("owned", "_tool_permissions", lambda old: replacement)
-    assert tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'")) == before
+    assert _raw_owned(state) == before
     receiver = _agent(state, session_id="owned")
     marker = tmp_path / "refused-read.txt"
     marker.write_text("RECOVERY-R2-WRITER-NATIVE")
@@ -149,10 +154,10 @@ def test_conversation_key_writer_keeps_unrelated_updates_and_exact_authority(sta
 
 def test_conversation_key_writer_cannot_create_reserved_sidecar(state):
     state.create_session("owned", "cli")
-    before = tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'"))
+    before = _raw_owned(state)
     with pytest.raises(ValueError, match="reserved|permission"):
         state.update_conversation_model_config_value("owned", "_tool_permissions", lambda old: None)
-    assert tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'")) == before
+    assert _raw_owned(state) == before
 
 
 @pytest.mark.parametrize("raw", [None, "unreadable-cache", '{"version":"old","tools":null}',
@@ -171,7 +176,7 @@ def test_corrupt_cache_preserves_bytes_while_committing_narrower_authority(state
         persist_agent_tool_names(first)
         stored = state.get_session("owned")
         if raw is not None:
-            assert tuple(state._read_one("SELECT tool_names FROM sessions WHERE id='owned'")) == (raw,)
+            assert (state.get_session("owned")["tool_names"],) == (raw,)
         assert json.loads(stored["model_config"])["_tool_permissions"]["allowed_tools"] == ["read_file"]
         second = _agent(state, session_id="owned")
         _restore_pinned_tools(second, stored)
@@ -194,7 +199,7 @@ def test_corrupt_cache_permission_write_failure_propagates(state):
     state.create_session("owned", "cli")
     state.update_session_tool_names("owned", _pin(["read_file", "terminal"]))
     state._write_sql("UPDATE sessions SET tool_names='unreadable-cache' WHERE id='owned'")
-    before = tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'"))
+    before = _raw_owned(state)
     first = _agent(state, session_id="owned", allowed_tools=["read_file"])
     try:
         _restore_pinned_tools(first, state.get_session("owned"))
@@ -202,7 +207,7 @@ def test_corrupt_cache_permission_write_failure_propagates(state):
                          "BEGIN SELECT RAISE(ABORT, 'permission-write-failed'); END")
         with pytest.raises(sqlite3.IntegrityError, match="permission-write-failed"):
             persist_agent_tool_names(first)
-        assert tuple(state._read_one("SELECT tool_names,model_config FROM sessions WHERE id='owned'")) == before
+        assert _raw_owned(state) == before
     finally:
         first.close()
 
