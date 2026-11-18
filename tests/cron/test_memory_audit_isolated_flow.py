@@ -16,7 +16,9 @@ from gateway import session_cron
 from persistence_assembly import open_persistence, profile_scope
 from persistence.conversation.sessions import NewSession
 from persistence.sqlite.conversation._store.messages import append_messages_batch as _append_batch
+from persistence.conversation.messages import TranscriptRead, TranscriptView
 from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_read import transcript_rows
 from tests.agent import test_tool_call_guardrail_runtime as fixtures
 from tools.memory_tool_store import MemoryStore
 
@@ -225,7 +227,7 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
             definitions += fixtures._make_tool_defs('write_file', 'terminal')
         with (patch.object(fixtures, '_make_tool_defs', return_value=definitions),
               patch.object(fixtures, 'AIAgent', side_effect=lambda *a, **kw: original_class(
-                  *a, **kw, session_db=db, session_id=session_id))):
+                  *a, **kw, session_db=db, persistence=db, session_id=session_id))):
             agent = fixtures._make_agent('memory', 'write_file', 'terminal', max_iterations=5, platform='cron')
         agent._memory_store = store
         agent._memory_enabled = True
@@ -409,7 +411,7 @@ def test_cron_scheduler_to_real_agent_and_memory_tool(tmp_path, monkeypatch, sce
     assert final == 'synthetic run finished'
     expected_status = 'partial' if scenario.startswith('partial_') else 'complete'
     assert f'"collection_status": "{expected_status}"' in recorded['script_result'][1], repr(recorded['script_result'])
-    tool_rows = [r for r in db.get_messages(session_id, include_inactive=True)
+    tool_rows = [r for r in transcript_rows(db, session_id, TranscriptRead(view=TranscriptView.ALL))
                  if r.get('role') == 'tool' and r.get('tool_name') == 'memory']
     assert len(tool_rows) == (2 if scenario == 'complete_both_success' else 1), tool_rows
     response = json.loads(tool_rows[0]['content'])
