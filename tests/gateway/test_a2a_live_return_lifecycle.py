@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence_assembly import open_persistence, profile_scope
+
 from gateway import pending_final as pf
 from gateway.config import GatewayConfig, PlatformConfig
 from gateway.final_delivery import send_text
@@ -31,10 +33,10 @@ async def test_first_reply_preserves_native_target_and_accounting(tmp_path, monk
     monkeypatch.setenv('HOME', str(user))
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setenv('A2A_REPLY_TIMEOUT', '1')
-    db = SessionDB(tmp_path / 'state.db')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     epoch = begin_runtime_epoch(db, instance_id='live-response-owner')
     runner = SimpleNamespace(_draining=False, _evict_cached_agent=lambda key: None)
-    authority = SessionAuthority(runner, profile_id=str(tmp_path), instance_id='live-response-owner', db=db, epoch=epoch)
+    authority = SessionAuthority(runner, profile_id=str(tmp_path), instance_id='live-response-owner', persistence=db, epoch=epoch)
     adapter = A2AAdapter(PlatformConfig(enabled=True, extra={'port': 0}))
     runner._adapter_for_source = lambda source: adapter
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())

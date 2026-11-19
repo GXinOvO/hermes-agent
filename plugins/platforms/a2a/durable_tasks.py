@@ -143,7 +143,9 @@ def load(home, task_id=None):
     if not (Path(home) / 'state.db').exists():
         return []
     records = []
-    with closing(SessionDB(Path(home) / 'state.db', read_only=True)) as db, db._read_ctx() as conn:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence_reader
+    with open_persistence_reader(Path(home)) as db, _holder_of(db)._read_ctx() as conn:
         query, args = ('SELECT key,value FROM state_meta WHERE key=?', (_key(task_id),)) if task_id else (
             'SELECT key,value FROM state_meta WHERE key LIKE ?', (PREFIX + '%',))
         for key, raw in conn.execute(query, args):
@@ -166,7 +168,9 @@ def create(home, record, *, deduplicate=False, ingress=None):
         record['input_hash'] = ingress['input_hash']
     encoded = json.dumps(record, sort_keys=True)
     _decode(_key(record['task_id']), encoded, home)
-    with closing(SessionDB(Path(home) / 'state.db')) as db:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence, profile_scope
+    with closing(open_persistence(profile_scope(home=Path(home)), eager=True)) as db:
         def write(conn):
             if deduplicate and record['input_id']:
                 for key, raw in conn.execute('SELECT key,value FROM state_meta WHERE key LIKE ?', (PREFIX + '%',)):
@@ -197,7 +201,7 @@ def create(home, record, *, deduplicate=False, ingress=None):
                 conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
                              (tb.key(tb.INGRESS_PREFIX, record['task_id']), tb.encode(tb.anchor_for(record, ingress))))
             return record
-        return db._execute_write(write)
+        return _holder_of(db)._execute_write(write)
 
 
 def _sealed(conn, home, task_id):
@@ -250,7 +254,9 @@ def _confirmed(conn, home, record):
 
 
 def maintain(home):
-    with closing(SessionDB(Path(home) / 'state.db')) as db:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence, profile_scope
+    with closing(open_persistence(profile_scope(home=Path(home)), eager=True)) as db:
         def write(conn):
             expired = []
             clock = time.time()
@@ -278,11 +284,13 @@ def maintain(home):
                 except (RuntimeError, ValueError, TypeError, KeyError, OverflowError):
                     logger.warning('A2A result %s retained for reconciliation', key)
             return expired
-        return db._execute_write(write)
+        return _holder_of(db)._execute_write(write)
 
 
 def update(home, task_id, fields, *, orphan=False):
-    with closing(SessionDB(Path(home) / 'state.db')) as db:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence, profile_scope
+    with closing(open_persistence(profile_scope(home=Path(home)), eager=True)) as db:
         def write(conn):
             record = _read(conn, task_id, home)
             if record is None:
@@ -306,7 +314,7 @@ def update(home, task_id, fields, *, orphan=False):
             _decode(_key(task_id), encoded, home)
             conn.execute('UPDATE state_meta SET value=? WHERE key=?', (encoded, _key(task_id)))
             return record
-        return db._execute_write(write)
+        return _holder_of(db)._execute_write(write)
 
 
 def _binding(conn, home, chat_id, content, reply_to, metadata, agents, *, publishing):
@@ -358,7 +366,9 @@ def _binding(conn, home, chat_id, content, reply_to, metadata, agents, *, publis
 
 
 def prepare(home, chat_id, content, reply_to, metadata, agents):
-    with closing(SessionDB(Path(home) / 'state.db', read_only=True)) as db, db._read_ctx() as conn:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence_reader
+    with open_persistence_reader(Path(home)) as db, _holder_of(db)._read_ctx() as conn:
         _binding(conn, home, chat_id, content, reply_to, metadata, agents, publishing=False)
 
 
@@ -397,7 +407,9 @@ def verify_publication(conn, home, receipt, value):
 
 
 def publish(home, chat_id, content, reply_to, metadata, agents, *, with_receipt=False):
-    with closing(SessionDB(Path(home) / 'state.db')) as db:
+    from hermes_state_runtime import _holder_of
+    from persistence_assembly import open_persistence, profile_scope
+    with closing(open_persistence(profile_scope(home=Path(home)), eager=True)) as db:
         def write(conn):
             task, binding = _binding(conn, home, chat_id, content, reply_to, metadata, agents, publishing=True)
             if task['state'] not in protocol.TERMINAL_STATES:
@@ -415,4 +427,4 @@ def publish(home, chat_id, content, reply_to, metadata, agents, *, with_receipt=
             receipt = capture(conn, home, binding['admission_id'], 'text', task_id=reply_to,
                               context_id=chat_id, public_reply=task['reply'], verify=verify)
             return task, receipt
-        return db._execute_write(write)
+        return _holder_of(db)._execute_write(write)

@@ -685,7 +685,9 @@ class A2AAdapter(BasePlatformAdapter):
                 if rec.get('profile_home') != str(self._task_home):
                     raise RuntimeError('A2A result profile changed')
                 candidate = {**rec, 'state': protocol.STATE_COMPLETED}
-                with contextlib.closing(SessionDB(self._task_home / 'state.db', read_only=True)) as db, db._read_ctx() as conn:
+                from hermes_state_runtime import _holder_of
+                from persistence_assembly import open_persistence_reader
+                with open_persistence_reader(self._task_home) as db, _holder_of(db)._read_ctx() as conn:
                     _validate_result(conn, self._task_home, candidate)
             except (RuntimeError, ValueError, TypeError, KeyError, OverflowError) as exc:
                 raise _TaskUnavailable('A2A result target unavailable; reconcile without replaying the task') from exc
