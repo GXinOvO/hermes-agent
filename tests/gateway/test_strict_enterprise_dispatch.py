@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
+
 from gateway.config import Platform
 from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
@@ -33,8 +36,8 @@ async def test_public_attachment_dispatch_delivered_or_unknown_no_replay(name, k
         async with peer({final: fault} if fault else {}) as wire, platform_peer(name, wire) as (adapter, chat):
             if name == 'google_chat':
                 adapter._user_credentials, adapter._user_chat_api = adapter._credentials, adapter._chat_api
-            db = SessionDB(tmp_path / 'state.db')
-            db.create_session('sid', source=name)
+            db = open_persistence(profile_scope(home=tmp_path), eager=True)
+            db.sessions.create(NewSession('sid', source=name))
             epoch = begin_runtime_epoch(db, instance_id='owner')
             source = SessionSource(platform=Platform(name), chat_id=chat, chat_type='dm')
             route = f'agent:main:{name}:dm:{chat}'
@@ -44,7 +47,7 @@ async def test_public_attachment_dispatch_delivered_or_unknown_no_replay(name, k
             admit_session_input(db, epoch=epoch, principal_id='automation:' + route, session_id='sid', request_id=identity, payload=payload)
             row = claim_session_input(db, epoch=epoch, session_id='sid')
             event = MessageEvent(text='work', source=source, internal=True, message_id=identity)
-            authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
+            authority = SimpleNamespace(db=db, persistence=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
             response = f'![proof]({wire.base}/proof.png)' if kind == 'image' else ('[[audio_as_voice]]\n' if kind == 'voice' else '') + f'MEDIA:{path}'
             try:
                 async with automation_delivery_scope(authority, row, event):

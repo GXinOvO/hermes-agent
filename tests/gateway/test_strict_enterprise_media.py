@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
+
 from gateway.strict_transport import strict_transport_scope, supports_strict_transport
 from tests.gateway.test_strict_enterprise_transport import peer, feishu, wecom, dingtalk, google_chat, teams, message_posts
 
@@ -98,8 +101,8 @@ async def test_strict_stream_buffers_real_adapter_then_ledger_unknown_never_rese
     final = {'feishu': '/open-apis/im/v1/messages', 'dingtalk': '/ding', 'google_chat': '/v1/spaces/peer/messages',
              'teams': '/v3/conversations/chat/activities', 'wecom': 'aibot_send_msg'}[name]
     async with peer({final: 'lost'}) as wire, platform_peer(name, wire) as (adapter, chat):
-        db = SessionDB(tmp_path / 'admission.db')
-        db.create_session('sid', source=name)
+        db = open_persistence(profile_scope(home=tmp_path), eager=True)
+        db.sessions.create(NewSession('sid', source=name))
         epoch = begin_runtime_epoch(db, instance_id='owner')
         route = f'agent:main:{name}:dm:{chat}'
         source = SessionSource(platform=Platform(name), chat_id=chat, chat_type='dm')
@@ -108,7 +111,7 @@ async def test_strict_stream_buffers_real_adapter_then_ledger_unknown_never_rese
         admit_session_input(db, epoch=epoch, principal_id='automation:' + route, session_id='sid', request_id='saved-result', payload=payload)
         row = claim_session_input(db, epoch=epoch, session_id='sid')
         event = MessageEvent(text='work', source=source, internal=True, message_id='saved-result')
-        authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
+        authority = SimpleNamespace(db=db, persistence=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
         try:
             async with automation_delivery_scope(authority, row, event):
                 consumer = GatewayStreamConsumer(adapter, chat, StreamConsumerConfig(transport='native' if name == 'wecom' else 'edit', cursor=''))
