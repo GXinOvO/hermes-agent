@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.storage_holder import raw_holder
+
 
 def _owner(tmp_path, monkeypatch):
     from gateway import run
@@ -15,14 +17,15 @@ def _owner(tmp_path, monkeypatch):
     import hermes_state_runtime as rt
     monkeypatch.setattr(run, '_load_gateway_config', lambda *a: {})
     monkeypatch.chdir(tmp_path)
+    from persistence_assembly import open_persistence, profile_scope
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
-    db = store._db
-    runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
+    runner = SimpleNamespace(session_store=store, _session_persistence=db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None,
                              _handle_message=lambda event: 'unused',
                              _resolve_session_agent_runtime=lambda **k: ('frozen', {}))
     runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
-    authority = SessionAuthority(runner, profile_id='owned', instance_id='owner', db=db,
+    authority = SessionAuthority(runner, profile_id='owned', instance_id='owner', persistence=db,
                                  epoch=rt.begin_runtime_epoch(db, instance_id='owner'))
     owner = AuthorityConnection(authority, object(), {'user_id': 'human'})
     ref = create_local_session(authority, owner.actor, dict(request_id='m', source='gui', cwd=str(tmp_path),
@@ -32,7 +35,7 @@ def _owner(tmp_path, monkeypatch):
 
 def _witness(authority, session_id, **overrides):
     witness = {'instance_id': authority.instance_id, 'profile_id': authority.profile_id,
-               'authority_epoch': authority.epoch, 'store_instance_id': authority.db.get_meta('store_instance_id')}
+               'authority_epoch': authority.epoch, 'store_instance_id': raw_holder(authority.persistence).get_meta('store_instance_id')}
     witness.update(overrides)
     return {'session_id': session_id, 'expected_owner': witness}
 
@@ -54,7 +57,7 @@ async def test_plain_resume_still_resumes_without_a_witness(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_a_matching_witness_resumes_the_owning_store(tmp_path, monkeypatch):
     db, authority, owner, ref = _owner(tmp_path, monkeypatch)
-    store_instance_id = db.get_meta('store_instance_id')
+    store_instance_id = raw_holder(db).get_meta('store_instance_id')
 
     reply = await _resume(owner, _witness(authority, ref.session_id, store_instance_id=store_instance_id))
 
@@ -99,7 +102,7 @@ async def test_a_moved_owner_is_refused_and_leaves_no_subscription(tmp_path, mon
 async def test_a_malformed_witness_never_reaches_the_handler(tmp_path, monkeypatch, witness):
     db, _authority, owner, ref = _owner(tmp_path, monkeypatch)
     if isinstance(witness, dict):
-        witness = {'store_instance_id': db.get_meta('store_instance_id'), **witness}
+        witness = {'store_instance_id': raw_holder(db).get_meta('store_instance_id'), **witness}
 
     reply = await _resume(owner, {'session_id': ref.session_id, 'expected_owner': witness})
 
@@ -138,7 +141,7 @@ async def test_a_store_replaced_during_the_attach_is_refused_after_it(tmp_path, 
     db, authority, owner, ref = _owner(tmp_path, monkeypatch)
     from gateway.session_authority import SessionAuthority
     import hermes_state_runtime as rt
-    replacement = SessionAuthority(authority.runner, profile_id='owned', instance_id='replacement', db=db,
+    replacement = SessionAuthority(authority.runner, profile_id='owned', instance_id='replacement', persistence=db,
                                    epoch=rt.begin_runtime_epoch(db, instance_id='replacement'))
     original_attach = authority.attach
 
@@ -163,14 +166,14 @@ async def test_the_runtime_describe_answers_the_store_the_witness_names(tmp_path
 
     reply = await owner.dispatch({'jsonrpc': '2.0', 'id': 8, 'method': 'runtime.describe', 'params': {}})
 
-    assert reply['result']['store_instance_id'] == db.get_meta('store_instance_id')
+    assert reply['result']['store_instance_id'] == raw_holder(db).get_meta('store_instance_id')
 
 
 @pytest.mark.asyncio
 async def test_refused_reopen_preserves_an_existing_subscription(tmp_path, monkeypatch):
     db, authority, owner, ref = _owner(tmp_path, monkeypatch)
     first = await _resume(owner, _witness(authority, ref.session_id,
-        store_instance_id=db.get_meta('store_instance_id')))
+        store_instance_id=raw_holder(db).get_meta('store_instance_id')))
     subscription = first['result']['subscription_id']
 
     reply = await _resume(owner, _witness(authority, ref.session_id, instance_id='replacement'))
