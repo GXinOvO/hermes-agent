@@ -68,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap ffmpeg
-          # The owned-process provider needs nested user namespaces. The restrictive
+          # Bubblewrap-based isolation paths need nested user namespaces. The restrictive
           # bwrap AppArmor profile denies child capabilities and breaks that contract.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /usr/bin/true

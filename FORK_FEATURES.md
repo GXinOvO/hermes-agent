@@ -24,7 +24,7 @@
 | F12 | Skill 查找与检查点维护优化 | 减少重复元数据读取和目录扫描；回滚遇已有索引锁或准备失败时停止 | Skill 查找、检查点创建／恢复自动路径；已合入，未在此量化提速 |
 | F13 | 长会话读保护、Cron 失败记账及审批继承开关 | 读保护状态跨回合保持一致；中止任务如实记失败；可让无人值守任务重新判定审批 | 读保护与 Cron 自动路径；审批继承默认兼容开启，需配置关闭；已合入 |
 | F14 | 更新维护进度与离线数据库验证 | 区分代码更新、后置维护和数据库检查，不把超时／不可检查当损坏 | `hermes update`；`hermes sessions verify --source <离线副本>`；已合入 |
-| F15 | 进程归属终端与受保护项目卷 | 以具体命令代次管理子孙进程和完成结果；候选受保护卷约束读后写与发布 | `owned-process` 插件；`owned_process` 需配置与 Linux 依赖；`protected_owned` 仍有候选验收边界 |
+| F15 | ~~进程归属终端与受保护项目卷~~ | 已移除（2026-11-20）：未生产采用；3,057 行核心插件与 9 个专用测试删除。进程隔离改由沙箱后端（Docker/SSH/Modal 等）承担，结果归属只保留运行时契约 | 删除依据见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
 | F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
@@ -50,7 +50,7 @@
 - **F12 检查点：** 元数据缓存保留可见性和隔离检查；目录计数改为流式。已有索引锁不会被擅自清理，Git 超时先留清理窗口；这不构成自动修复所有锁问题。
 - **F13 无人值守审批：** `approvals.unattended_inherit_approvals` 的兼容默认是 `true`；设置为 `false` 后，Cron、单次查询及 webhook/API 不消费交互会话已有授权，而按各自原生策略重新判断。不能把“增加开关”写成“所有无人值守任务默认隔离”。
 - **F14 数据库验证：** `sessions verify` 要求一致的离线备份，不接收正在使用的 profile 数据库；不是对活跃 WAL 数据库直接 `cp` 后检查。检查不自动恢复或替换数据，时间预算也不能硬中断阻塞的文件系统 I/O。
-- **F15 终端与项目卷：** [插件说明](plugins/owned-process/README.md)列出 `owned_process` 的命名空间、进程生命周期与依赖要求；失败不回退成本地执行，两种后端均不能据此标为生产采用。进程已退出但输出尚未排空时，`process_running=false, output_pending=true` 表示仍需读取最终输出。`protected_owned` 另需匹配的 authority 包、容器镜像及卷配置，仓库说明仍标为候选、待独立审查和生产采用；最近的受保护读取修复也不能单独证明可信身份完整绑定。合入源码不等于完成启用或整体安全验收。上游同步新增终端环境 `cleanup_stops_processes` 清理契约：仅对该标志为真的后端，在清理成功或确认沙箱已不存在后，把仍经该环境轮询的后台进程结算为 lost；清理失败且沙箱可能仍在运行时不结算，清理失败但沙箱已不存在仍结算。SSH 声明为 false（cleanup 只关 ControlMaster，后台任务继续由下次连接轮询）。owned 后端是否按自身语义覆盖该契约仍待核对。
+- **F15（已移除 2026-11-20）：** 原 `owned-process` 插件按命令代次管理本地进程并提供候选受保护卷；因未生产采用、需要 Linux namespace 与手工配置、上游已有可插拔沙箱后端和 `cleanup_stops_processes` 契约，插件、测试与文档链接已删除。历史边界与删除依据见交付目录 `FEATURES-DECISION.md`。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。write/patch 的原始 NT/device 命名空间拒绝提前到后端初始化前，既有拒绝规则不变；该顺序修复已隔离验证，运行采用待核验。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
 - **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，`evals/*/results/` 下的运行产物不计入审查路径，模型输入不包含隐藏检查点；批次内模型输出不完整或编辑片段无法唯一匹配时自动二分重试，单路径仍失败则整次失败。工作流单次超时上限为 60 分钟；在专用 Runner 的 tool cache 中保存当前审查目标、已验证批次响应和二分决定，跨重跑仅复用模型、接口、脚本、完整证据及前序清单均一致的缓存；恢复时先完成原目标，较新提交留待下一轮。缓存不保存 API key，进度逐批实时输出。续跑校验工作目录中的清单仍与当前 checkout HEAD 一致，已提交的清单更新可继续审查；审查目标仍固定为原 target。响应仅对 JSON 非法反斜杠作有界转义修复，其他结构错误仍拒绝；GitHub PR 响应读取中断仅重试一次，未完整读到仍失败。脚本更新会使旧缓存身份失效。全部批次成功后才原子写入本清单并推进隐藏检查点，失败或超时不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
@@ -79,7 +79,7 @@
 | F12 | [PR #13](https://github.com/GXinOvO/hermes-agent/pull/13)、[#17](https://github.com/GXinOvO/hermes-agent/pull/17)、[#18](https://github.com/GXinOvO/hermes-agent/pull/18) | [检查点维护说明](website/docs/developer-guide/checkpoint-git-lifecycle.md) · [缓存测试](tests/tools/test_skill_lookup_cache_contracts.py) · [扫描测试](tests/tools/test_checkpoint_scan_io.py) |
 | F13 | [PR #21](https://github.com/GXinOvO/hermes-agent/pull/21)；审批继承直接提交见索引 | [读保护上下文](agent/read_context.py) · [Cron 测试](tests/cron/test_guardrail_session_finalization.py) · [审批测试](tests/tools/test_unattended_consent_isolation.py) |
 | F14 | [PR #8](https://github.com/GXinOvO/hermes-agent/pull/8) | [离线验证](hermes_cli/sessions_verify.py) · [维护进度测试](tests/hermes_cli/test_update_maintenance_progress.py) |
-| F15 | 直接提交见索引 | [插件及边界说明](plugins/owned-process/README.md) · [原生测试](tests/tools/test_owned_process_native.py) · [受保护读取测试](tests/tools/test_protected_owned_missing_read.py) |
+| F15 | 已移除（2026-11-20） | 原插件说明与专用测试已删除；原因见交付目录 `FEATURES-DECISION.md` |
 | F16 | [PR #10](https://github.com/GXinOvO/hermes-agent/pull/10)、[#29](https://github.com/GXinOvO/hermes-agent/pull/29)、[#35](https://github.com/GXinOvO/hermes-agent/pull/35) | [搜索操作数测试](tests/tools/test_search_pattern_operands.py) · [统计测试](tests/agent/test_insights.py) |
 | F17 | [PR #9](https://github.com/GXinOvO/hermes-agent/pull/9)、[#32](https://github.com/GXinOvO/hermes-agent/pull/32)；同步本身不另记功能 | [环境隔离测试](tests/gateway/test_fixture_child_environment.py) · [客户端环境测试](tests/gateway/test_session_client_env.py) |
 
@@ -134,7 +134,7 @@
 
 本轮协调 F05/F08/F09/F10/F15：保留子 Agent 结果找回、工具白名单、辅助请求回执和 owned 进程结果恢复，同时接入官方 [Anthropic timeout 修复](https://github.com/NousResearch/hermes-agent/commit/710b62c59a2c5a1c29d2448826e5071ef8c6b7a1)、[路由客户端共用解析](https://github.com/NousResearch/hermes-agent/commit/42be36381f3115225b8130ea2d278b0bb69279b9)、子任务结果分组和环境回收／退出竞争修复。上游覆盖这些基础能力，不据此认定已吸收本表增强；各条历史和默认值保留。
 
-新增 [owned 进程环境关闭回归](tests/tools/test_owned_process_env_teardown.py)，覆盖自然退出、清理取消、输出待排空时的保活与结果发布，以及后端失联后坏环境回收和新命令重建；未验证的旧进程结果仍不伪造完成。接口快照由合并后的代码重新生成。该测试入口不代表整分支或实际安装通过验收，执行结果随同步 PR 记录；本次 Git 同步不更新运行安装。
+原 F15 owned 进程环境关闭回归已随 2026-11-20 的 F15 删除；其历史覆盖包括自然退出、清理取消、输出待排空时的保活与结果发布，以及后端失联后坏环境回收和新命令重建；未验证的旧进程结果仍不伪造完成。接口快照由合并后的代码重新生成。该测试入口不代表整分支或实际安装通过验收，执行结果随同步 PR 记录；本次 Git 同步不更新运行安装。
 
 ### 2026-11-11 上游同步（官方目录与运行时契约）
 
