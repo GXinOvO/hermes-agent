@@ -58,7 +58,7 @@ async def test_finish_transaction_refuses_invalidated_claim(tmp_path, drift):
 
         def invalidate(conn):
             if drift == 'target-boundary':
-                from hermes_state_background import invalidate_target
+                from hermes_state_runtime import invalidate_target
                 invalidate_target(conn, row['target_session_id'])
             else:
                 value = pf._read(conn, row['admission_id'])

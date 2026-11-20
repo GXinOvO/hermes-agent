@@ -70,7 +70,7 @@ async def test_human_matrix_recovery_keeps_encrypted_transport(tmp_path, monkeyp
 @pytest.mark.parametrize('invalidate', ['none', 'after_claim', 'during_send', 'during_handoff'])
 async def test_human_recovery_does_not_queue_invalidated_reply(tmp_path, monkeypatch, invalidate):
     from gateway import delivery_ledger
-    from hermes_state_background import invalidate_target
+    from hermes_state_runtime import invalidate_target
 
     db, epoch, row, _event, descriptor, authority = await fixtures._sealed(tmp_path, human=True)
     adapter = fixtures.Adapter()

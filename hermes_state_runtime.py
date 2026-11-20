@@ -5,6 +5,7 @@ SessionDB transaction owner, including its inode guard and SQLite retry policy.
 """
 import heapq
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -167,6 +168,19 @@ def _store_of(db):
 def _holder_of(db):
     """The SQLite holder behind a SessionDB or a persistence handle."""
     return _store_of(db).holder()
+
+
+def invalidate_target(conn, session_id):
+    conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                 ('background-boundary:' + session_id, os.urandom(16).hex()))
+
+
+def _target(conn, session_id):
+    row = conn.execute('SELECT started_at FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if row is None:
+        return None
+    boundary = conn.execute('SELECT value FROM state_meta WHERE key=?', ('background-boundary:' + session_id,)).fetchone()
+    return [row[0], boundary[0] if boundary else None]
 
 
 def _conversation_revision(db, session_id):

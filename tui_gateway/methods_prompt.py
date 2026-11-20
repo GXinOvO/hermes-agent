@@ -877,8 +877,6 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
-    from tui_gateway.input_provenance import bind_input
-    bind_input(session, text, display_kind)
     from tools.bot_relay import DeliveryAuthor
 
     # Only the relay handler can build a DeliveryAuthor. A dict here is a client claiming a sender.
@@ -913,10 +911,9 @@ def _(rid, params: dict) -> dict:
         # A rewind replays what the transcript shows: re-expand a skill invocation or
         # `/work fix it` sends nine literal chars.
         text = _expand_skill_invocation_for_replay(text, str(session.get("session_key") or ""))
-    turn_isolation_requested = _session_uses_compute_host(session, _load_dashboard_process_isolation_config())
-    if internal_hosted_submit and turn_isolation_requested:
+    turn_isolation = _session_uses_compute_host(session, _load_dashboard_process_isolation_config())
+    if internal_hosted_submit and turn_isolation:
         return _err(rid, 4121, "hosted room turns do not support isolated compute workers yet")
-    turn_isolation = turn_isolation_requested and _ensure_session_db_row(session) is not False
     # Re-bind to the current transport: streaming must stay on the active websocket even
     # if a disconnect/fallback moved the session to stdio. Through _rebind_live_transport so a
     # socket that already closed cannot cancel the orphan reap without coming back (#116464).
@@ -1239,8 +1236,7 @@ def _(rid, params: dict) -> dict:
                     agent.close()
         return _final_response_text(result)
 
-    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body,
-                             inputs={"text": text})
+    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body)
 
 
 @method("prompt.btw")
@@ -1262,8 +1258,7 @@ def _(rid, params: dict) -> dict:
             text, snapshot, parent_agent=agent, main_runtime=main_runtime) or ""
 
     return _spawn_side_agent(
-        rid, session, task_id, parent, "btw.complete", body, extra={"question": text},
-        inputs={"text": text, "history": snapshot})
+        rid, session, task_id, parent, "btw.complete", body, extra={"question": text})
 
 
 @method("preview.restart")
@@ -1310,7 +1305,7 @@ def _(rid, params: dict) -> dict:
     # Pin the validated preview cwd, else the parent workspace — never an invalid path.
     return _spawn_side_agent(
         rid, session, task_id, parent, "preview.restart.complete", body,
-        cwd=preview_cwd, cleanup=cleanup, inputs={"prompt": prompt, "history": parent_history})
+        cwd=preview_cwd, cleanup=cleanup)
 
 
 @method("clarify.lock")
@@ -1473,13 +1468,39 @@ def _validated_preview_cwd(cwd: str) -> str:
 
 
 def _spawn_side_agent(
-    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None, inputs=None):
+    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None):
     """Run ``body()`` on a daemon thread under the session's profile home (the ContextVar
     doesn't propagate across threads) and cwd; its text — or ``error: <exc>`` — lands on
     ``parent`` as ``event`` with ``task_id`` (+ ``extra``).  Replies ``{task_id}``."""
-    from tui_gateway.side_background_results import spawn
-    return spawn(rid, session, task_id, parent, event, body, cwd=cwd, extra=extra,
-                 cleanup=cleanup, inputs=inputs)
+    extra = extra or {}
+
+    def run():
+        # ``parent`` is the caller's live sid (``_sess`` admitted it): bind it as the UI owner so
+        # prompts this worker raises (skill secrets) reach the session whose profile it runs under.
+        session_tokens = _set_session_context(
+            task_id, cwd=(cwd or _session_cwd(session)), ui_session_id=parent)
+        # Bug #50233: ephemeral agent threads don't inherit the session's ContextVar scopes (set on the
+        # session-create thread), so a side turn under a non-default profile ran against the wrong home.
+        # Bind the profile's home + secrets + terminal policy for the whole body, exactly as a prompt turn
+        # does: home alone left terminal_tool on the launch process's ambient TERMINAL_* (a docker
+        # secondary's background/btw/preview agent ran local). NOTE: we deliberately do NOT close this
+        # agent through task-wide process cleanup — the whole point of preview.restart is to leave a
+        # background server running under this task_id, and AIAgent.close() would kill every process for
+        # the task_id and tear down the very server the restart just started.
+        try:
+            with _session_profile_runtime_scope(session):
+                text = body()
+            _emit(event, parent, {"task_id": task_id, **extra, "text": text})
+        except Exception as e:
+            _emit(event, parent, {"task_id": task_id, **extra, "text": f"error: {e}"})
+        finally:
+            if cleanup is not None:
+                cleanup()
+            _clear_session_context(session_tokens)
+
+    if _start_session_work(run, name=f"side-agent-{task_id}") is None:
+        return _err(rid, 5035, "backend is retiring; reconnect to continue")
+    return _ok(rid, {"task_id": task_id})
 
 
 def _side_agent_args(rid, params, prefix):

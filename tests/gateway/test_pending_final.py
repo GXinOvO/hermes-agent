@@ -214,7 +214,7 @@ async def test_result_json_cannot_invent_a_descriptor_capability(tmp_path):
 async def test_mutation_boundary_invalidates_pending_even_if_generation_is_unchanged(tmp_path):
     from gateway import pending_final as pf
     from gateway.session_results import finish_result
-    from hermes_state_background import invalidate_target
+    from hermes_state_runtime import invalidate_target
     db, epoch, row, _event, descriptor, _authority = await _sealed(tmp_path)
     try:
         finish_result(db, epoch=epoch, row=row, response='sealed final', outcome='completed',

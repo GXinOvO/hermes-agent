@@ -89,7 +89,7 @@ def _valid_compress_payload(payload):
 def apply_action(db, conn, session_id, operation, payload, *, prepared=None):
     result = _apply_action(db, conn, session_id, operation, payload, prepared=prepared)
     if operation in {'delete', 'rewind', 'reset'}:
-        from hermes_state_background import invalidate_target
+        from hermes_state_runtime import invalidate_target
         invalidate_target(conn, session_id)
     return result
 

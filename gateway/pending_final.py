@@ -118,7 +118,7 @@ def persist(conn, row, prepared, *, db_path):
     from gateway.delivery_ledger import _start_time
     value = deepcopy(prepared)
     value.update(owner_pid=os.getpid(), owner_started_at=_start_time(os.getpid()), created_at=time.time())
-    from hermes_state_background import _target
+    from hermes_state_runtime import _target
     value['target'] = _target(conn, expected['session_id'])
     for kind, part in value['parts'].items():
         if kind not in {'text', 'attachments'} or part['state'] != 'pending' or part['attempts'] != 0:
@@ -269,7 +269,7 @@ def _valid(conn, value, home):
         current_binding = _binding(dict(raw), Path(home) / 'state.db')
     except ValueError:
         return False
-    from hermes_state_background import _target
+    from hermes_state_runtime import _target
     if value.get('target') != _target(conn, binding['session_id']):
         return False
     if current_binding != binding or retired_in(conn, binding['session_id']):

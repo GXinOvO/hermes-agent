@@ -327,8 +327,6 @@ class GatewayStartupMixin:
         async def _boot_sends() -> None:
             from gateway.pending_final import recover
             await recover(self)
-            from gateway.background_messaging_results import recover_served
-            await recover_served(self)
             await self._send_restart_notification()
             if planned_restart_notification_pending:
                 await self._replay_pending_planned_restart_notification()
