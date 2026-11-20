@@ -99,11 +99,18 @@ def test_failed_reconcile_reopen_names_the_no_write_recovery(tmp_path, monkeypat
     assert _file_state(path) == before
 
 
-def test_owned_lagging_store_is_not_written_and_names_the_remedy(tmp_path):
+@pytest.mark.parametrize("broken_fts", [False, True])
+def test_owned_lagging_store_is_not_written_and_names_the_remedy(tmp_path, broken_fts):
     from gateway.runtime_ownership import ProfileOwnership
 
     home = _profile_home(tmp_path)
     path = _pre_merge_store(home / "state.db")
+    if broken_fts:
+        if "messages_fts_config" not in _tables(path):
+            pytest.skip("store has no FTS5 index")
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute("DROP TABLE messages_fts_config")
+            conn.commit()
     before = path.read_bytes()
     owner = ProfileOwnership()  # what a running gateway holds on its profile
     owner.reserve([home])
