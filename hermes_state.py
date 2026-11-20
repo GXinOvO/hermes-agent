@@ -294,6 +294,9 @@ class _SessionDB:
             f"use the storage interface instead ({_MIGRATION_GUIDE})"
         )
 
+    def get_compression_tip(self, session_id: "str") -> "Optional[str]":
+        return self._store.lineage.tip(session_id)
+
     def close(self) -> None:
         with self._lock:
             self._closed = True
