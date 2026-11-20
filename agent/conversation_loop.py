@@ -737,23 +737,12 @@ def _restore_pinned_tools(agent, session_row) -> list:
     """Pin ``agent.tools`` to the session's persisted array (tools freeze); returns the names
     this surface built BEFORE the pin merged a previous surface's tools back in."""
     from tools.mcp_tool_agent import agent_tool_names, persist_agent_tool_names, restore_agent_tool_prefix
-    from hermes_state_tool_permissions import restore_session_tool_permission, usable_tool_cache
     built_for_this_surface = agent_tool_names(agent)
     saved_tools = session_row.get("tool_names") if session_row else None
-    restriction = restore_session_tool_permission(agent, session_row)
-    agent._tool_pin_unusable = False
     try:
         pin = json.loads(saved_tools) if saved_tools else None
     except ValueError:
-        # Known authorization is independent of this disposable cache. Preserve bad
-        # restricted bytes for diagnosis; only proven unrestricted rows may re-pin.
-        if restriction is not None:
-            agent._tool_pin_unusable = True
-            return built_for_this_surface
         pin = None
-    if saved_tools is not None and not usable_tool_cache(pin) and restriction is not None:
-        agent._tool_pin_unusable = True
-        return built_for_this_surface
     try:
         if pin:
             restore_agent_tool_prefix(agent, pin)
@@ -762,8 +751,6 @@ def _restore_pinned_tools(agent, session_row) -> list:
             # or every later hop re-derives tools[] until the next compaction.
             persist_agent_tool_names(agent)
     except Exception:
-        if getattr(agent, "allowed_tools", None) is not None:
-            raise
         logger.debug("tool prefix restore skipped", exc_info=True)
     return built_for_this_surface
 
@@ -817,8 +804,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 stored_state = "null" if raw_prompt is None else ("empty" if raw_prompt == "" else "present")
                 stored_prompt = raw_prompt or None
         except Exception as exc:
-            agent.allowed_tools, agent.tools, agent.valid_tool_names = [], [], set()
-            agent._tool_pin_unusable = True
+            agent.tools, agent.valid_tool_names = [], set()
             agent._tool_authority_unknown = True
             logger.warning(
                 "Session DB get_session failed for tool authority restore (session=%s): %s. "

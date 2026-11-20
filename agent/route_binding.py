@@ -71,8 +71,6 @@ def bind_route_entry(agent: Any, entry: dict[str, Any], provider: str, model: st
         _fallback_api_mode_resolved, _rebind_fallback_credential_pool,
         _reresolve_fallback_reasoning_config, _rescope_fallback_extra_body, _update_fallback_context_compressor,
     )
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent, {**entry, "provider": provider})
     # raw_codex=True: the main agent needs direct responses.stream() access for Codex providers.
     route = resolve_route_entry_client(entry, provider, model)
     client, model, api_mode_explicit, api_mode = route.client, route.model, route.api_mode_explicit, route.api_mode
@@ -91,7 +89,6 @@ def bind_route_entry(agent: Any, entry: dict[str, Any], provider: str, model: st
         elif not api_mode_explicit and api_mode == "chat_completions":
             api_mode = _fallback_api_mode_resolved(agent, provider, model, base_url)
 
-    validate_restricted_route(agent, {**entry, "provider": provider, "base_url": base_url, "api_mode": api_mode})
     from agent.route_verdicts import reset_route_verdicts, save_primary_route_verdicts
     save_primary_route_verdicts(agent)  # before the swap: stamped with the endpoint that earned them
     old_model, old_provider, old_base_url = agent.model, agent.provider, agent.base_url

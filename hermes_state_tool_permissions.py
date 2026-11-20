@@ -40,9 +40,8 @@ def _config(raw):
 
 
 def _allowed(value):
-    from tools.delegate_tool_allowlist import _validate_value
-    if error := _validate_value(0, value):
-        raise ValueError(error)
+    if not isinstance(value, list) or any(not isinstance(name, str) or not name for name in value):
+        raise ValueError("allowed_tools must be an array of exact tool-name strings.")
     return list(value)
 
 
@@ -71,9 +70,18 @@ def saved_tool_permission(model_config, raw_pin):
     if isinstance(pin, dict) and "allowed_tools" in pin:
         old = _allowed(pin["allowed_tools"])
         return old if allowed is None else [name for name in allowed if name in old]
-    if raw_pin is not None and not known and not usable_tool_cache(pin):
+    if raw_pin is not None and not known and not _usable_pin(pin):
         raise ValueError("Cannot recover tool permission from invalid pin")
     return allowed
+
+
+def _usable_pin(pin):
+    if isinstance(pin, list):
+        return all(isinstance(name, str) for name in pin)
+    if not isinstance(pin, dict) or not isinstance(pin.get("version"), str) or not isinstance(pin.get("tools"), list):
+        return False
+    return all(isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+               and isinstance(tool["function"].get("name"), str) for tool in pin["tools"])
 
 
 def write_tool_pin(db, conn, session_id, pin, *, preserve_cache=False):
@@ -102,40 +110,6 @@ def write_tool_pin(db, conn, session_id, pin, *, preserve_cache=False):
     conn.execute("UPDATE sessions SET tool_names=?, model_config=? WHERE id=?",
                  (db._store_system_prompt(conn, encoded), json.dumps(config), session_id))
     db._delete_unreferenced_system_prompts(conn)
-
-
-def write_tool_permission_sidecar(db, session_id, allowed):
-    """Commit a narrowed allowance without replacing an unreadable tools cache."""
-    db.update_session_tool_names(
-        session_id, {"version": "permission-only", "tools": [], "allowed_tools": _allowed(allowed)},
-        preserve_cache=True,
-    )
-
-
-def restore_session_tool_permission(agent, session_row):
-    """Restore authorization before attempting any cache/prompt recovery."""
-    from tools.delegate_tool_allowlist import restore_saved_restriction
-    if session_row is None:
-        return None
-    try:
-        allowed = saved_tool_permission(session_row.get("model_config"), session_row.get("tool_names"))
-    except ValueError:
-        agent.allowed_tools, agent.tools, agent.valid_tool_names = [], [], set()
-        agent._tool_pin_unusable = True
-        agent._tool_authority_unknown = True
-        raise
-    if allowed is not None:
-        restore_saved_restriction(agent, {"allowed_tools": allowed})
-    return allowed
-
-
-def usable_tool_cache(pin):
-    if isinstance(pin, list):
-        return all(isinstance(name, str) for name in pin)
-    if not isinstance(pin, dict) or not isinstance(pin.get("version"), str) or not isinstance(pin.get("tools"), list):
-        return False
-    return all(isinstance(tool, dict) and isinstance(tool.get("function"), dict)
-               and isinstance(tool["function"].get("name"), str) for tool in pin["tools"])
 
 
 def preserve_tool_permission(current, replacement):

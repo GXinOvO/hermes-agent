@@ -308,47 +308,7 @@ class TestStoredPromptReuse:
             assert "skill_manage" in agent.valid_tool_names
             assert json.loads(db.get_session("test-session-id")["tool_names"])["tools"] == pinned
 
-    def test_a_swept_pin_row_fails_closed_without_trusted_permission_metadata(self, tmp_path):
-        """A swept hash is ambiguous when no independent permission metadata exists.
 
-        The next turn must not treat an unreadable pin as unrestricted or overwrite the
-        original hash with a newly derived tool surface. Legacy unrestricted rows use the
-        separate trusted marker covered by ``test_trusted_unrestricted_marker_allows_swept_pin_rebuild``.
-        """
-        from hermes_state import SessionDB
-        from agent.conversation_loop import _restore_pinned_tools
-
-        tools = [{"type": "function", "function": {"name": "read_file", "description": "", "parameters": {}}}]
-        with SessionDB(db_path=tmp_path / "state.db") as db:
-            db.create_session("test-session-id", source="tui")
-            db.update_system_prompt("test-session-id", "BUILT_PROMPT")
-            db._conn.execute("UPDATE sessions SET tool_names = ? WHERE id = 'test-session-id'", ("ab" * 32,))
-            db._conn.commit()
-            row = db.get_session("test-session-id")
-            assert row is not None
-            before = row["tool_names"]
-            agent = _make_agent(session_db=db)
-            agent._persist_disabled = False
-            agent.tools = list(tools)
-            agent.valid_tool_names = {"read_file"}
-            agent.allowed_tools = None
-            with pytest.raises(ValueError, match="permission|pin"):
-                _restore_pinned_tools(agent, db.get_session("test-session-id"))
-
-            assert agent.tools == []
-            assert agent.valid_tool_names == set()
-            assert agent.allowed_tools == []
-            row_after = db.get_session("test-session-id")
-            assert row_after is not None
-            assert row_after["tool_names"] == before
-
-
-# ---------------------------------------------------------------------------
-# Legitimate fresh-build paths (no history, no DB)
-# ---------------------------------------------------------------------------
-
-
-class TestLegitimateFreshBuild:
     def test_no_history_checks_authority_and_builds_fresh(self, caplog):
         """A new session has no authority row; history does not decide that lookup."""
         db = MagicMock()

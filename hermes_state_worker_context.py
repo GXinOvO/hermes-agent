@@ -63,8 +63,8 @@ def worker_tool_names(db, conn, session_id, payload):
                                       or not isinstance(backend, str) or len(backend) > 64):
             raise RuntimeStoreError('invalid_params')
         if isinstance(pin, dict) and 'allowed_tools' in pin:
-            from tools.delegate_tool_allowlist import _validate_value
-            if _validate_value(0, pin['allowed_tools']) is not None:
+            allowed = pin['allowed_tools']
+            if not isinstance(allowed, list) or any(not isinstance(n, str) or not n for n in allowed):
                 raise RuntimeStoreError('invalid_params')
     encoded = None if pin is None else json.dumps(pin)
     if encoded is not None and len(encoded) > 4 * 1024 * 1024:
