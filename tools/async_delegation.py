@@ -637,6 +637,8 @@ def _event_delivery(fn, evt: dict[str, Any], claim_id: str) -> None:
 
 
 def get_durable_delegation(delegation_id: str) -> Optional[dict[str, Any]]:
+    """One delegation's stored row as the ``result`` control action reads it: the ledger record (state, delivery
+    bookkeeping, result) plus its route (``parent_session_id``, the dispatch task the model was pinned in)."""
     if remote := worker_ledger():
         saved = remote.read(delegation_id)
         if saved is not None and saved.get("result") is not None:
@@ -644,12 +646,23 @@ def get_durable_delegation(delegation_id: str) -> Optional[dict[str, Any]]:
         return saved
     with _DB_LOCK, _ledger() as store:
         record = store.coordination.get_delegation(delegation_id=delegation_id)
-    return None if record is None else {
+        route = store.coordination.get_delegation_route(delegation_id=delegation_id) if record is not None else None
+    if record is None:
+        return None
+    result = redact_child_result(record.result) if record.result is not None else None
+    task = route.task if route is not None and isinstance(route.task, dict) else {}
+    # The ledger read exposes no ``delivered_at`` column, but ``updated_at`` is exactly the delivery instant for a
+    # delivered row: the silent-completion write stores ``delivered`` and the stamp in one update, ``claim``+``ack``
+    # stamps them together, and every other delivery verb requires ``pending`` — so no later write can move it.
+    delivered = record.delivery_state.value == "delivered"
+    return {
         "delegation_id": delegation_id, "origin_session": record.origin_session, "state": record.state,
-        "dispatched_at": record.dispatched_at, "completed_at": record.completed_at,
-        "result": redact_child_result(record.result) if record.result is not None else None,
+        "dispatched_at": record.dispatched_at, "completed_at": record.completed_at, "result": result,
         "delivery_state": record.delivery_state.value, "delivery_attempts": record.delivery_attempts,
-        "origin_session_id": record.origin_session_id}
+        "origin_session_id": record.origin_session_id,
+        "delivered_at": (route.updated_at if route is not None else None) if delivered else None,
+        "parent_session_id": route.parent_session_id if route is not None else None,
+        "model": task.get("model") or (result.get("model") if isinstance(result, dict) else None)}
 
 
 _FAILED_TASK_STATES = SUBAGENT_FAILURE_STATUSES | {"stalled", "unknown", "interrupted"}

@@ -27,8 +27,13 @@ def home(tmp_path):
 
 
 def _agent(session_id="sess-1", lineage=None):
-    db = SimpleNamespace(resolve_resume_session_id=lambda sid: (lineage or {}).get(sid, sid))
-    return SimpleNamespace(session_id=session_id, _session_db=db, _delegate_depth=0)
+    # Compression-rotation lineage lives on the caller's persistence handle (resolve_resume_target), which is where
+    # the control plane resolves both sides of an ownership check.
+    lineage = lineage or {}
+    persistence = SimpleNamespace(lineage=SimpleNamespace(
+        resolve_resume_target=lambda sid: lineage.get(sid, sid)))
+    db = SimpleNamespace(resolve_resume_session_id=lambda sid: lineage.get(sid, sid))
+    return SimpleNamespace(session_id=session_id, _session_db=db, persistence=persistence, _delegate_depth=0)
 
 
 def _store(delegation_id, *, parent="sess-1", result=None, model="m-1", **extra):
@@ -69,7 +74,9 @@ def test_partial_per_child_entries_are_returned_while_the_unit_runs():
 
 def test_delivery_fields_follow_the_ledger():
     _store("d-del", result={"status": "completed", "summary": "x"})
-    ad.mark_completion_delivered("d-del")
+    # The delivery path a consumer takes: claim the pending completion, then acknowledge it.
+    assert ad.claim_completion_delivery("d-del", "result-action-claim") is True
+    assert ad.complete_completion_delivery("d-del", "result-action-claim") is True
 
     out = _result(_agent(), "d-del")
 

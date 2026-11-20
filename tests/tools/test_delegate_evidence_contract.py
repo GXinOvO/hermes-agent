@@ -85,7 +85,7 @@ def test_failed_check_remains_visible_beside_later_success_and_summary(monkeypat
     result = entry_for([{"exit_code": 1, "output": "failed case", "error": None},
                         {"exit_code": 0, "output": "other case passed", "error": None}])
     assert [item["execution"]["outcome"] for item in result["tool_trace"]] == ["failed", "succeeded"]
-    monkeypatch.setattr("tools.delegate_tool._load_config", lambda: {"max_summary_chars": 2000})
+    monkeypatch.setattr("tools.delegate_tool_config._load_config", lambda: {"max_summary_chars": 2000})
     result["summary"] = "checked result\n" * 1000
     _apply_summary_budget([result], None)
     assert result["summary_truncated"] is True

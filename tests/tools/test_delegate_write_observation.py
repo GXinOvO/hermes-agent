@@ -296,15 +296,14 @@ def test_observation_linearization_does_not_depend_on_wall_clock(tmp_path, regis
 
 def test_timeout_releases_observer_before_deferred_child_close(tmp_path, registry, monkeypatch):
     from tests.tools.test_delegate_timeout_cleanup import _SlowUnwindingChild
-    from tools import delegate_tool
     from tools.daemon_pool import DaemonThreadPoolExecutor
 
     child = _SlowUnwindingChild()
     registry.record_read('timeout-parent', str(tmp_path / 'watched'), mtime=1)
     parent = SimpleNamespace(session_id='observation-timeout', _current_task_id='timeout-parent',
                              _active_children=[child], _active_children_lock=threading.Lock())
-    monkeypatch.setattr(delegate_tool, '_get_child_timeout', lambda: 0.5)
-    monkeypatch.setattr(delegate_tool, '_get_worktree_isolation', lambda: False)
+    monkeypatch.setattr("tools.delegate_tool_child_run._get_child_timeout", lambda: 0.5)
+    monkeypatch.setattr("tools.delegate_tool_child_run._get_worktree_isolation", lambda: False)
     submit = DaemonThreadPoolExecutor.submit
 
     def started(executor, *args, **kwargs):

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.delegation_context import delegated_child_context
-from tools import skill_manager_tool, skills_tool
+from tools import skill_manager_tool, skills_tool  # importing skill_manager_tool registers the skill_manage tool
 from tools.registry import registry
 
 CONTENT = """---
@@ -21,7 +21,7 @@ Retain the original evidence.
 
 def test_delegated_skill_mutation_is_refused_before_any_write(tmp_path, monkeypatch):
     root = tmp_path / 'skills'
-    monkeypatch.setattr(skill_manager_tool, 'SKILLS_DIR', root)
+    # The skills root is owned by tools.skills_tool._skills_dir(); skill_manage resolves it from there.
     monkeypatch.setattr(skills_tool, 'SKILLS_DIR', root)
     monkeypatch.setattr('agent.skill_utils.get_all_skills_dirs', lambda: [root])
     payload = {'operations': [{'action': 'create', 'name': 'scope-fixture', 'content': CONTENT}]}
@@ -57,7 +57,7 @@ def test_descendant_marker_refuses_flat_mutations_without_touching_skill(tmp_pat
     target = root / 'scope-fixture/SKILL.md'
     target.parent.mkdir(parents=True)
     target.write_text(CONTENT)
-    monkeypatch.setattr(skill_manager_tool, 'SKILLS_DIR', root)
+    monkeypatch.setattr(skills_tool, 'SKILLS_DIR', root)
     monkeypatch.setenv(DELEGATED_CHILD_ENV_MARKER, str(tmp_path / 'owning-board'))
     before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     raw = registry.dispatch('skill_manage', {

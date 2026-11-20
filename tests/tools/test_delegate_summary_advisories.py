@@ -57,7 +57,10 @@ def test_structured_summary_survives_runtime_advisories(tmp_path, monkeypatch, s
              'dispatched_at': 1, 'completed_at': 2, 'status': 'completed',
              'results': [entry], 'goals': ['return structured output']}
     ledger._persist_completion(event, {'results': [entry]})
-    with sqlite3.connect(ledger._db_path()) as conn:
+    from persistence_assembly import store_location
+    store_path = store_location(ledger._scope())
+    assert store_path is not None, 'the ledger stores its rows in state.db'
+    with sqlite3.connect(store_path) as conn:  # health: allow HX015 -- test reads the temp-home ledger
         event_json, result_json = conn.execute(
             'SELECT event_json,result_json FROM async_delegations WHERE delegation_id=?',
             ('structured-advisory',)).fetchone()
