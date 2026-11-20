@@ -14,6 +14,18 @@ _CREATE_FIELDS = _IDENTITY_FIELDS | {'source', 'model', 'model_config', 'system_
 _CONSTRUCTOR_CONFIG = frozenset({'max_iterations', 'max_tokens', 'reasoning_config', 'yolo_mode'})
 
 
+def _merge_worker_model_config(existing, incoming):
+    """Constructor facts merge beside an owner-reserved row; existing keys win."""
+    current = json.loads(existing) if isinstance(existing, str) and existing else (existing or {})
+    if not isinstance(current, dict):
+        current = {}
+    proposed = dict(incoming or {})
+    proposed.pop('_tool_permissions', None)
+    merged = {**proposed, **current}
+    merged.pop('_tool_permissions', None)
+    return merged
+
+
 def worker_create(db, conn, session_id, payload):
     if set(payload) - _CREATE_FIELDS or 'source' not in payload:
         raise RuntimeStoreError('invalid_params')
@@ -35,9 +47,8 @@ def worker_create(db, conn, session_id, payload):
     if config:
         # An owner-reserved child row already holds its lineage marker, so the keep-existing upsert
         # would drop these facts; merge them beside it (keys are the constructor set only).
-        from hermes_state_tool_permissions import merge_model_config
         row = conn.execute("SELECT model_config FROM sessions WHERE id=?", (session_id,)).fetchone()
-        merged = merge_model_config(row[0] if row else None, config)
+        merged = _merge_worker_model_config(row[0] if row else None, config)
         conn.execute("UPDATE sessions SET model_config=? WHERE id=? "
                      "AND json_type(model_config,'$._delegate_from') IS NOT NULL", (json.dumps(merged), session_id))
     return {'value': session_id}
@@ -224,16 +235,8 @@ def insert_session_row_in_transaction(
         _UPSERT_KEEP_EXISTING_SQL,
         _UPSERT_KEEP_EXISTING_SQL_INSERT_SESSION_KEY_ONLY,
     )
-    existing_before = conn.execute(
-        "SELECT s.model_config, COALESCE(p.prompt,s.tool_names) FROM sessions s "
-        "LEFT JOIN system_prompts p ON p.hash=s.tool_names WHERE s.id=?", (session_id,)
-    ).fetchone()
-    if not parent_session_id and isinstance(model_config, dict) and "_tool_permissions" in model_config:
-        raise ValueError("Tool permission metadata is reserved for session.tools")
-    if parent_session_id:
-        from hermes_state_tool_permissions import prepare_child_model_config
-        model_config = prepare_child_model_config(
-            conn, parent_session_id, existing_before[0:2] if existing_before else None, model_config)
+    if isinstance(model_config, dict):
+        model_config = {key: value for key, value in model_config.items() if key != "_tool_permissions"}
     from hermes_state_mutation_retirement import RETIRED_PREFIX
     # A delayed constructor/accounting backfill must not recreate a deleted session
     # beside its durable tombstone (the exact delete retry would then report a stale
@@ -306,10 +309,8 @@ def insert_session_row_in_transaction(
         ),
     )
     if model_config:
-        from hermes_state_tool_permissions import merge_model_config
         row = conn.execute("SELECT model_config, session_key FROM sessions WHERE id=?", (session_id,)).fetchone()
-        merged = merge_model_config(
-            row[0] if row else None, model_config, allow_permission=bool(parent_session_id))
+        merged = _merge_worker_model_config(row[0] if row else None, model_config)
         if row and row[1] and merged.get("_reset_from") is not None:
             merged.pop("_delegate_from", None)
         conn.execute("UPDATE sessions SET model_config=? WHERE id=?", (json.dumps(merged), session_id))

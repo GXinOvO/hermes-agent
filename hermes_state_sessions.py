@@ -24,7 +24,6 @@ from hermes_state_common import (
     _source_match_clause, emit_session_deleted, launch_stub_filter_sql,
 )
 from hermes_state_compression import _CHAIN_CAP, _UNSET_CREATED_SQL
-from hermes_state_tool_permissions import SessionToolPermissionMixin
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
@@ -350,7 +349,19 @@ _INHERIT_PARENT_ROUTING_SQL_INSERT_SESSION_KEY_ONLY = (
 )
 
 
-class SessionSessionsMixin(SessionToolPermissionMixin):
+def write_tool_pin(db, conn, session_id, pin):
+    """Write the tools[] pin on the caller's transaction; never commit here."""
+    if conn.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone() is None:
+        return
+    if isinstance(pin, dict):
+        pin = {key: value for key, value in pin.items() if key != "allowed_tools"}
+    encoded = json.dumps(pin) if pin is not None else None
+    conn.execute("UPDATE sessions SET tool_names=? WHERE id=?",
+                 (db._store_system_prompt(conn, encoded), session_id))
+    db._delete_unreferenced_system_prompts(conn)
+
+
+class SessionSessionsMixin:
     """Session rows: create/inherit, lifecycle flags, model_config, listing, deletion."""
 
     def _own_profile_name(self) -> Optional[str]:
@@ -385,14 +396,6 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
              else _INHERIT_PARENT_ROUTING_SQL),
             (session_id,),
         )
-
-    def _publish_child_session_row(self, conn, parent, *, parent_session_id, child_session_id, source,
-                                   model, model_config, system_prompt, cwd, profile_name) -> None:
-        from hermes_state_tool_permissions import inherited_tool_config
-        super()._publish_child_session_row(
-            conn, parent, parent_session_id=parent_session_id, child_session_id=child_session_id,
-            source=source, model=model, model_config=inherited_tool_config(conn, parent_session_id, model_config),
-            system_prompt=system_prompt, cwd=cwd, profile_name=profile_name)
 
     def _insert_session_row(
         self, session_id: str, source: str, model: str | None = None, model_config: dict[str, Any] | None = None,
@@ -766,6 +769,20 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
             conn.execute(sql, params(merged) if params else (merged, session_id))
         self._execute_write(_do)
 
+    def update_session_meta(self, session_id: str, model_config_json: str, model: str | None = None) -> None:
+        """Replace ``model_config``/``model`` for a session row (no permission sidecar)."""
+        config = _parse_model_config(model_config_json)
+        self.flush_token_counts()
+
+        def _do(conn):
+            conn.execute("UPDATE sessions SET model_config=?, model=COALESCE(?,model) WHERE id=?",
+                         (json.dumps(config), model, session_id))
+
+        self._execute_write(_do)
+
+    def update_session_tool_names(self, session_id: str, pin) -> None:
+        self._execute_write(lambda conn: write_tool_pin(self, conn, session_id, pin))
+
     def _merge_model_config_json(
         self, conn, session_id: str, patch: dict[str, Any], *, on_missing: str = "skip",
     ):
@@ -777,8 +794,6 @@ class SessionSessionsMixin(SessionToolPermissionMixin):
             if on_missing == "raise":
                 raise ValueError(f"Session not found: {session_id}")
             return _MODEL_CONFIG_ROW_MISSING
-        from hermes_state_tool_permissions import preserve_tool_permission
-        preserve_tool_permission(row[0], patch)
         config = _parse_model_config(row[0])
         for key, value in patch.items():
             if value is None:

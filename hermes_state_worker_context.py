@@ -48,7 +48,7 @@ def worker_tool_names(db, conn, session_id, payload):
     """The tools[] pin, same contract as ``SessionDB.update_session_tool_names``: any JSON pin
     (``{"version", "tools"[, "delegation_backend"]}`` today; a legacy name list) content-addressed through ``system_prompts``,
     ``None`` clears. Bounded so a worker cannot write an unbounded blob into the shared table."""
-    if not {'tool_names'} <= set(payload) <= {'tool_names', 'preserve_cache'} or type(payload.get('preserve_cache', False)) is not bool:
+    if set(payload) != {'tool_names'}:
         raise RuntimeStoreError('invalid_params')
     pin = payload['tool_names']
     if pin is not None:
@@ -63,17 +63,12 @@ def worker_tool_names(db, conn, session_id, payload):
                                       or not isinstance(backend, str) or len(backend) > 64):
             raise RuntimeStoreError('invalid_params')
         if isinstance(pin, dict) and 'allowed_tools' in pin:
-            allowed = pin['allowed_tools']
-            if not isinstance(allowed, list) or any(not isinstance(n, str) or not n for n in allowed):
-                raise RuntimeStoreError('invalid_params')
+            pin = {key: value for key, value in pin.items() if key != 'allowed_tools'}
     encoded = None if pin is None else json.dumps(pin)
     if encoded is not None and len(encoded) > 4 * 1024 * 1024:
         raise RuntimeStoreError('invalid_params')
-    from hermes_state_tool_permissions import write_tool_pin
-    try:
-        write_tool_pin(db, conn, session_id, pin, preserve_cache=payload.get("preserve_cache", False))
-    except ValueError as exc:
-        raise RuntimeStoreError('permission_denied') from exc
+    from hermes_state_sessions import write_tool_pin
+    write_tool_pin(db, conn, session_id, pin)
     return {'value': None}
 
 
