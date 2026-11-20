@@ -11,9 +11,11 @@ from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
 from gateway.session_results import finish_result
 from gateway.strict_transport import strict_call
-from hermes_state import SessionDB
 from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
 from plugins.platforms.matrix.adapter import MatrixAdapter
+from tests.fixtures.storage_holder import raw_holder
 from tests.gateway import test_pending_final as fixtures
 from tests.gateway.test_pending_final_original_identity import settle
 
@@ -36,14 +38,15 @@ async def test_human_matrix_recovery_keeps_encrypted_transport(tmp_path, monkeyp
     assert not strict.success and 'E2EE' in strict.error
     adapter._send_room_message.assert_not_awaited()
 
-    with SessionDB(tmp_path / 'state.db') as db:
-        db.create_session('sid', source='matrix')
+    with open_persistence(profile_scope(home=tmp_path), eager=True) as db:
+        db.sessions.create(NewSession('sid', source='matrix'))
         epoch = begin_runtime_epoch(db, instance_id='owner')
         admit_session_input(db, epoch=epoch, principal_id='messaging:sender',
                             session_id='sid', request_id='question', payload=payload)
         row = claim_session_input(db, epoch=epoch, session_id='sid')
         event = MessageEvent(text='question', source=source, message_id='question')
-        authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
+        authority = SimpleNamespace(db=db, persistence=db,
+                                    runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
         descriptor = await pending_final.prepare(authority, row, event, route, 'sealed answer')
         finish_result(db, epoch=epoch, row=row, response='sealed answer', outcome='completed',
                       result={'result': {'final_response': 'sealed answer', 'messages': [],
@@ -81,11 +84,14 @@ async def test_human_recovery_does_not_queue_invalidated_reply(tmp_path, monkeyp
     async def send(**kwargs):
         sent.append(kwargs['content'])
         if invalidate == 'during_send':
-            db._execute_write(lambda conn: invalidate_target(conn, 'sid'))
+            raw_holder(db)._execute_write(lambda conn: invalidate_target(conn, 'sid'))
         return SendResult(success=False, error='send_path_degraded')
 
     adapter._send_with_retry = send
     monkeypatch.setattr(delivery_ledger, '_db_path', lambda: tmp_path / 'outbound.db')
+    from persistence.sqlite.gateway._delivery_ledger import _ensure_obligations_table
+    with delivery_ledger._connect() as conn:
+        _ensure_obligations_table(conn)
     monkeypatch.setattr(delivery_ledger, '_owner_alive', lambda *args: False)
     monkeypatch.setattr('gateway.session_authorities.owner_scope', lambda authority: nullcontext())
 
@@ -98,7 +104,7 @@ async def test_human_recovery_does_not_queue_invalidated_reply(tmp_path, monkeyp
     def claim(*args, **kwargs):
         value, won, state = original_claim(*args, **kwargs)
         if won and invalidate == 'after_claim':
-            db._execute_write(lambda conn: invalidate_target(conn, 'sid'))
+            raw_holder(db)._execute_write(lambda conn: invalidate_target(conn, 'sid'))
         return value, won, state
 
     monkeypatch.setattr(pending_final, 'claim', claim)
@@ -106,7 +112,7 @@ async def test_human_recovery_does_not_queue_invalidated_reply(tmp_path, monkeyp
 
     def handoff(*args, **kwargs):
         if invalidate == 'during_handoff':
-            db._execute_write(lambda conn: invalidate_target(conn, 'sid'))
+            raw_holder(db)._execute_write(lambda conn: invalidate_target(conn, 'sid'))
         return original_handoff(*args, **kwargs)
 
     monkeypatch.setattr(delivery_ledger, 'record_human_final_failure', handoff)

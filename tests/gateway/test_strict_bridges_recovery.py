@@ -16,8 +16,9 @@ from gateway.platforms.event import MessageEvent
 from gateway.session import SessionSource
 from gateway.session_delivery_policy import automation_delivery_scope
 from gateway.session_results import finish_result
-from hermes_state import SessionDB
 from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
 from tests.gateway.test_strict_bridges_http import connected, http_peer, target
 from tests.gateway.test_strict_bridges_local import simplex_peer
 
@@ -34,8 +35,8 @@ async def transport(kind, fault, monkeypatch):
 
 async def sealed(home, kind, adapter, chat_id, *, media=False):
     from gateway import pending_final as pf
-    db = SessionDB(home / 'state.db')
-    db.create_session('sid', source=kind)
+    db = open_persistence(profile_scope(home=home), eager=True)
+    db.sessions.create(NewSession('sid', source=kind))
     epoch = begin_runtime_epoch(db, instance_id='owner')
     route = f'agent:main:{kind}:dm:{chat_id}'
     source = SessionSource(platform=Platform(kind), chat_id=chat_id, chat_type='dm')
@@ -46,7 +47,7 @@ async def sealed(home, kind, adapter, chat_id, *, media=False):
                         request_id='sealed-work', payload=payload)
     row = claim_session_input(db, epoch=epoch, session_id='sid')
     event = MessageEvent(text='completed work', source=source, internal=True, message_id='sealed-work')
-    authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source:adapter))
+    authority = SimpleNamespace(db=db, persistence=db, runner=SimpleNamespace(_adapter_for_source=lambda source:adapter))
     if media:
         from PIL import Image
         path = home / 'asset.png'
@@ -155,7 +156,7 @@ async def main():
             db.close()
             print(json.dumps({'sealed':True}), flush=True)
             return
-        db = SessionDB(home / 'state.db')
+        db = open_persistence(profile_scope(home=home), eager=True)
         entry = SimpleNamespace(session_id='sid', suspended=False)
         from gateway.session import SessionStore
         from gateway.config import GatewayConfig

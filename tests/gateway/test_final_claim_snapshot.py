@@ -8,6 +8,7 @@ from gateway.session_results import finish_result
 from hermes_state_runtime import begin_runtime_epoch
 from tests.gateway import test_pending_final as legacy
 from tests.gateway import frozen_live_http_peer as native
+from tests.fixtures.storage_holder import raw_holder
 from tests.gateway.test_final_prepared_transport import Adapter
 from tests.gateway.test_strict_bridges_recovery import sealed
 
@@ -27,7 +28,7 @@ async def test_final_claim_context_or_epoch_drift_never_submits(tmp_path, monkey
                     value = pf._read(conn, admission)
                     value[drift] = {'thread_id': 'other'} if drift == 'metadata' else 'other-owner'
                     pf._put(conn, admission, value)
-                db._execute_write(mutate)
+                raw_holder(db)._execute_write(mutate)
             result = original(db, admission, kind, content, **kwargs)
             if drift == 'epoch-after-claim' and result[1]:
                 begin_runtime_epoch(db, instance_id='successor')
@@ -64,7 +65,7 @@ async def test_finish_transaction_refuses_invalidated_claim(tmp_path, drift):
                 value = pf._read(conn, row['admission_id'])
                 value['metadata'] = {'thread_id': 'other'}
                 pf._put(conn, row['admission_id'], value)
-        db._execute_write(invalidate)
+        raw_holder(db)._execute_write(invalidate)
         assert pf.finish(db, row['admission_id'], 'text', SendResult(success=True)) is False
         assert pf.pending(db)[0]['parts']['text']['state'] != 'delivered'
     finally:
