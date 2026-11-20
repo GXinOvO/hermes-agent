@@ -1014,9 +1014,7 @@ def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
     """One closed durable mutation and receipt; never call a self-committing API here."""
     from persistence.core.errors import AuthorityRefusal
     if operation == "session.tools":
-        # The worker writes the pin through the same guarded path as a session writer: the store's
-        # own `session.tools` schema has no room for the `allowed_tools` sidecar, and the allowance
-        # may not widen here either.
+        # The worker writes the pin through the same guarded path as a session writer.
         pin = payload.get("tool_names") if isinstance(payload, dict) else None
         try:
             db.update_session_tool_names(session_id, pin)

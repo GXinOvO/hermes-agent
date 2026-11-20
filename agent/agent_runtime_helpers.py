@@ -684,8 +684,6 @@ def recover_with_credential_pool(
 def _apply_primary_runtime_fields(agent, rt: dict[str, Any]) -> None:
     """Copy the identity/transport fields of a ``_primary_runtime`` snapshot onto ``agent``
     (shared by transport recovery and turn-start restore; the caller rebuilds the client)."""
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent, rt)
     agent.model = rt["model"]
     agent.provider = rt["provider"]
     agent.requested_provider = rt.get("requested_provider", agent.provider)
@@ -1523,8 +1521,6 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
         _validate_proxy_env_urls,
     )
     from agent.ssl_verify import resolve_httpx_verify
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent, client_kwargs)
     # Treat client_kwargs as read-only: callers pass agent._client_kwargs, and in-place mutation
     # leaks into later requests (a torn-down httpx transport got reused).
     # Callers pass agent._client_kwargs (or shallow copies of it) in; any in-place mutation leaks back into
@@ -1805,8 +1801,6 @@ def _build_switched_client(agent, new_provider, api_key, base_url, api_mode, new
 
 def _swap_switch_runtime(agent, new_model, new_provider, api_key, base_url, api_mode, old_provider, old_norm, new_norm) -> None:
     """Swap identity/transport fields, reload the pool, rebuild the client (rolled back by the caller on error)."""
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent, {"provider": new_provider, "api_mode": api_mode, "base_url": base_url})
     # Clear the per-config override so the new model's context window is re-resolved.
     agent._config_context_length = None
     agent.model = new_model
@@ -2047,11 +2041,6 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     )
     if not isinstance(function_args, dict):
         function_args = {}
-    from tools.delegate_tool_allowlist import explicit_allowed_tools
-    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
-    from tools.delegate_tool_scope import tool_name_allowed
-    if not tool_name_allowed(agent, function_name):
-        return json.dumps({"error": f"Tool '{function_name}' is not permitted in this child execution context. The call was rejected before dispatch."})
     hook_ids = tool_hook_ids(agent, effective_task_id, tool_call_id)
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
     try:
@@ -2103,7 +2092,6 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 turn_id=getattr(agent, "_current_turn_id", "") or "",
                 api_request_id=getattr(agent, "_current_api_request_id", "") or "",
                 enabled_tools=list(agent.valid_tool_names) if agent.valid_tool_names else None,
-                allowed_tools=allowed,
                 skip_pre_tool_call_hook=True, skip_tool_request_middleware=True,
                 enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                 disabled_toolsets=getattr(agent, "disabled_toolsets", None),

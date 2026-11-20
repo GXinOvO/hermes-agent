@@ -76,8 +76,6 @@ def perform_api_call(
     interrupted: Any, audit_retry_count: Any = None,
 ) -> ApiCallVerdict:
     """Issue the request (see ``_should_stream`` for the streaming decision)."""
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent)
     response = None
 
     def _verdict(action: str) -> ApiCallVerdict:

@@ -43,7 +43,6 @@ from cron.jobs_normalize import (
 from cron import jobs_time
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import extra_fire, jobs_error_text, store_health
-from cron.install_gate import install_gate
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
 
 logger = logging.getLogger(__name__)
@@ -297,7 +296,7 @@ def _release_flock(lock_fd) -> None:
 
 @contextlib.contextmanager
 def _jobs_lock():
-    with install_gate(_current_cron_store().cron_dir.parent), _jobs_lock_admitted():
+    with _jobs_lock_admitted():
         yield
 
 
@@ -2170,6 +2169,10 @@ def resume_job(job_id: str) -> Optional[dict[str, Any]]:
     job = resolve_job_ref(job_id)
     if not job:
         return None
+    if job.get("state") == "completed" and job.get("schedule", {}).get("kind") in {"cron", "interval"}:
+        raise ValueError(
+            f"Cannot resume: recurring job '{job.get('name', job_id)}' completed its repeat limit. "
+            "Set repeat=0 (forever) or create a new job.")
     stored_next = job.get("next_run_at")
     stored_dt = _parse_aware(stored_next) if stored_next else None
     if (

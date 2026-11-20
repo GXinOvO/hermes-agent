@@ -724,27 +724,9 @@ def _emit_post_tool_call_hook(
         logger.debug("post_tool_call hook error: %s", _hook_err)
 
 
-def _allowed_tool_error(name: str) -> str:
-    """Stable refusal for an explicit child allowlist; no handler has run."""
-    return f"Tool '{name}' is not permitted in this child execution context. The call was rejected before dispatch."
-
-
-def _allowed_tool_name(name: str, allowed_tools: Optional[list[str]]) -> bool:
-    from tools.delegate_tool_allowlist import explicit_allowed_tools
-    allowed_tools = explicit_allowed_tools(allowed_tools)
-    if allowed_tools is None:
-        return True
-    from tools.delegate_tool_scope import exact_tool_name
-    try:
-        return exact_tool_name(name) and name in allowed_tools
-    except TypeError:
-        return False
-
-
 def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
                           enabled_toolsets: Optional[list[str]], disabled_toolsets: Optional[list[str]],
-                          ids: Optional[_CallIds] = None,
-                          *, allowed_tools: Optional[list[str]] = None):
+                          ids: Optional[_CallIds] = None):
     """Handle a Tool Search bridge call (tool_search / tool_describe / tool_call).
 
     None when *function_name* is not a bridge tool; ``(result, None)`` for a
@@ -757,8 +739,6 @@ def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
         return None
     if not ts.is_bridge_tool(function_name):
         return None
-    if not _allowed_tool_name(function_name, allowed_tools):
-        return tool_error(_allowed_tool_error(function_name)), None
     # Un-collapsed catalog scoped to the session's toolsets, so a restricted
     # session (subagent, kanban worker) can't reach the whole registry via the bridge.
     try:
@@ -788,8 +768,6 @@ def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
     # tool_search can never surface them in this session.
     if underlying_name not in ts.scoped_deferrable_names(current_defs):
         return tool_error(ts.scope_block_reason(underlying_name)), None
-    if not _allowed_tool_name(underlying_name, allowed_tools):
-        return tool_error(_allowed_tool_error(underlying_name)), None
     # Validate against the deferred tool's concrete schema — the generic
     # ``arguments: object`` bridge schema can't enforce it.
     probe_err = ts.validate_deferred_call_args(underlying_name, underlying_args)
@@ -870,7 +848,7 @@ def _approval_observability(ids: _CallIds):
 
 def _execute_tool(function_name: str, function_args: dict[str, Any], original_args: dict[str, Any], ids: _CallIds,
                   *, user_task: Optional[str], enabled_tools: Optional[list[str]],
-                  allowed_tools: Optional[list[str]], skip_tool_execution_middleware: bool) -> Any:
+                  skip_tool_execution_middleware: bool) -> Any:
     """Run the registry handler (through tool-execution middleware unless skipped)
     with the approval observability context bound for the duration."""
     dispatch_kwargs: dict[str, Any] = {
@@ -880,8 +858,7 @@ def _execute_tool(function_name: str, function_args: dict[str, Any], original_ar
         # Prefer the caller's list so subagents can't overwrite the parent's
         # tool set via the process-global.
         dispatch_kwargs["enabled_tools"] = (
-            allowed_tools if allowed_tools is not None
-            else enabled_tools if enabled_tools is not None else _last_resolved_tool_names
+            enabled_tools if enabled_tools is not None else _last_resolved_tool_names
         )
     else:
         dispatch_kwargs["user_task"] = user_task
@@ -933,7 +910,6 @@ def handle_function_call(
     function_name: str, function_args: dict[str, Any], task_id: Optional[str] = None,
     tool_call_id: Optional[str] = None, session_id: Optional[str] = None, turn_id: Optional[str] = None,
     api_request_id: Optional[str] = None, user_task: Optional[str] = None, enabled_tools: Optional[list[str]] = None,
-    allowed_tools: Optional[list[str]] = None,
     skip_pre_tool_call_hook: bool = False, skip_tool_request_middleware: bool = False,
     skip_tool_execution_middleware: bool = False, tool_request_middleware_trace: Optional[list[dict[str, Any]]] = None,
     enabled_toolsets: Optional[list[str]] = None, disabled_toolsets: Optional[list[str]] = None,
@@ -947,7 +923,6 @@ def handle_function_call(
     it (single-fire contract). enabled/disabled_toolsets scope the Tool Search
     bridge catalog to this session's grant (None = unrestricted).
     """
-    raw_function_name = function_name
     function_args = coerce_tool_args(function_name, function_args)
     if not isinstance(function_args, dict):
         function_args = {}
@@ -960,18 +935,7 @@ def handle_function_call(
         # connector batches) meet the same allowlist before bridges, connectors or the registry.
         return tool_error(refusal)
 
-    if not _allowed_tool_name(raw_function_name, allowed_tools):
-        result = tool_error(_allowed_tool_error(raw_function_name))
-        _emit_post_tool_call_hook(
-            function_name=raw_function_name, function_args=function_args, result=result,
-            **asdict(ids), middleware_trace=list(trace), status="blocked",
-            error_type="tool_scope_block", error_message=_allowed_tool_error(raw_function_name),
-        )
-        return result
-
     function_name = _LEGACY_TOOL_ALIASES.get(function_name, function_name)
-    if not _allowed_tool_name(function_name, allowed_tools):
-        return tool_error(_allowed_tool_error(function_name))
 
     def _emit(result: Any, **extra: Any) -> Any:
         """Emit post_tool_call with this call's identity fields; returns *result*."""
@@ -984,7 +948,6 @@ def handle_function_call(
     # approval, guardrails) sees the real tool name, never the bridge.
     bridged = _dispatch_bridge_tool(
         function_name, function_args, enabled_toolsets, disabled_toolsets, ids,
-        allowed_tools=allowed_tools,
     )
     if bridged is not None:
         result, underlying = bridged
@@ -996,7 +959,6 @@ def handle_function_call(
                 underlying[1]["calls"], ids, user_task=user_task,
                 enabled_tools=enabled_tools, middleware_trace=trace,
                 enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
-                allowed_tools=allowed_tools,
             ), duration_ms=_elapsed_ms(start))
         # The caller's skip_* flags describe the WRAPPER call it already policed, never the
         # underlying tool: forwarding them left the real tool with no pre_tool_call hook,
@@ -1007,14 +969,11 @@ def handle_function_call(
             skip_pre_tool_call_hook=False, skip_tool_request_middleware=False,
             skip_tool_execution_middleware=False, tool_request_middleware_trace=list(trace),
             enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
-            allowed_tools=allowed_tools,
         )
 
     from tools.connectors import is_connector_name
     from tools.connectors.gateway.names import parse_connector_name
     if function_name == "manage_connections" or is_connector_name(function_name):
-        if not _allowed_tool_name(function_name, allowed_tools):
-            return _emit(tool_error(_allowed_tool_error(function_name)))
         if "manage_connections" not in _select_tool_names(enabled_toolsets, disabled_toolsets, quiet_mode=True):
             return _emit(tool_error("Connectors are not available in this session."))
         if is_connector_name(function_name) and parse_connector_name(function_name) is None:
@@ -1044,7 +1003,7 @@ def handle_function_call(
         # duration_ms (monotonic) is exposed to post_tool_call / transform_tool_result.
         start = time.monotonic()
         result = _execute_tool(function_name, function_args, original_args, ids, user_task=user_task,
-                               enabled_tools=enabled_tools, allowed_tools=allowed_tools,
+                               enabled_tools=enabled_tools,
                                skip_tool_execution_middleware=skip_tool_execution_middleware)
         duration_ms = _elapsed_ms(start)
         _emit(result, duration_ms=duration_ms)

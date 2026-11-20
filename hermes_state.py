@@ -342,48 +342,27 @@ class _SessionDB:
         return None if record is None else record.as_session_row()
 
     @_held
-    def update_session_tool_names(self, session_id: "str", pin: "Any", *, preserve_cache: "bool" = False) -> None:
-        """Fork entry point: the pin plus the durable `_tool_permissions` sidecar."""
-        from hermes_state_tool_permissions import SessionToolPermissionMixin
-        SessionToolPermissionMixin.update_session_tool_names(self, session_id, pin, preserve_cache=preserve_cache)
+    def update_session_tool_names(self, session_id: "str", pin: "Any") -> None:
+        """Persist the ``tools[]`` pin through the conversation store."""
+        self._store.sessions.update_session_tool_names(session_id, pin)
 
     @_held
     def update_conversation_model_config_value(self, session_id: "str", key: "str", update: "Any") -> "Optional[str]":
         """Fork entry point: read one ``model_config`` key and write ``update(value)`` back."""
-        from hermes_state_tool_permissions import PERMISSION_KEY
-        if key == PERMISSION_KEY:
-            raise ValueError("the tool permission sidecar is reserved for the permission writer")
         sessions = self._store.sessions
         sessions.patch_model_config(session_id, {key: update(sessions.get_model_config_value(session_id, key))})
         return session_id
 
     @_held
     def update_session_meta(self, session_id: "str", model_config_json: "str", model: "Optional[str]" = None) -> None:
-        """Fork entry point: merge a whole config in, keeping the reserved permission sidecar."""
-        from hermes_state_runtime import _store_of
-        from hermes_state_tool_permissions import _parse_model_config, preserve_tool_permission
-        sessions = _store_of(self).sessions
-        record = sessions.get(session_id)
-        if record is None:
-            return
-        config = preserve_tool_permission(record.model_config, _parse_model_config(model_config_json))
-        sessions.patch_model_config(session_id, dict(config))
-        if model:
-            sessions.update_model(session_id, model)
+        """Replace ``model_config``/``model`` on the conversation record."""
+        self._store.sessions.update_session_meta(session_id, model_config_json, model)
 
     @_held
     def patch_session_model_config(self, session_id: "str", patch: dict) -> None:
         """Fork entry point: merge ``patch`` into ``model_config`` (None removes a key)."""
-        from hermes_state_tool_permissions import PERMISSION_KEY
         if not session_id or not patch:
             return
-        if PERMISSION_KEY in patch:
-            stored = self._store.sessions.get_model_config_value(session_id, PERMISSION_KEY)
-            if patch[PERMISSION_KEY] != stored:
-                raise ValueError("the tool permission sidecar is reserved for the permission writer")
-            patch = {key: value for key, value in patch.items() if key != PERMISSION_KEY}
-            if not patch:
-                return
         self._store.sessions.patch_model_config(session_id, patch)
 
     @_held

@@ -395,9 +395,6 @@ def resolve_invoke_tool_executor(agent, function_name: str) -> Optional[InlineTo
     Precedence: todo_list/session_search/memory, then memory-manager tools, then the
     remaining inline tools (``message_agent`` excluded).
     """
-    from tools.delegate_tool_scope import tool_name_allowed
-    if not tool_name_allowed(agent, function_name):
-        return None
     if function_name in INVOKE_TOOL_PRE_MEMORY_MANAGER_NAMES:
         return INLINE_TOOL_EXECUTORS[function_name]
     if is_memory_provider_tool(agent, function_name):

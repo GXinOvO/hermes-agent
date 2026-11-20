@@ -44,9 +44,6 @@ def _reserve_child_transcript(child: Any) -> None:
                 model_config={"_delegate_from": parent_sid} if parent_sid else None,
             )
         child._session_db_reserved = True
-        if getattr(child, "allowed_tools", None) is not None:
-            from tools.mcp_tool_agent import persist_agent_tool_names
-            persist_agent_tool_names(child)
     except BaseException:
         # Ownership has transferred, but the child is not attached or published yet.
         child.close()

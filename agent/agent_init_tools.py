@@ -19,8 +19,6 @@ def inject_context_engine_tools(agent):
     # context engine tools follow the same gating pattern as memory provider tools — without the gate,
     # `platform_toolsets: telegram: []` would still leak lcm_* tools into the tool surface and incur the
     # same local-model latency penalty.
-    from tools.delegate_tool_allowlist import explicit_allowed_tools
-    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     agent._context_engine_tool_names = set()
     if (
         agent.context_compressor
@@ -43,8 +41,6 @@ def inject_context_engine_tools(agent):
                 )
                 continue
             _tname = _schema["name"]
-            if allowed_tools is not None and _tname not in set(allowed_tools):
-                continue
             if _tname in _existing_tool_names:
                 continue  # already registered via plugin/cache path
             agent.tools.append({"type": "function", "function": _schema})

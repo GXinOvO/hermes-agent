@@ -201,14 +201,7 @@ class CronScheduler(ABC):
     def claim_fire(self, job_id: str, *, force: bool = False, manual: bool = False) -> dict | None:
         """Durably claim one fire + create its audit attempt. Transports call this synchronously
         before acknowledging, then pass the exact snapshot to ``fire_claimed`` off-thread."""
-        from cron.install_gate import InstallInProgress, install_gate
-        from cron.jobs import _current_cron_store
-
-        try:
-            with install_gate(_current_cron_store().cron_dir.parent):
-                return self._claim_fire_admitted(job_id, force=force, manual=manual)
-        except InstallInProgress:
-            return None
+        return self._claim_fire_admitted(job_id, force=force, manual=manual)
 
     def _claim_fire_admitted(self, job_id: str, *, force: bool, manual: bool) -> dict | None:
         from cron.executions import create_execution, finish_execution, set_execution_occurrence
@@ -395,27 +388,18 @@ def fire_overdue_jobs(
     return fired
 
 
-def resolve_cron_scheduler(*, capability_probe=False) -> CronScheduler:
+def resolve_cron_scheduler() -> CronScheduler:
     """Resolve ``cron.provider``; missing/failing/unavailable providers fall back to the built-in
     with a warning — cron must never be left without a trigger."""
     name = ""
     try:
-        if capability_probe:
-            from cron.install_capability import probe_provider_name
-            name = probe_provider_name()
-        else:
-            from hermes_cli.config import cfg_get, load_config
-            name = (cfg_get(load_config(), "cron", "provider", default="") or "").strip()
+        from hermes_cli.config import cfg_get, load_config
+        name = (cfg_get(load_config(), "cron", "provider", default="") or "").strip()
     except Exception:
-        if capability_probe:
-            raise
+        pass
 
     if not name or name in ("builtin", "in-process", "inprocess"):
         return InProcessCronScheduler()
-
-    if capability_probe:
-        from cron.install_capability import CapabilityUnavailable
-        raise CapabilityUnavailable("external provider probe would load plugin code; installation refused")
 
     try:
         from plugins.cron_providers import load_cron_scheduler

@@ -17,7 +17,7 @@
 | F05 | 子 Agent 交付检查与结果找回 | 核对真实产物，复用有效验证证据；错过回调后读取原结果 | `delegate_task(action="result", delegation_id=...)`；结构化交付按需用检查脚本；已合入 |
 | F06 | 后台通知降噪与未完成工作提示 | 已消费的心跳和子任务内部进程退出不反复打断主任务；子任务未做完仍保留进展并提示 | 后台进程／委派自动路径；已合入 |
 | F07 | `execute_code` 显式只读并行批次 | 一次组织多个独立文件读取、搜索或网页读取，保留预算、取消和调用身份 | 本地 transport 的 `hermes_tools.parallel`；需 Agent 显式使用；已合入 |
-| F08 | 每个子 Agent 的精确工具白名单 | 审查任务只给读取工具，纯文本任务可不给工具；恢复后仍保留限制 | `delegate_task(tasks=[{"allowed_tools": [...], ...}])`；省略保持继承，`[]` 为零工具；已合入 |
+| F08 | ~~每个子 Agent 的精确工具白名单~~ | 已移除（2026-11-20）：委派 schema、Agent 构造参数、执行期校验与恢复路径全部删除；子 Agent 回到上游语义（继承父级 toolsets + 固定角色黑名单）。删除前实测 381 个 task 用过该参数，但收益从未测量，且带 `terminal`/`execute_code` 的“只读”名单并不提供只读保证 | 删除依据见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F09 | 后台完成结果持久化与恢复 | 已完成的后台工作可找回结果，减少因结果丢失而重跑；静默任务继续查询原句柄 | 进程、委派及受支持的后台交付路径；已合入，恢复结果不等于恢复执行 |
 | F10 | 压缩、重试、中断与工具结果可靠性 | 压缩与辅助请求留下可核回执，中断可见，等待可取消，恢复提示不污染正常历史 | 相关运行自动路径；已合入；部分能力依赖已有配置 |
 | F11 | 共享中转账号组恢复与切模型记录 | 同一 URL 多组凭据时按已存模型恢复正确分组；新建聊天切模型也能保存提示 | 会话恢复、切模型自动路径；已合入 |
@@ -33,7 +33,7 @@
 | F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
 | F22 | 会话预览过滤模型切换通知 | 新会话先切模型时，侧栏预览跳过 `model_switch` 内部行；后续真实问题正常显示，只有通知时预览为空；不改历史消息 | `hermes_state_common.py`、`tests/hermes_state/test_session_preview.py`；远端 `dev` 基线已复现，补丁通过 SessionDB 相关测试；运行安装待重载 |
 | F23 | 分叉 CI：PR 不自动跑、按需才算 | 开 PR 不再启动任何流水线（原来每次 25–55 分钟、约 280 job-分钟）；验证改在本机 `scripts/run_tests.sh`，需要时 `gh workflow run ci.yaml --ref <branch>` 手动跑。同时把 macOS 检查拆成 4 片（单 job 约 26 → 16 分钟），去掉 Docker/Nix 的 PR 触发，修好两个排队 24 小时后被取消的 blacksmith 残留 | `.github/workflows/ci.yaml`、`tests-os.yml`、`docker.yml`、`nix.yml`、`ci-review-comment.yml`、`js-autofix.yml`、`plugin-catalog-ci.yml`、`pm-bundle.yml`、`sandbox-image.yml`、`termux-verify.yml`、`windows-bundle-sdk.yml`；不变式测试通过；“PR 不再触发”待新 PR 读回 |
-| F24 | Cron 安全安装准入与可恢复发布 | 安装期间以 profile 共享/独占门阻止 claim、execution、jobs/tick 及协作 writer；持久 marker、owner/capability、发布 journal 与 target 身份漂移检查支持中断后安全恢复 | `cron/install_gate.py`、`cron/install_capability.py`、PM publication/recovery；Linux/POSIX 402 项回归及真实控制 socket 安装/恢复验证通过，独审 PASS；待生产采用 |
+| F24 | ~~Cron 安全安装准入与可恢复发布~~ | 已移除（2026-11-20）：门的独占持有者与 `.install-pending.json` 写入者只存在于测试；生产从不争用该共享锁，控制 socket 也不再有消费者。`cron/install_gate.py`、`cron/install_capability.py` 及 4 个测试文件已删除，`jobs`/`executions`/`tick`/`claim` 回到上游语义 | 删除依据与调用面见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F25 | 内置记忆维护来源与发布门禁 | 对固定每日维护作业绑定来源、运行快照和全部写入口；来源不完整时只允许精确去重，发布失败不得报告成功。Desktop 输入来源修复在真实接收时记录凭据，不回填历史；SSH 私有票据只由远端受限文件换取，签票与兑换都要求运行实例完整 | `cron/memory_audit_policy.py`、`tools/memory_tool_store.py`、`tui_gateway/input_provenance.py`；私有 SSH 票据后继已完成 v7 代码与 Linux 联通验收（含公开 token 经文件 API 取票的反例与路径保护、运行失效后签票/兑换拒绝），待新一轮独立审查、真实 Mac 新消息与运行采用；收益未证 |
 
 ## 使用时需要记住的边界
@@ -44,7 +44,6 @@
 - **F04 状态边界：** 状态、优先级和人工验收由本人控制，分析结果不覆盖；回复结束、todo 勾选、停止运行或合并 PR 都不等于事项完成。来源保存 connection、profile、stored session ID 和 authority owner 四元组，读取时再次核验；压缩续接同时保留逻辑根 ID 与原始 tip ID。Linux 隔离 Desktop 已覆盖普通会话和压缩 tip；Windows＋SSH 真实客户端、后台更新、跨会话真实使用验收、旧插件退役和数据迁移仍待完成，不把合入源码算作这些验收通过。
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
 - **F07 并行：** 只开放 `read_file`、`search_files`、`web_search`、`web_extract`，一次最多 16 项、最多 4 个工作线程，结果按输入顺序返回；写入和终端命令不在该并行入口内。格式是 `parallel([{"tool": "read_file", "args": {"path": "..."}}, ...])`，只适用于本地 transport；取消返回时，已开始的读取可能仍在收尾。
-- **F08 工具白名单：** 名称必须是父 Agent 已有且当前启用的精确原生／MCP 工具名；不接收别名和通配符。受限子 Agent 的工具名修复保持 fail-closed，不会把未授权近似名自动改名到允许工具；无限制会话仍保留自动修复路径。限制覆盖工具发现、调用和恢复；显式限制不支持的外部 Agent 路由会被拒绝。它限制 Hermes 工具调用，不代表任意代码的文件系统、网络或凭据隔离，详见[委派说明](website/docs/user-guide/features/delegation.md)。
 - **F09 结果恢复：** `/bg`、`/btw`、Cron 及进程／委派使用各自持久化结果；主进程重启不会自动续跑内存中的子 Agent。静默进程读取现有句柄；最终输出保留截断和总量信息，不保证完整日志永久可用。侧结果和终端结果受七天保留期约束；终端的 64 条历史上限只作用于已消费结果。恢复仍绑定原任务身份和目标，不能把旧结果转送到改过的作业。平台投递的接受、发出与对端确认分别判断，状态不明不能宣称已送达。
 - **F10 可靠性修复：** 本分支增加辅助请求路由／wire／进度回执、压缩输入与摘要诊断、中断说明、主动工具结果裁剪的本地无正文日志，以及恢复脚手架的历史过滤。账号策略拒绝不会因切非流式向同一服务商重发；已有分类器允许的其他 provider fallback 保留。安全提示插件兼容批量 Skill 操作，启用后默认仍仅警告；委派上下文拒绝 `skill_manage` 变更，保留技能读取。浏览器与网页提取的 URL 密钥检查改为引用现有 `agent.redact`，保留原凭据匹配和拒绝规则；导入修复已隔离验证，运行进程采用仍待核验。这些不代表该插件是本分支新创，也不构成终端文件系统沙箱。
 - **F11 身份恢复：** 显式请求的分组仍优先；旧会话才按端点和模型恢复身份。旧／新 home 写法只有能证明指向同一现有 home 和绑定数据库时才兼容，不能泛化成任意跨机器迁移。
@@ -73,7 +72,7 @@
 | F05 | [PR #6](https://github.com/GXinOvO/hermes-agent/pull/6)、[#15](https://github.com/GXinOvO/hermes-agent/pull/15)、[#28](https://github.com/GXinOvO/hermes-agent/pull/28)；移植来源 [官方 #136266](https://github.com/NousResearch/hermes-agent/pull/136266)、[#148550](https://github.com/NousResearch/hermes-agent/pull/148550) | [执行指导](skills/autonomous-ai-agents/hermes-agent/references/task-execution.md) · [结果找回](tools/delegate_tool_registry.py) · [材料检查测试](tests/skills/test_delegated_result_lifecycle.py) |
 | F06 | [PR #7](https://github.com/GXinOvO/hermes-agent/pull/7)、[#22](https://github.com/GXinOvO/hermes-agent/pull/22)、[#24](https://github.com/GXinOvO/hermes-agent/pull/24) | [通知策略测试](tests/tui_gateway/test_child_process_notification_policy.py) · [未完成提示测试](tests/tools/test_delegate_incomplete_notice.py) |
 | F07 | [PR #26](https://github.com/GXinOvO/hermes-agent/pull/26)、[#27](https://github.com/GXinOvO/hermes-agent/pull/27)、[#31](https://github.com/GXinOvO/hermes-agent/pull/31) | [批处理实现](tools/code_execution_parallel.py) · [身份测试](tests/tools/test_code_execution_parallel_identity.py) |
-| F08 | [PR #34](https://github.com/GXinOvO/hermes-agent/pull/34) | [白名单实现](tools/delegate_tool_allowlist.py) · [恢复测试](tests/tools/test_delegate_allowlist_restore.py) · [受限工具名修复测试](tests/agent/test_restricted_tool_name_repair.py) |
+| F08 | 已移除（2026-11-20） | 运行时与存储侧全部删除，见上表 F08 行 |
 | F09 | [PR #30](https://github.com/GXinOvO/hermes-agent/pull/30)；结果恢复等直接提交见索引 | [进程结果恢复](tools/process_registry_result_recovery.py) · [后台记录测试](tests/hermes_state/test_background_results.py) · [静默结果测试](tests/tools/test_process_result_retention.py) |
 | F10 | [PR #1](https://github.com/GXinOvO/hermes-agent/pull/1)、[#16](https://github.com/GXinOvO/hermes-agent/pull/16)；后续直接提交见索引 | [压缩回执](agent/compaction_events.py) · [恢复等待测试](tests/agent/test_primary_recovery_interrupt.py) · [历史过滤测试](tests/hermes_state/test_empty_recovery_history_views.py) |
 | F11 | [PR #5](https://github.com/GXinOvO/hermes-agent/pull/5)、[#33](https://github.com/GXinOvO/hermes-agent/pull/33)；home 兼容直接提交见索引 | [账号组恢复](hermes_cli/runtime_provider_custom.py) · [测试](tests/hermes_cli/test_shared_relay_resume_identity.py) · [切模型记录测试](tests/tui_gateway/test_model_switch_marker_durability.py) |
@@ -273,6 +272,8 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 ### 上游同步（子 Agent 续跑与 fork 委派增强的交汇）
 
 截至上游 [fdb6a09a](https://github.com/NousResearch/hermes-agent/commit/fdb6a09ae9235e392d3331e7af8a103a2589853a)。本轮冲突集中在委派模块，属上游新功能与 fork 既有增强的语义交汇，不新增个人编号；F05（结果找回）、F08（子 Agent 工具白名单）、F09（完成结果持久化）与上游「继续已结束子 Agent」共用同一批文件。
+
+> 注：F08 的按任务工具白名单已于 2026-11-20 删除；本节及下文提到它的地方是当时的同步记录，不再代表当前行为。
 
 - 上游新增 `delegate_task(action='continue')`：按子 Agent 自己的会话、路由与工作区继续一次已结束的运行，并写入可恢复记录（[PR #154163](https://github.com/NousResearch/hermes-agent/pull/154163)、[3c336ac979](https://github.com/NousResearch/hermes-agent/commit/3c336ac97919b1bb9bb95550f43cc8166c328c57)、[f21b52fc68](https://github.com/NousResearch/hermes-agent/commit/f21b52fc6883f30aaa2db77eaf519a3d8d5e4de2)）。fork 的按任务工具白名单、已保存结果读取与写观察在同文件冲突，按功能各自保留，没有整文件选边。
 - 归属判定：`_owns_subagent_record` 采用上游的祖先会话集合（`ancestor_owner_session_ids`），逐个用 fork 的 `_session_owned_by` 做会话／压缩谱系校验，两边的控制面与 `action='result'` 共用同一判定。

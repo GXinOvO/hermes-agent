@@ -27,7 +27,6 @@ def test_app_server_audit_records_actual_turn_input_and_unknown_response_identit
         api_mode='codex_app_server', reasoning_config={'enabled': True, 'effort': 'max'},
         _codex_session=SimpleNamespace(run_turn=run_turn),
     )
-    monkeypatch.setattr('tools.delegate_tool_scope.validate_restricted_route', lambda *a, **k: None)
     monkeypatch.setattr(codex_runtime, '_ensure_codex_session', lambda *a: None)
     monkeypatch.setattr(codex_runtime, '_start_codex_thread', lambda *a: None)
     monkeypatch.setattr(codex_runtime, '_codex_wire_model', lambda *a: 'gpt-4o')

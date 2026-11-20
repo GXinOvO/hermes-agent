@@ -309,9 +309,9 @@ async def test_a_scheduled_wake_on_the_chat_shows_no_reaction_or_typing(tmp_path
         from gateway.pending_final import pending
         from gateway.strict_transport import supports_strict_transport
         await async_wait_until(lambda: any(v['parts'].get('text', {}).get('content') ==
-            'reply scheduled tick' for v in pending(_authority.db)), timeout=10,
+            'reply scheduled tick' for v in pending(_authority.persistence)), timeout=10,
             what='the wake reply sealed for the unsupported relay')
-        saved = next(v for v in pending(_authority.db) if
+        saved = next(v for v in pending(_authority.persistence) if
                      v['parts'].get('text', {}).get('content') == 'reply scheduled tick')
         assert not supports_strict_transport(adapter)
         assert saved['parts']['text']['state'] == 'pending'

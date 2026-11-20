@@ -34,7 +34,7 @@ async def consume(home, url, stop):
     original_claim = queue.claim_next
     original_target = delivery._prepare_target_delivery
     original_send = stages.send_target
-    original_gate = None
+    commit_probe = []
     serialized = []
     rotation = None
     adapters = {Platform.SLACK: adapter}
@@ -93,18 +93,21 @@ async def consume(home, url, stop):
             drift()
         return original_send(state, frozen)
 
-    def gate(*args, **kwargs):
-        guard = original_gate(*args, **kwargs)
+    def probe_admit(**kwargs):
+        gate = kwargs['gate']
 
-        def at_commit(conn):
+        def at_commit():
+            assert holder._conn.in_transaction
+            commit_probe.append(True)
             if settings.get('drift_at') == 'commit':
                 drift()
-            guard(conn)
-            if settings.get('drift_at') == 'serialize' and rotation is not None and not serialized:
+            if rotation is not None:
                 write_ready.set()
                 assert rotation_attempted.wait(10)
-                serialized.append(not rotated.wait(0.05))
-        return at_commit
+                assert not rotated.is_set()
+            return gate() if callable(gate) else gate
+
+        return original_admit(**{**kwargs, 'gate': at_commit})
 
     def target(job, route, **kwargs):
         if route['chat_id'] == 'DFLAT':
@@ -171,19 +174,23 @@ async def consume(home, url, stop):
             stack.enter_context(patch.object(standalone, 'prepare', cold_prepare))
         if settings.get('local'):
             stack.enter_context(patch.object(SessionAuthority, '_schedule', lambda *args: None))
-            if settings.get('drift_at'):
-                original_gate = authority._admission_gate
-                stack.enter_context(patch.object(authority, '_admission_gate', gate))
+            if settings.get('drift_at') in {'commit', 'serialize'}:
+                from hermes_state_runtime import _holder_of
+                holder = _holder_of(database)
+                original_admit = database.admissions.admit
+                stack.enter_context(patch.object(database.admissions, 'admit', probe_admit))
             if settings.get('drift_at') == 'serialize' and row['status'] in {'pending', 'delivering'}:
                 from threading import Event
                 write_ready, rotation_attempted, rotated = Event(), Event(), Event()
+                loop = asyncio.get_running_loop()
 
                 async def rotate():
                     assert await asyncio.to_thread(write_ready.wait, 15)
-                    rotation_attempted.set()
+                    loop.call_soon(rotation_attempted.set)
                     async with local_live.mutation_lock:
                         local_live.source.user_name = 'authorized-concurrent-rotation'
                         rotated.set()
+                        serialized.append(len(database.admissions.list(session_id=local_id.read_text())) == 1)
 
                 rotation = asyncio.create_task(rotate())
         count = await asyncio.to_thread(scheduler.drain_delivery_queue,
@@ -200,6 +207,7 @@ async def consume(home, url, stop):
     print(json.dumps({'processed': count, 'pid': os.getpid(), 'row': queue.get_status('fanout-exec'),
         'local_messages': transcript_rows(database, local_id.read_text(), TranscriptRead(view=TranscriptView.ALL)) if settings.get('local') else [],
         'local_admissions': local_admissions if settings.get('local') else [],
+        'commit_probe': commit_probe,
         'serialized': serialized,
         'sessions': {key: {'id': entry.session_id, 'transcript': adapter._session_store.load_transcript(entry.session_id)}
                      for key, entry in adapter._session_store._entries.items()}}), flush=True)

@@ -495,12 +495,7 @@ def _scope_tools(agent: Any, tools: list[dict[str, Any]]) -> tuple[list[dict[str
     surface = [tool for tool in tools if _tool_def_name(tool) not in drops] if drops else list(tools)
     if agent_is_oneshot(agent) or agent_joins_delegation(agent):
         surface = oneshot_tool_schemas(surface)
-    from tools.delegate_tool_allowlist import explicit_allowed_tools
-    allowed = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
-    if allowed is not None:
-        from tools.delegate_tool_allowlist import filter_tool_defs_by_allowlist
-        surface = filter_tool_defs_by_allowlist(surface, allowed)
-    return surface, bool(drops) or allowed is not None
+    return surface, bool(drops)
 
 
 def _rescope_bridge(agent: Any, surface: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -22,7 +22,6 @@ from typing import Any, Dict, Iterator, List, Optional
 from hermes_constants import get_hermes_home
 from hermes_time import now as _hermes_now
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM
-from cron.install_gate import install_gate
 from hermes_cli.observability.shared_metrics_gateway import record_cron_finish
 
 logger = logging.getLogger(__name__)
@@ -242,9 +241,7 @@ def _prune_unlocked(conn: sqlite3.Connection) -> None:
 def create_execution(
     job_id: str, *, source: str, scheduled_instant: Optional[str] = None,
 ) -> dict[str, Any]:
-    home = Path(EXECUTIONS_FILE).parent.parent if EXECUTIONS_FILE else get_hermes_home()
-    with install_gate(home):
-        return _create_execution(job_id, source=source, scheduled_instant=scheduled_instant)
+    return _create_execution(job_id, source=source, scheduled_instant=scheduled_instant)
 
 
 def _create_execution(

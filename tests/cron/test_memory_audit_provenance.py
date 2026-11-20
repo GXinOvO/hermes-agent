@@ -103,7 +103,8 @@ def test_malformed_admission_principal_is_uncertain_not_collection_failure(colle
             ('', receipt['admission_id'])))
         db.messages.append(
             'malformed', NewMessage(role='user', content='malformed principal input',
-            timestamp=START.timestamp() + 60, message_uid='malformed-uid'))
+            timestamp=START.timestamp() + 60, message_uid='malformed-uid',
+            display_metadata={'submission_id': 'malformed-request'}))
     finally:
         db.close()
     result = module.collect_history(home / 'state.db', START, END)

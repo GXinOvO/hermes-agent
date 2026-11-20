@@ -267,9 +267,9 @@ async def test_stamped_profile_completion_finds_its_relay_after_a_restart(tmp_pa
             authority = second.session_authorities.for_home(homes[1][1])
             expected = 'reply ' + turns[0][0]
             await async_wait_until(lambda: any(v['parts'].get('text', {}).get('content') == expected
-                for v in pending(authority.db)), timeout=10,
+                for v in pending(authority.persistence)), timeout=10,
                 what='the completion sealed for the unsupported relay')
-            saved = next(v for v in pending(authority.db) if
+            saved = next(v for v in pending(authority.persistence) if
                          v['parts'].get('text', {}).get('content') == expected)
             assert not supports_strict_transport(_adapter)
             assert saved['parts']['text']['state'] == 'pending'

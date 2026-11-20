@@ -129,7 +129,7 @@ def validate_tool_calls(
     # Repair mismatched tool names before validating (model hallucinations).
     repaired_ids = set()
     for tc in tool_calls:
-        if tc.function.name not in valid_names and getattr(agent, "allowed_tools", None) is None:
+        if tc.function.name not in valid_names:
             if _route_deferred_call(agent, tc):
                 repaired_ids.add(id(tc))
                 continue

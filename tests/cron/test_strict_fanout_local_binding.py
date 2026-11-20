@@ -16,6 +16,8 @@ async def test_local_plan_drift_refused_before_admission(tmp_path, monkeypatch, 
     assert first['row']['status'] == second['row']['status'] == 'unknown'
     assert first['local_admissions'] == second['local_admissions'] == []
     assert first['local_messages'] == second['local_messages'] == []
+    assert first['commit_probe'] == ([True] if when == 'commit' else [])
+    assert second['commit_probe'] == []
     assert events == wire and len(events) == 2
 
 
@@ -41,5 +43,6 @@ async def test_local_route_rotation_waits_for_admission_commit(tmp_path, monkeyp
         second = await owner(tmp_path, url)
     assert first['row']['status'] == second['row']['status'] == 'delivered'
     assert first['serialized'] == [True]
+    assert first['commit_probe'] == [True] and second['commit_probe'] == []
     assert len(first['local_admissions']) == len(second['local_admissions']) == 1
     assert len(events) == 3

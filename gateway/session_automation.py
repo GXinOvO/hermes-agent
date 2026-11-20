@@ -663,7 +663,7 @@ def restore_local_automation(authority, ref, row):
     return event
 
 
-async def admit_automation(authority, adapter, event, identity, replaces=None, fold=None):
+async def admit_automation(authority, adapter, event, identity, replaces=None, fold=None, check=None):
     """``replaces``: a queued automation row of the same session this input supersedes (a liveness
     tick carrying the output of the one still waiting). Its cancellation commits in this admission's
     own transaction, so neither lands without the other. ``fold``: ``replaces`` is a completion this
@@ -690,6 +690,7 @@ async def admit_automation(authority, adapter, event, identity, replaces=None, f
                 authority._settle_cancelled(ref, replaces)
             return admitted(row)
     store, payload = authority_persistence(authority), deepcopy(payload)
+    gate = partial(authority.gate_refusal, check)
     from persistence.authority.admissions import QueuedFold
 
     def admit():
@@ -698,7 +699,7 @@ async def admit_automation(authority, adapter, event, identity, replaces=None, f
         # queued tail but for the finishing process's ticks.
         row, created = store.admissions.admit(
             epoch=authority.epoch, principal_id='automation:' + entry.session_key, session_id=ref.session_id,
-            request_id=identity, payload=payload, gate=authority.gate_refusal(),
+            request_id=identity, payload=payload, gate=gate,
             supersedes=replaces if fold is None else None,
             fold=None if fold is None else QueuedFold(replaces, frozenset(fold)))
         replaced[:] = [replaces] if created and replaces is not None else []
@@ -889,7 +890,7 @@ async def reset_and_rehome_messages(runner, session_key, old_session_id):
     return entry, release
 
 
-async def admit_route_wake(runner, adapter, source, text, producer, metadata=None):
+async def admit_route_wake(runner, adapter, source, text, producer, metadata=None, check=None):
     """Commit a producer wake (Kanban push wake, /loop tick) for ``source``'s route into the
     authority FIFO, like heartbeats and process completions, instead of a classic turn that
     interrupts or races the admitted one. ``False`` when no authority serves the scope or the
@@ -918,7 +919,7 @@ async def admit_route_wake(runner, adapter, source, text, producer, metadata=Non
                              message_id=identity, metadata={'gateway_session_key': key,
                                                             'gateway_session_id': entry.session_id,
                                                             **(metadata or {})})
-        await authority.admit_automation(adapter, event, identity)
+        await authority.admit_automation(adapter, event, identity, check=check)
         return True
     from gateway.session_envelope import restore_native
     envelope = committed_route_envelope(authority, entry)
@@ -931,5 +932,5 @@ async def admit_route_wake(runner, adapter, source, text, producer, metadata=Non
                          message_id=identity, metadata={'gateway_session_key': key,
                                                         'gateway_session_id': entry.session_id,
                                                         **(metadata or {})})
-    await authority.admit_automation(adapter, event, identity)
+    await authority.admit_automation(adapter, event, identity, check=check)
     return True

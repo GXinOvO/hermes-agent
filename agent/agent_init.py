@@ -931,8 +931,6 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
 def _build_client(agent, api_key, base_url, fallback_model):
     # LLM client per wire mode (raw_codex=True: the main agent needs direct
     # responses.stream()). One provider/model timeout up front so every path applies it.
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent)
     agent._anthropic_client = None
     agent._is_anthropic_oauth = False
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
@@ -1019,18 +1017,12 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     agent._configured_disabled_toolsets, disabled_toolsets = disabled_toolsets, session_disabled_toolsets(
         disabled_toolsets, getattr(agent, "platform", None), oneshot=agent_is_oneshot(agent))  # pin restore reads both
     agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
-    from tools.delegate_tool_allowlist import explicit_allowed_tools, filter_tool_defs_by_allowlist
-    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
     agent._tool_snapshot_selection = tool_selection_key(enabled_toolsets, disabled_toolsets)  # tools[] freeze gate
     agent.tools = agent_tool_surface(agent, model_tools.get_tool_definitions(
         enabled_toolsets=enabled_toolsets,
         disabled_toolsets=disabled_toolsets,
         quiet_mode=agent.quiet_mode,
-        skip_tool_search_assembly=allowed_tools is not None,
     ) or [])
-    allowed_tools = explicit_allowed_tools(getattr(agent, "allowed_tools", None))
-    if allowed_tools is not None:
-        agent.tools = filter_tool_defs_by_allowlist(agent.tools, allowed_tools)
     agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools} if agent.tools else set()
     # Kanban guidance is session-static for the dispatcher-owned worker only. Profiles may
     # expose kanban_show interactively, and children/cron runs inherit the env var, without
@@ -2038,7 +2030,6 @@ def init_agent(
     requested_provider: str | None = None, capabilities: Optional[dict[str, bool]] = None, cwd: Optional[str] = None,
     side_agent: bool = False, memory_manager=None, memory_agent_context: str | None = None,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
-    allowed_tools: list[str] | None = None,
 ):
     from agent.safe_worker_policy import safe_worker_enabled
 
@@ -2049,8 +2040,6 @@ def init_agent(
         fallback_model = {}
     _install_safe_stdio()
 
-    from tools.delegate_tool_allowlist import normalize_constructor_allowed_tools
-    allowed_tools = normalize_constructor_allowed_tools(allowed_tools)
     _params = locals()
     for _name in _PASSTHROUGH_PARAMS:
         setattr(agent, _name, _params[_name])
@@ -2088,8 +2077,6 @@ def init_agent(
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
     _resolve_api_mode(agent, api_mode, provider_name, base_url)
-    from tools.delegate_tool_scope import validate_restricted_route
-    validate_restricted_route(agent)
     _finalize_routing(agent, api_mode, credential_pool)
 
     # Platform callbacks are stored under their parameter names verbatim.
