@@ -17,6 +17,7 @@ import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tools.terminal_tool import set_approval_callback as _set_subagent_approval_cb
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,11 @@ from tools.delegate_tool_child_run import (
     _lease_child_credential, _merge_late_steer, _register_child, _reserve_child_transcript, _Heartbeat, _validate_child_output_schema,
 )
 from tools.delegate_tool_config import (
-    _DEFAULT_MAX_CONCURRENT_CHILDREN, _get_max_concurrent_children,
-    _get_max_spawn_depth, _get_oneshot_max_children, _get_orchestrator_enabled,
-    _inherit_parent_capabilities, _merge_request_overrides, _resolve_child_credential_pool,
+    _DEFAULT_MAX_CONCURRENT_CHILDREN, _HEARTBEAT_INTERVAL, _HEARTBEAT_STALE_CYCLES_IDLE,
+    _HEARTBEAT_STALE_CYCLES_IN_TOOL, _STALE_RESULT_GRACE_SECONDS, _get_child_timeout,
+    _get_max_concurrent_children, _get_max_spawn_depth, _get_oneshot_max_children,
+    _get_orchestrator_enabled, _get_subagent_approval_callback, _get_worktree_isolation,
+    _inherit_parent_capabilities, _load_config, _merge_request_overrides, _resolve_child_credential_pool,
     _resolve_child_runtime,
     _subagent_auto_approve, _subagent_auto_deny,
 )

@@ -776,6 +776,8 @@ def _restore_pinned_tools(agent, session_row) -> list:
         pin = json.loads(saved_tools) if saved_tools else None
     except ValueError:
         pin = None
+    if not (isinstance(pin, list) or (isinstance(pin, dict) and isinstance(pin.get("tools"), list))):
+        pin = None
     try:
         if pin:
             restore_agent_tool_prefix(agent, pin)

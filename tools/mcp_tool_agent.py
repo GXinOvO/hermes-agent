@@ -228,8 +228,6 @@ def persist_agent_tool_names(agent) -> None:
     session_id = getattr(agent, "session_id", None)
     if not db or not session_id:
         return
-    if getattr(agent, "_tool_authority_unknown", False):
-        return  # restore already refused before execution; preserve the unknown raw state
     try:
         pin = {"version": tool_pin_version(), "tools": _agent_tool_defs(agent)}
         if isinstance(backend := getattr(agent, "_delegation_backend", None), str) and backend:

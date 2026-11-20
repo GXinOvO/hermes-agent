@@ -17,6 +17,10 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 _RUNTIME_PROVIDER_CUSTOM = "custom"
 
 _DEFAULT_MAX_CONCURRENT_CHILDREN = 10
+_HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during delegation
+_HEARTBEAT_STALE_CYCLES_IDLE = 15  # 450s idle between turns → stale
+_HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 1200s stuck on same tool → stale
+_STALE_RESULT_GRACE_SECONDS = 2.0
 # One-shot guard: _get_max_concurrent_children() runs on every get_definitions()
 # schema rebuild, so the >10 cost advisory would otherwise log on every turn.
 _HIGH_CONCURRENCY_WARNED = False

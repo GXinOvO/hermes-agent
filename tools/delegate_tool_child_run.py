@@ -16,7 +16,13 @@ from agent.compression_marker import elide
 from agent.interrupt_compat import request_hard_interrupt
 from dataclasses import dataclass, field
 from tools import file_state
-from tools.delegate_tool_progress import _quiet, _safe_progress
+from tools.delegate_tool_config import (
+    _HEARTBEAT_INTERVAL, _HEARTBEAT_STALE_CYCLES_IDLE, _HEARTBEAT_STALE_CYCLES_IN_TOOL,
+    _STALE_RESULT_GRACE_SECONDS, _get_child_timeout, _get_subagent_approval_callback,
+    _get_worktree_isolation,
+)
+from tools.delegate_tool_progress import _quiet, _resolve_workspace_hint, _safe_progress
+from tools.terminal_tool import set_approval_callback as _set_subagent_approval_cb
 from tools.delegate_tool_registry import (
     _capture_gateway_steer_authority, _close_subagent_steering, _mark_subagent_resumable, _register_subagent,
     _unregister_subagent,
@@ -33,19 +39,16 @@ def _reserve_child_transcript(child: Any) -> None:
     from agent.runtime_session_store import RuntimeSessionStore
 
     db = child._session_db
-    if db is None or child._persist_disabled:
+    if db is None or child._persist_disabled or isinstance(db, RuntimeSessionStore):
         return
     try:
-        if not isinstance(db, RuntimeSessionStore):
-            parent_sid = child._parent_session_id
-            db.create_session(
-                session_id=child.session_id, source="subagent",
-                parent_session_id=parent_sid,
-                model_config={"_delegate_from": parent_sid} if parent_sid else None,
-            )
+        parent_sid = child._parent_session_id
+        from persistence.conversation.sessions import NewSession
+        child.persistence.sessions.create(NewSession(
+            session_id=child.session_id, source="subagent", parent_session_id=parent_sid,
+            model_config={"_delegate_from": parent_sid} if parent_sid else None))
         child._session_db_reserved = True
     except BaseException:
-        # Ownership has transferred, but the child is not attached or published yet.
         child.close()
         raise
 
@@ -348,7 +351,6 @@ class _Heartbeat:
 
     def start(self) -> None:
         from agent.periodic_scheduler import schedule
-        from tools.delegate_tool import _HEARTBEAT_INTERVAL
         self.handle = schedule(self.tick, _HEARTBEAT_INTERVAL)
 
     def stop(self) -> None:
@@ -358,7 +360,6 @@ class _Heartbeat:
 
     def tick(self):
         """Returning False stops the periodic callback."""
-        from tools.delegate_tool import _HEARTBEAT_INTERVAL, _HEARTBEAT_STALE_CYCLES_IDLE, _HEARTBEAT_STALE_CYCLES_IN_TOOL
         child, parent_agent, task_index, last_seen = self.child, self.parent_agent, self.task_index, self.last_seen
         if self.checkpoint is not None:
             with _quiet("Durable subagent checkpoint failed: %s"):
@@ -451,7 +452,6 @@ def _create_isolated_worktree(parent_agent: Any, parent_task_id: Any, subagent_i
     """Opt-in worktree isolation: own git worktree off the parent's HEAD (the
     child's terminal starts there). Git-only, local-backend-only; failures
     degrade silently to the shared workspace. Returns the worktree info or None."""
-    from tools.delegate_tool import _get_worktree_isolation, _resolve_workspace_hint
     if not _get_worktree_isolation():
         return None
     with _quiet("worktree isolation setup failed: %s"):
@@ -937,7 +937,7 @@ class _ChildRun:
         """Close steer acceptance (see ``_merge_late_steer``); returns late steer text, if any."""
         return _close_subagent_steering(self.subagent_id, self.child) if self.subagent_id else None
 
-    def wait_liveness_aware(self, settled: threading.Event, child_future: Any, child_timeout: Optional[float]) -> None:
+    def wait_liveness_aware(self, settled: threading.Event, child_timeout: Optional[float]) -> None:
         """Wait for the worker or the stale verdict, where ``child_timeout`` bounds INACTIVITY, not total runtime.
 
         A configured cap used to be a dispatch-to-death stopwatch, so it only ever killed children the runtime had
@@ -988,9 +988,6 @@ class _ChildRun:
         via a Future done-callback (``close_deferred=True``) — closing here would race its still-unwinding finally
         path.
         """
-        from tools.delegate_tool import (
-            _STALE_RESULT_GRACE_SECONDS, _get_child_timeout, _get_subagent_approval_callback, _set_subagent_approval_cb,
-        )
         from tools.daemon_pool import DaemonThreadPoolExecutor
         child, task_index = self.child, self.task_index
         child_timeout = _get_child_timeout()
@@ -1031,7 +1028,7 @@ class _ChildRun:
         # Set when the stale verdict — not the configured cap — ended the wait; the entry must name that cause.
         stale_after: Optional[float] = None
         try:
-            self.wait_liveness_aware(settled, future, child_timeout)
+            self.wait_liveness_aware(settled, child_timeout)
             if not future.done():
                 stale_after = getattr(self.heartbeat, "stale_threshold_seconds", None)
                 if stale_after is None:
