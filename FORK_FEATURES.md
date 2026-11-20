@@ -27,7 +27,7 @@
 | F15 | ~~进程归属终端与受保护项目卷~~ | 已移除（2026-11-20）：未生产采用；3,057 行核心插件与 9 个专用测试删除。进程隔离改由沙箱后端（Docker/SSH/Modal 等）承担，结果归属只保留运行时契约 | 删除依据见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
-| F18 | 合入后自动补记个人功能 | `dev` 更新后用 DeepSeek 检查差异、归并已有条目并补漏，模型输出不完整或编辑不匹配时自动拆批重试，直接提交本清单 | GitHub Actions → Update personal feature catalog；专用服务器 Runner，需 Secret 和模型变量 |
+| F18 | ~~合入后自动补记个人功能~~ | 已移除（2026-11-20）：工作流、脚本与 5 个专用测试删除；功能清单改为人工维护交付目录的 `FEATURES-DECISION.md`（未入库） | 原 GitHub Actions → Update personal feature catalog 已删除 |
 | F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
 | F20 | Cron provider 请求审计 | 记录每次 Cron 请求的初始/实际路由、重试、推理参数、SDK 调用与响应身份，敏感值不入账；app-server 只观测子进程接口参数，子 Agent、ACP 与 MoA 下游未覆盖 | `cron/usage_audit.jsonl`；隔离验证，待部署后的自然运行读回 |
 | F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
@@ -53,7 +53,7 @@
 - **F15（已移除 2026-11-20）：** 原 `owned-process` 插件按命令代次管理本地进程并提供候选受保护卷；因未生产采用、需要 Linux namespace 与手工配置、上游已有可插拔沙箱后端和 `cleanup_stops_processes` 契约，插件、测试与文档链接已删除。历史边界与删除依据见交付目录 `FEATURES-DECISION.md`。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。write/patch 的原始 NT/device 命名空间拒绝提前到后端初始化前，既有拒绝规则不变；该顺序修复已隔离验证，运行采用待核验。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
-- **F18 自动补记：** [工作流](.github/workflows/fork-catalog.yml)只响应本仓库 `dev` 的非纯清单推送，用仓库 Secret `FORK_CATALOG_API_KEY` 和变量 `FORK_CATALOG_BASE_URL`、`FORK_CATALOG_MODEL` 调用模型；当前指定 `deepseek-v4.1-flash`，请求 `reasoning_effort=max`，无其他模型回退。按变更路径拆成受限证据批次串行处理，`evals/*/results/` 下的运行产物不计入审查路径，模型输入不包含隐藏检查点；批次内模型输出不完整或编辑片段无法唯一匹配时自动二分重试，单路径仍失败则整次失败。工作流单次超时上限为 60 分钟；在专用 Runner 的 tool cache 中保存当前审查目标、已验证批次响应和二分决定，跨重跑仅复用模型、接口、脚本、完整证据及前序清单均一致的缓存；恢复时先完成原目标，较新提交留待下一轮。缓存不保存 API key，进度逐批实时输出。续跑校验工作目录中的清单仍与当前 checkout HEAD 一致，已提交的清单更新可继续审查；审查目标仍固定为原 target。响应仅对 JSON 非法反斜杠作有界转义修复，其他结构错误仍拒绝；GitHub PR 响应读取中断仅重试一次，未完整读到仍失败。脚本更新会使旧缓存身份失效。全部批次成功后才原子写入本清单并推进隐藏检查点，失败或超时不推进标记，不创建额外 PR。模型输出经编号、来源、章节保留检查，内容仍可能判断有误；单个变更路径超过批次上限时失败，需要 Agent 人工核对清单。专用 Runner 需要服务器在线，当前接口是用户选择的内网 HTTP；工作流结果可在 [Actions](https://github.com/GXinOvO/hermes-agent/actions) 查看。
+- **F18（已移除 2026-11-20）：** 原工作流在每次 dev push 后用 DeepSeek 审查差异并直接提交 `FORK_FEATURES.md`；因专用 Runner/Secret/模型依赖、连续失败与两份清单漂移，工作流、脚本和 5 个专用测试已删除。功能清单改为人工维护交付目录的 `FEATURES-DECISION.md`。
 
 - **F19 交接摘要护栏：** 只按可见答复的形状判定（`<analysis>` 包裹 + `</summary>` + 至少三条九节标题 + ≥1500 字符），不是按模型、provider 或上下文大小判定——实测同一请求在 68k 与 280k tokens 下都出现过，与规模无关。用户明确要求总结、摘要、回顾、交接时（中英文关键词）一律不拦，此时文档就是答案。
   **根因边界（2026-11-13 实测）：** 这是“种子 + 自我繁殖”两段，不能混为一谈。种子是模型倾向：近 30 天 550 个会话、23,103 次调用里 deepseek-v4.1-flash 出 63 篇（2.73 篇/千次），gpt-6.1-sol 0.13、terra 0.25、mimo 0.55，gpt-6-astra 在 29,180 次调用里为 0——差 21 倍，所以体感是“deepseek 有、别的没有”。繁殖是客户端侧：文档留在上下文里就成了范例，同一会话内实测 1→2→3 篇递增（受影响会话均值约 1.75 篇）；`session_search` 回放旧会话又会把别处的文档搬进来（实测 42KB/53KB 的工具结果里含完整文档）。DSH 等其它客户端没有这两条回路，所以同一模型在那里不出现。**种子本身仍未定位**：整份 payload 原样回放 24 次只出 2 次（约 8%），temperature=0/1、换措辞、截断上下文都不改变它，客户端这一侧已无可控变量；要定位得拿 response ID（如 `021794577272598aef91fec3a81c53339a5720099214cde8963a5`）去查中转上游日志。
@@ -126,7 +126,7 @@
 
 | 编号 | 实现与验证入口 |
 | --- | --- |
-| F18 | [工作流](.github/workflows/fork-catalog.yml) · [模型补记脚本](scripts/ci/update_fork_catalog.py) · [测试](tests/scripts/test_update_fork_catalog.py)；引入 [de05b120f7d](https://github.com/GXinOvO/hermes-agent/commit/de05b120f7d830543ce2172c93a103ba948cd253)，稀疏检出修复 [7826b9496f1](https://github.com/GXinOvO/hermes-agent/commit/7826b9496f1cb1b823797b21a772d379d84a0c63)，批次化超时调整 [ca84e46598c](https://github.com/GXinOvO/hermes-agent/commit/ca84e46598c6bebcf28c96cc259565f7a02a5123)，编辑不匹配/批次不完整重试 [228af08b8](https://github.com/GXinOvO/hermes-agent/commit/228af08b8ff8e86cfe4c21ca2792e876162bc98b)、[abf2b85c](https://github.com/GXinOvO/hermes-agent/commit/abf2b85cc8f821149c1e46b4427057c813ad1929)，向模型隐藏检查点 [63812ace](https://github.com/GXinOvO/hermes-agent/commit/63812ace0f10905281c39eed3575db904139f078)，排除 `evals/*/results/` 运行产物 [fe0f5dbb47](https://github.com/GXinOvO/hermes-agent/commit/fe0f5dbb47252714a02bb9d43c324814bc218363)，避免其触发单路径证据上限；代码合入和服务器部署状态分别核对 |
+| F18 | 已移除（2026-11-20） | 工作流、脚本与专用测试已删除；原因见交付目录 `FEATURES-DECISION.md` |
 | F22 | 本次修复的 [会话预览过滤](hermes_state_common.py) · [回归测试](tests/hermes_state/test_hermes_state.py)；远端 `dev` 基线两条用例均失败，修复后 SessionDB 相关测试通过，提交和运行安装状态随 PR 读回 |
 | F23 | [ci.yaml 触发](.github/workflows/ci.yaml) · [tests-os 分片](.github/workflows/tests-os.yml) · [不变式测试](tests/ci/test_personal_fork_runners.py)；改造前 23 次 PR CI 合计 6156 job-分钟（常态 280/次，墙钟 25–55 分钟），macOS 单 job 19.2 分钟测试 + 5.7 分钟装依赖。曾尝试用导入冒烟门禁（单进程 `pytest --collect-only`）：实测 4 分 43 秒，失败后 12 个测试分片被整体跳过、PR 没有 Python 测试结果，已撤回。现在只有 `label-rerun.yml` 仍响应 `pull_request: labeled`（加 `run-e2e` 标签才触发），其余工作流在 PR 上零触发 |
 
@@ -318,6 +318,6 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 3. “已合入”“本地测试通过”“当前安装已启用”“真实行为验收通过”“收益已测量”分别记录；未知就写未知。测试入口不冒充测试回执，预计提速不冒充测量结果。
 4. README 只保留入口和一句用途；本文件作为唯一功能总表，不再复制一份容易失步的清单。提交历史保留实现细节，本表负责让人记得功能。
 
-根目录 [AGENTS.md](AGENTS.md) 同时提示后续 Agent 更新本表；F18 在合入后补漏。Agent 应在功能交付中主动补记，不必等待自动工作流。自动化验证的是结构与写入范围，不替代人工审阅和功能验收。
+根目录 [AGENTS.md](AGENTS.md) 同时提示后续 Agent 更新本表。Agent 应在功能交付中主动补记；F18 自动补记已于 2026-11-20 删除，改为人工维护交付目录的 `FEATURES-DECISION.md`。
 
 <!-- fork-catalog:last-reviewed=67ddad5f38351de3ab6c9971875242560271f7bc -->
