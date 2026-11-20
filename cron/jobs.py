@@ -40,7 +40,6 @@ from cron.jobs_model_pin import _main_model_pin
 from cron import jobs_time
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import extra_fire, jobs_error_text, store_health
-from cron.install_gate import install_gate
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
 
 logger = logging.getLogger(__name__)
@@ -294,7 +293,7 @@ def _release_flock(lock_fd) -> None:
 
 @contextlib.contextmanager
 def _jobs_lock():
-    with install_gate(_current_cron_store().cron_dir.parent), _jobs_lock_admitted():
+    with _jobs_lock_admitted():
         yield
 
 
