@@ -797,7 +797,10 @@ def _project_for_display(messages: list, *, home=None, inline_images: bool = Tru
             if projected.get("display_kind") != CONTENT_REFUSED_DISPLAY_KIND:
                 projected.pop("display_kind", None)
         projected_messages.append(projected)
-    return project_history_commentary(projected_messages, home=home)
+    from hermes_state_recovery import project_legacy_empty_recovery_pairs
+
+    return project_legacy_empty_recovery_pairs(
+        project_history_commentary(projected_messages, home=home))
 
 
 @manage_router.get("/api/sessions/{session_id}/messages")

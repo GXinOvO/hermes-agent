@@ -298,7 +298,10 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
     """``image_urls=False`` is the ``inline_images=false`` projection (#116511): image parts render ``[image]``
     so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment."""
     from agent.history_commentary import project_history_commentary
+    from hermes_state_recovery import without_legacy_empty_recovery_pairs
     from session_rules.turns import withheld_prompt_text
+
+    history = without_legacy_empty_recovery_pairs(history)
 
     messages = []
     tool_call_args = {}

@@ -1521,6 +1521,8 @@ def get_messages_as_conversation(holder: StoreHolder, session_id: str, include_a
         _active_clause(include_inactive, include_compacted), with_session_id=False, with_compacted=display)
     if include_compacted:
         rows = _dedupe_display_generations(holder, rows, drop_removed=display)
+    from hermes_state_recovery import without_legacy_empty_recovery_pairs
+    rows = without_legacy_empty_recovery_pairs(rows)
     return _rows_to_conversation(holder, rows, session_id=session_id, include_ancestors=include_ancestors,
         repair_alternation=repair_alternation, include_row_ids=include_row_ids,
         include_summary_markers=repair_alternation)
@@ -1673,6 +1675,8 @@ def get_resume_conversations(holder: StoreHolder, session_id: str) -> tuple[list
     """
     rows = _fetch_conversation_rows(holder,
         _resume_lineage_ids(holder, session_id), "", with_session_id=True, with_compacted=True)
+    from hermes_state_recovery import without_legacy_empty_recovery_pairs
+    rows = without_legacy_empty_recovery_pairs(rows)
     # The model projection stays active-only: it is the compressed working context. The gateway's
     # first-turn ``session_meta`` marker (tools/model/platform bookkeeping) is transcript logging,
     # never LLM input: a resuming surface that fed it to the agent would count it in the history
