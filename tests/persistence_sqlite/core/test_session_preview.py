@@ -7,7 +7,7 @@ from hermes_state import SessionDB
 
 @pytest.fixture()
 def db(tmp_path):
-    session_db = SessionDB(db_path=tmp_path / "test_state.db")
+    session_db = SessionDB(db_path=tmp_path / "state.db")
     yield session_db
     session_db.close()
 
