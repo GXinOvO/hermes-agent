@@ -201,24 +201,13 @@ def generate_hermes_tools_module(enabled_tools: list[str],
     """Source of the hermes_tools.py stub module for SANDBOX_ALLOWED_TOOLS ∩ *enabled_tools*.
     ``transport``: ``"uds"`` (local socket client) or ``"file"`` (file RPC, remote backends)."""
     header = _FILE_TRANSPORT_HEADER if transport == "file" else _UDS_TRANSPORT_HEADER
-    parallel_helper = _PARALLEL_HELPER if transport == "uds" else ""
-    return header + parallel_helper + "\n".join(
+    return header + "\n".join(
         f"def {name}({sig}):\n    {doc}\n    return _call({name!r}, {args_expr})\n"
         for name, (sig, doc, args_expr) in sorted(_TOOL_STUBS.items()) if name in set(enabled_tools)
     )
 
 
 # ---- Shared helpers section (embedded in both transport headers) ----------
-
-_PARALLEL_HELPER = '''\
-def parallel(calls):
-    """Run independent enabled read-only tool/args calls; preserve input order."""
-    result = _call("__parallel__", {"calls": calls})
-    if isinstance(result, dict) and result.get("error"):
-        raise RuntimeError(result["error"])
-    return result
-
-'''
 
 _COMMON_HELPERS = '''\
 
@@ -310,7 +299,7 @@ def _call(tool_name, args):
     # Session kernels outlive the RPC server's 300s idle window, so their
     # connection can be legitimately gone by the next cell. The server
     # re-accepts (HERMES_RPC_PERSISTENT=1); retry once on a fresh socket.
-    _attempts = 2 if os.environ.get("HERMES_RPC_PERSISTENT") == "1" and tool_name != "__parallel__" else 1
+    _attempts = 2 if os.environ.get("HERMES_RPC_PERSISTENT") == "1" else 1
     with _call_lock:
         for _attempt in range(_attempts):
             try:
@@ -913,10 +902,6 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
         "Limits: 5-minute timeout, max 50 tool calls per call. Stdout over "
         "50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\n"
         f"{cwd_note}\n\n"
-        "Local transport: `from hermes_tools import parallel`; `parallel(calls)` runs "
-        "an explicit batch of independent read-only calls "
-        "(read_file, search_files, web_search, web_extract) with bounded concurrency and "
-        "input-order results; terminal and writes stay serial. Local transport only.\n\n"
         "Helpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. "
         "json_parse(text) — tolerant "
         "json.loads for terminal() output; shell_quote(s) — shlex.quote for "

@@ -308,10 +308,9 @@ class CellAuthority:
         return self._dispatch_started(tool_name, tool_args)
 
     def _dispatch_started(self, tool_name: str, tool_args: dict) -> str:
-        from tools.code_execution_rpc import _parallel_call_id
-        return self.ctx.copy().run(self._invoke, tool_name, tool_args, _parallel_call_id.get())
+        return self.ctx.copy().run(self._invoke, tool_name, tool_args)
 
-    def _invoke(self, tool_name: str, tool_args: dict, call_id: str = "") -> str:
+    def _invoke(self, tool_name: str, tool_args: dict) -> str:
         from model_tools import handle_function_call
         from tools.file_tools_read_tracking import programmatic_file_read
         from tools.interrupt import acting_for_tid
@@ -333,21 +332,6 @@ class CellAuthority:
             if self.conversation_id is not None:
                 identity["conversation_id"] = self.conversation_id
             with programmatic_file_read():
-                if call_id:
-                    from tools.approval_context import (get_current_observability_context,
-                                                        reset_current_observability_context,
-                                                        set_current_observability_context)
-                    scope = get_current_observability_context()
-                    for key in ("session_id", "turn_id"):
-                        identity.setdefault(key, scope[key])
-                        scope[key] = identity[key]
-                    scope["tool_call_id"] = call_id
-                    tokens = set_current_observability_context(**scope)
-                    try:
-                        return handle_function_call(tool_name, tool_args, task_id=self.task_id,
-                                                    tool_call_id=call_id, **identity)
-                    finally:
-                        reset_current_observability_context(tokens)
                 return handle_function_call(tool_name, tool_args, task_id=self.task_id, **identity)
         finally:
             acting_for_tid.reset(origin)
@@ -605,7 +589,6 @@ def _rpc_forever(kernel: SessionKernel, max_tool_calls: int,
             request, allowed_tools=sandbox_tools, tool_call_counter=authority.counter,
             max_tool_calls=authority.max_tool_calls, dispatch=authority.dispatch, tool_call_log=authority.log,
             call_start=time.monotonic(), where="sandbox", stop_event=kernel.stop_event,
-            allow_parallel=True,
         )
     while not kernel.stop_event.is_set():
         _rpc_server_loop(kernel.server_sock, "", kernel.tool_call_log, kernel.tool_call_counter,

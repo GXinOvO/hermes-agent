@@ -8,7 +8,6 @@ files via ``env.execute()``.
 
 import base64
 from contextlib import nullcontext
-from contextvars import ContextVar
 import json
 import logging
 import secrets
@@ -25,7 +24,6 @@ logger = logging.getLogger("tools.code_execution_tool")
 
 # Terminal parameters that must not be used from ephemeral sandbox scripts.
 _TERMINAL_BLOCKED_PARAMS = {"background", "pty", "notify", "notify_on_complete", "watch_patterns", "heartbeat", "persist_on_release"}
-_parallel_call_id: ContextVar[str] = ContextVar("ptc_parallel_call_id", default="")
 
 
 def _default_dispatch(task_id, session_id=None, turn_id=None, conversation_id=None):
@@ -37,21 +35,6 @@ def _default_dispatch(task_id, session_id=None, turn_id=None, conversation_id=No
             ("session_id", session_id), ("turn_id", turn_id), ("conversation_id", conversation_id),
         ) if value is not None}
         with programmatic_file_read():
-            if call_id := _parallel_call_id.get():
-                from tools.approval_context import (get_current_observability_context,
-                                                    reset_current_observability_context,
-                                                    set_current_observability_context)
-                scope = get_current_observability_context()
-                for key in ("session_id", "turn_id"):
-                    identity.setdefault(key, scope[key])
-                    scope[key] = identity[key]
-                scope["tool_call_id"] = call_id
-                tokens = set_current_observability_context(**scope)
-                try:
-                    return handle_function_call(tool_name, tool_args, task_id=task_id,
-                                                tool_call_id=call_id, **identity)
-                finally:
-                    reset_current_observability_context(tokens)
             return handle_function_call(tool_name, tool_args, task_id=task_id, **identity)
     return dispatch
 
@@ -118,8 +101,7 @@ def _rpc_token_ok(request: dict, rpc_token: str) -> bool:
 
 def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_counter: list,
                         max_tool_calls: int, dispatch, tool_call_log: list, call_start: float,
-                        where: str, stop_event=None, budget_lock=None,
-                        allow_parallel=False) -> str:
+                        where: str, stop_event=None, budget_lock=None) -> str:
     """Enforce allow-list + budget, then dispatch one authenticated request. Only a dispatched
     call consumes budget and is logged; refusals are free."""
     if (not isinstance(request, dict) or not isinstance(request.get("tool"), str)
@@ -133,15 +115,6 @@ def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_co
         with authority.admission_lock:
             if not authority.active:
                 return tool_error("No active execute_code cell: its tool authority is retired.")
-    if tool_name == "__parallel__":
-        if not allow_parallel:
-            return tool_error("parallel is only available over the local execute_code transport.")
-        from tools.code_execution_parallel import execute_parallel
-        return execute_parallel(
-            tool_args, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
-            max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
-            stop_event=stop_event,
-        )
     if tool_name not in allowed_tools:
         return tool_error(f"Tool '{tool_name}' is not available in execute_code. "
                           f"Available: {', '.join(sorted(allowed_tools))}")
@@ -261,7 +234,6 @@ def _rpc_server_loop(server_sock: socket.socket, task_id: str, tool_call_log: li
                             request, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
                             max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
                             call_start=call_start, where="sandbox", stop_event=stop_event,
-                            allow_parallel=True,
                         )
                 conn.sendall((resp + "\n").encode())
     except TimeoutError:

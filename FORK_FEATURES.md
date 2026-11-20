@@ -16,7 +16,7 @@
 | F04 | 内置事项跟进与有据分析 | 只填事项名称和会话链接，系统分析目标、进展、剩余工作和需要本人处理的内容，并回溯记录中的关联会话；结果保留来源和原文证据，人工状态、优先级和验收独立控制 | Desktop 标题栏 → 事项跟进，默认开启，可在设置 → 外观 → 窗口布局关闭；后台持续更新、Windows＋SSH 真实验收和旧插件迁移仍待完成 |
 | F05 | 子 Agent 交付检查与结果找回 | 核对真实产物，复用有效验证证据；错过回调后读取原结果 | `delegate_task(action="result", delegation_id=...)`；结构化交付按需用检查脚本；已合入 |
 | F06 | 后台通知降噪与未完成工作提示 | 已消费的心跳和子任务内部进程退出不反复打断主任务；子任务未做完仍保留进展并提示 | 后台进程／委派自动路径；已合入 |
-| F07 | `execute_code` 显式只读并行批次 | 一次组织多个独立文件读取、搜索或网页读取，保留预算、取消和调用身份 | 本地 transport 的 `hermes_tools.parallel`；需 Agent 显式使用；已合入 |
+| F07 | ~~`execute_code` 显式只读并行批次~~ | 已移除（2026-11-21）：本地读取并行比顺序更慢，上下文优势来自 `execute_code` 本身；仅网页批量有约 4× 速度收益，但可由原生并行工具调用覆盖 | 1,228 行（含 33 个测试）删除；代价是失去网页批量并发 |
 | F08 | ~~每个子 Agent 的精确工具白名单~~ | 已移除（2026-11-20）：委派 schema、Agent 构造参数、执行期校验与恢复路径全部删除；子 Agent 回到上游语义（继承父级 toolsets + 固定角色黑名单）。删除前实测 381 个 task 用过该参数，但收益从未测量，且带 `terminal`/`execute_code` 的“只读”名单并不提供只读保证 | 删除依据见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F09 | 后台完成结果持久化与恢复 | 进程、委派结果可找回，减少因结果丢失而重跑；`/bg`、`/btw` 的会话侧结果账本已于 2026-11-21 删除，命令回退到上游内存路径 | 进程、委派及受支持的后台交付路径；部分移除，恢复结果不等于恢复执行 |
 | F10 | 压缩、重试、中断与工具结果可靠性 | 压缩与辅助请求留下可核回执，中断可见，等待可取消，恢复提示不污染正常历史 | 相关运行自动路径；已合入；部分能力依赖已有配置 |
@@ -43,7 +43,7 @@
 
 - **F04 状态边界：** 状态、优先级和人工验收由本人控制，分析结果不覆盖；回复结束、todo 勾选、停止运行或合并 PR 都不等于事项完成。来源保存 connection、profile、stored session ID 和 authority owner 四元组，读取时再次核验；压缩续接同时保留逻辑根 ID 与原始 tip ID。Linux 隔离 Desktop 已覆盖普通会话和压缩 tip；Windows＋SSH 真实客户端、后台更新、跨会话真实使用验收、旧插件退役和数据迁移仍待完成，不把合入源码算作这些验收通过。
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
-- **F07 并行：** 只开放 `read_file`、`search_files`、`web_search`、`web_extract`，一次最多 16 项、最多 4 个工作线程，结果按输入顺序返回；写入和终端命令不在该并行入口内。格式是 `parallel([{"tool": "read_file", "args": {"path": "..."}}, ...])`，只适用于本地 transport；取消返回时，已开始的读取可能仍在收尾。
+- **F07 并行（已删除）：** 2026-11-21 移除 `hermes_tools.parallel`、`__parallel__` RPC、线程池与 33 个专用测试。基准：本地 12×7.8KB 顺序 0.066s、并行 0.166s；NFS 0.137s vs 0.117s；4 个网页 35.1s vs 8.1s。上下文优势来自 `execute_code` 本身，顺序调用同样只回摘要；F07 仅剩高延迟 I/O 并发价值，原生并行工具调用已覆盖。
 - **F09 结果恢复（部分移除）：** `/bg`、`/btw` 的会话侧结果账本与 TUI 侧结果持久化已于 2026-11-21 删除，两条命令回退到上游内存结果路径；Agent 不直接使用这部分。进程与委派结果恢复保留：静默进程读取现有句柄，最终输出保留截断和总量信息，不保证完整日志永久可用；终端结果受七天保留期约束，64 条历史上限只作用于已消费结果。恢复仍绑定原任务身份和目标，不能把旧结果转送到改过的作业。平台投递的接受、发出与对端确认分别判断，状态不明不能宣称已送达。
 - **F10 可靠性修复：** 本分支增加辅助请求路由／wire／进度回执、压缩输入与摘要诊断、中断说明、主动工具结果裁剪的本地无正文日志，以及恢复脚手架的历史过滤。账号策略拒绝不会因切非流式向同一服务商重发；已有分类器允许的其他 provider fallback 保留。安全提示插件兼容批量 Skill 操作，启用后默认仍仅警告；委派上下文拒绝 `skill_manage` 变更，保留技能读取。浏览器与网页提取的 URL 密钥检查改为引用现有 `agent.redact`，保留原凭据匹配和拒绝规则；导入修复已隔离验证，运行进程采用仍待核验。这些不代表该插件是本分支新创，也不构成终端文件系统沙箱。
 - **F11 身份恢复：** 显式请求的分组仍优先；旧会话才按端点和模型恢复身份。旧／新 home 写法只有能证明指向同一现有 home 和绑定数据库时才兼容，不能泛化成任意跨机器迁移。
@@ -71,7 +71,7 @@
 | F04 | [PR #69](https://github.com/GXinOvO/hermes-agent/pull/69) | [事项表单](apps/desktop/src/app/contrib/task-overview-form.tsx) · [分析面板](apps/desktop/src/app/contrib/task-analysis-panel.tsx) · [分析 RPC](gateway/session_task_analysis.py) · [单测](apps/desktop/src/lib/task-overview/analysis.test.ts) · [E2E](apps/desktop/e2e/task-analysis.spec.ts) |
 | F05 | [PR #6](https://github.com/GXinOvO/hermes-agent/pull/6)、[#15](https://github.com/GXinOvO/hermes-agent/pull/15)、[#28](https://github.com/GXinOvO/hermes-agent/pull/28)；移植来源 [官方 #136266](https://github.com/NousResearch/hermes-agent/pull/136266)、[#148550](https://github.com/NousResearch/hermes-agent/pull/148550) | [执行指导](skills/autonomous-ai-agents/hermes-agent/references/task-execution.md) · [结果找回](tools/delegate_tool_registry.py) · [材料检查测试](tests/skills/test_delegated_result_lifecycle.py) |
 | F06 | [PR #7](https://github.com/GXinOvO/hermes-agent/pull/7)、[#22](https://github.com/GXinOvO/hermes-agent/pull/22)、[#24](https://github.com/GXinOvO/hermes-agent/pull/24) | [通知策略测试](tests/tui_gateway/test_child_process_notification_policy.py) · [未完成提示测试](tests/tools/test_delegate_incomplete_notice.py) |
-| F07 | [PR #26](https://github.com/GXinOvO/hermes-agent/pull/26)、[#27](https://github.com/GXinOvO/hermes-agent/pull/27)、[#31](https://github.com/GXinOvO/hermes-agent/pull/31) | [批处理实现](tools/code_execution_parallel.py) · [身份测试](tests/tools/test_code_execution_parallel_identity.py) |
+| F07 | 已删除（2026-11-21） | 原实现与测试已移除；历史 PR #26/#27/#31 |
 | F08 | 已移除（2026-11-20） | 运行时与存储侧全部删除，见上表 F08 行 |
 | F09 | [PR #30](https://github.com/GXinOvO/hermes-agent/pull/30)；结果恢复等直接提交见索引 | [进程结果恢复](tools/process_registry_result_recovery.py) · [后台记录测试](tests/hermes_state/test_background_results.py) · [静默结果测试](tests/tools/test_process_result_retention.py) |
 | F10 | [PR #1](https://github.com/GXinOvO/hermes-agent/pull/1)、[#16](https://github.com/GXinOvO/hermes-agent/pull/16)；后续直接提交见索引 | [压缩回执](agent/compaction_events.py) · [恢复等待测试](tests/agent/test_primary_recovery_interrupt.py) · [历史过滤测试](tests/hermes_state/test_empty_recovery_history_views.py) |
@@ -304,7 +304,7 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 
 本轮固定官方 `fd8a6c41ace59b476193c61002ce6a86d667b18a` 与 fork `0fd85f7b543c584171ff38b3c4ef2ec29c1ab749`，协调七个冲突文件；候选代码、远端合入和运行安装分别验收，不新增个人功能编号。
 
-- F07 保留只读并行批次的预算、取消和独立调用 ID，同时把上游显式 `session_id`、`turn_id`、`conversation_id` 传到嵌套工具；复用 kernel 的下一 cell 重新绑定身份。
+- F07（已删除 2026-11-21）曾保留只读并行批次的预算、取消和独立调用 ID，同时把上游显式 `session_id`、`turn_id`、`conversation_id` 传到嵌套工具；复用 kernel 的下一 cell 重新绑定身份。
 - F13 保留无人值守审批继承开关；上游的扫描不完整规则同时生效，已有 session／永久授权不能预先批准未完成扫描的命令。
 - F15 保留受保护 patch 的票据和提交绑定，并在 byte-exact 与 raw 读取路径执行上游大小上限。受保护路径先取得后端快照再判大小，不据此声称已限制后端快照的内存占用；普通本地／shell 读取沿用上游的有界传输。
 - 最终附件仍经过 fork 的持久化投递认领，采用上游重连后的当前适配器上传；新增组合测试核对重复调用不重传。Webhook 同时保留单次严格传输及上游共享签名／时间校验。F19 的交接文档剪裁与上游 discovery 严格脱敏按顺序处理，磁盘历史保持原样。
