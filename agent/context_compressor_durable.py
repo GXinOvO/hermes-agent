@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from typing import Any, Optional
 
 from persistence.core.errors import PersistenceError
@@ -48,9 +49,14 @@ class DurableStateMixin:
     """``ContextCompressor`` mixin: best-effort reads and writes of the bound row's durable state."""
 
     def _store_interface(self) -> Any:
-        """The bound store's storage interface handle when it is a writer's beside it, else None."""
-        from agent.agent_init_session import writer_interface
-        return writer_interface(getattr(self, "_persistence", None), getattr(self, "_session_db", None))
+        """The bound store's storage interface handle when the compressor can reach one, else None.
+        A stand-in ``hermes_state.SessionDB`` carries no durable compression verbs, so it must resolve to
+        the writer handle it forwards to; without it every durable cooldown read fails and compression
+        aborts as ``cooldown_state_unreadable`` on a healthy store."""
+        from agent.agent_init_session import stand_in_interface, writer_interface
+        session_db = getattr(self, "_session_db", None)
+        return (writer_interface(getattr(self, "_persistence", None), session_db)
+                or stand_in_interface(session_db))
 
     def _durable_read(
         self, method: str, label: str, coerce, default, *args,
@@ -100,3 +106,33 @@ class DurableStateMixin:
 
     def _load_fallback_compression_streak(self) -> None:
         self._load_durable("_fallback_compression_streak", "get_compression_fallback_streak", "compression fallback streak", int, 0)
+
+    def _carry_stand_in_cooldown_reads(self, session_db: Any) -> None:
+        """Give a deprecated ``hermes_state.SessionDB`` the cooldown reads its legacy callers still make.
+        The merged stand-in carries only the plugin guide's subset, so a legacy reader (and this fork's
+        compression tests) got ``AttributeError`` where the fork's own ``SessionDB`` answered from the same
+        row. The reads forward to the handle the stand-in already holds; nothing is cached, and a store
+        without them stays silent. The writes need no bridge: the compressor writes through that handle."""
+        from agent.agent_init_session import stand_in_interface
+        store = stand_in_interface(session_db)
+        if store is None:
+            return
+
+        def get_compression_failure_cooldown(session_id: str) -> Optional[dict[str, Any]]:
+            now = time.time()
+            cooldown = store.messages.read_compression_cooldown(session_id, now)
+            return None if cooldown is None else {
+                "cooldown_until": cooldown.until, "remaining_seconds": cooldown.until - now, "error": cooldown.error}
+
+        def get_compression_failure_cooldown_row(session_id: str) -> dict[str, Any]:
+            snapshot = store.messages.read_compression_cooldown_snapshot(session_id)
+            return {"session_exists": snapshot.present, "cooldown_until": snapshot.until, "error": snapshot.error}
+
+        for name, reader in (
+            ("get_compression_failure_cooldown", get_compression_failure_cooldown),
+            ("get_compression_failure_cooldown_row", get_compression_failure_cooldown_row),
+        ):
+            # An instance attribute shadows the stand-in's raising __getattr__; a store that answers the
+            # name itself keeps its own method.
+            if not hasattr(type(session_db), name):
+                setattr(session_db, name, reader)

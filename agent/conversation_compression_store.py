@@ -16,10 +16,13 @@ logger = logging.getLogger("agent.conversation_compression")
 
 
 def _compressor_interface(compressor: Any) -> Any:
-    """The writer handle bound beside the compressor's store (read off the instance, never a class default)."""
-    from agent.agent_init_session import writer_interface
+    """The writer handle bound beside the compressor's store (read off the instance, never a class default).
+    A stand-in ``hermes_state.SessionDB`` carries no durable compression verbs, so it resolves to the handle
+    it forwards to; without one the raw cooldown row is unreadable on a healthy store."""
+    from agent.agent_init_session import stand_in_interface, writer_interface
     values = vars(compressor)
-    return writer_interface(values.get("_persistence"), values.get("_session_db"))
+    session_db = values.get("_session_db")
+    return writer_interface(values.get("_persistence"), session_db) or stand_in_interface(session_db)
 
 
 def _rollback_durable_cooldown(

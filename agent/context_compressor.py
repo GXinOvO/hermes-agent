@@ -2218,6 +2218,7 @@ class ContextCompressor(
             persistence = getattr(self, "_persistence", None)
         self._session_db, self._persistence = session_db, persistence
         self._session_id = session_id or ""
+        self._carry_stand_in_cooldown_reads(session_db)
         self._summary_failure_cooldown_until = 0.0
         self._cooldown_persist_failed = False
         self._last_summary_error = None
