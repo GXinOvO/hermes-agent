@@ -2199,6 +2199,10 @@ def resume_job(job_id: str) -> Optional[dict[str, Any]]:
     job = resolve_job_ref(job_id)
     if not job:
         return None
+    if job.get("state") == "completed" and job.get("schedule", {}).get("kind") in {"cron", "interval"}:
+        raise ValueError(
+            f"Cannot resume: recurring job '{job.get('name', job_id)}' completed its repeat limit. "
+            "Set repeat=0 (forever) or create a new job.")
     stored_next = job.get("next_run_at")
     stored_dt = _parse_aware(stored_next) if stored_next else None
     if (

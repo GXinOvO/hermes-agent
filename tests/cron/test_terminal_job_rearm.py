@@ -51,6 +51,14 @@ def test_exhausted_recurring_job_trigger_is_refused(tmp_cron_dir):
         trigger_job(job["id"])
 
 
+def test_resume_completed_recurring_names_the_repeat_limit(tmp_cron_dir):
+    job = create_job("done", "every 1h", repeat=1)
+    mark_job_run(job["id"], success=True)
+
+    with pytest.raises(ValueError, match="repeat limit"):
+        resume_job(job["id"])
+
+
 def test_wedged_claimed_oneshot_remains_triggerable(tmp_cron_dir):
     now = datetime.now(UTC)
     job = create_job("wedged", "in 30m", repeat=2)
@@ -118,7 +126,6 @@ def test_rearm_completed_oneshot_restores_schedule_and_preserves_history(tmp_cro
 
 
 def test_rearm_refuses_recurring_and_live_claim(tmp_cron_dir):
-
     recurring = create_job("recurring", "every 1h")
     future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
     with pytest.raises(ValueError, match="one-shot"):
