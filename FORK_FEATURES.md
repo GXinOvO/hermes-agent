@@ -28,7 +28,6 @@
 | F16 | 日常搜索、PATH 与统计修复 | 搜 `-foo` 不被当命令选项；PATH 去重；Insights 不漏算批量 Skill 操作请求 | `search_files`、本地终端、`hermes insights`；已合入 |
 | F17 | 测试隔离与上游同步兼容 | 测试夹具不意外进入真实安装环境；同步上游时保留本分支增强 | 维护／测试路径；已合入，不单独算新产品功能 |
 | F18 | ~~合入后自动补记个人功能~~ | 已移除（2026-11-20）：工作流、脚本与 5 个专用测试删除；功能清单改为人工维护交付目录的 `FEATURES-DECISION.md`（未入库） | 原 GitHub Actions → Update personal feature catalog 已删除 |
-| F19 | 交接摘要护栏与循环切断 | 模型用整段会话的 `<analysis>/<summary>` 交接文档代替回答时，拦下并最多要两次真答复；仍复现则明确告知已拦截。被拦下的文档不再写回历史，`session_search` 回放旧会话时也会剪掉其中的交接文档，切断“一篇变多篇”的自我繁殖 | `agent/handoff_summary.py` + `agent/turn_stop_gates.py`；默认开启，`agent.handoff_summary_guard: false` 关闭；已合入，待安装进程重载 |
 | F20 | Cron provider 请求审计 | 记录每次 Cron 请求的初始/实际路由、重试、推理参数、SDK 调用与响应身份，敏感值不入账；app-server 只观测子进程接口参数，子 Agent、ACP 与 MoA 下游未覆盖 | `cron/usage_audit.jsonl`；隔离验证，待部署后的自然运行读回 |
 | F21 | 分叉仓库 CI 兼容 | 分叉上的升级 E2E 能取到官方 release tag；手动触发的贡献者检查按 `dev` 比对；修复 CI 暴露的结果恢复、排空保存与测试契约漂移 | `.github/workflows/tests.yml`、`.github/workflows/repo-guards.yml`；PR #46 原始 36 个失败文件已在隔离环境组合验证通过，18 项检查通过；新 head 的 Hosted Runner 全套结果待验收 |
 | F22 | 会话预览过滤模型切换通知 | 新会话先切模型时，侧栏预览跳过 `model_switch` 内部行；后续真实问题正常显示，只有通知时预览为空；不改历史消息 | `hermes_state_common.py`、`tests/hermes_state/test_session_preview.py`；远端 `dev` 基线已复现，补丁通过 SessionDB 相关测试；运行安装待重载 |
@@ -53,11 +52,7 @@
 - **F15（已移除 2026-11-20）：** 原 `owned-process` 插件按命令代次管理本地进程并提供候选受保护卷；因未生产采用、需要 Linux namespace 与手工配置、上游已有可插拔沙箱后端和 `cleanup_stops_processes` 契约，插件、测试与文档链接已删除。历史边界与删除依据见交付目录 `FEATURES-DECISION.md`。
 - **F16 统计口径：** Insights 统计的是请求调用／操作次数，包含失败尝试，不是成功创建或修改的 Skill 数量。
 - **F17 hosted 文件兼容：** 上游新增的基础 hosted 后端按上游语义执行 `write_file` 和 `patch`，不保证 fork 的完整读后写及提交绑定，并发修改可能被覆盖；本地及原有非 hosted 后端保留原有文件保护。write/patch 的原始 NT/device 命名空间拒绝提前到后端初始化前，既有拒绝规则不变；该顺序修复已隔离验证，运行采用待核验。能力接口存在不等于已证明沙箱重建期间的原子提交，详见 [hosted 接口说明](website/docs/developer-guide/terminal-environment-plugin.md#hosted-scopes)。
-- **F18（已移除 2026-11-20）：** 原工作流在每次 dev push 后用 DeepSeek 审查差异并直接提交 `FORK_FEATURES.md`；因专用 Runner/Secret/模型依赖、连续失败与两份清单漂移，工作流、脚本和 5 个专用测试已删除。功能清单改为人工维护交付目录的 `FEATURES-DECISION.md`。
-
-- **F19 交接摘要护栏：** 只按可见答复的形状判定（`<analysis>` 包裹 + `</summary>` + 至少三条九节标题 + ≥1500 字符），不是按模型、provider 或上下文大小判定——实测同一请求在 68k 与 280k tokens 下都出现过，与规模无关。用户明确要求总结、摘要、回顾、交接时（中英文关键词）一律不拦，此时文档就是答案。
-  **根因边界（2026-11-13 实测）：** 这是“种子 + 自我繁殖”两段，不能混为一谈。种子是模型倾向：近 30 天 550 个会话、23,103 次调用里 deepseek-v4.1-flash 出 63 篇（2.73 篇/千次），gpt-6.1-sol 0.13、terra 0.25、mimo 0.55，gpt-6-astra 在 29,180 次调用里为 0——差 21 倍，所以体感是“deepseek 有、别的没有”。繁殖是客户端侧：文档留在上下文里就成了范例，同一会话内实测 1→2→3 篇递增（受影响会话均值约 1.75 篇）；`session_search` 回放旧会话又会把别处的文档搬进来（实测 42KB/53KB 的工具结果里含完整文档）。DSH 等其它客户端没有这两条回路，所以同一模型在那里不出现。**种子本身仍未定位**：整份 payload 原样回放 24 次只出 2 次（约 8%），temperature=0/1、换措辞、截断上下文都不改变它，客户端这一侧已无可控变量；要定位得拿 response ID（如 `021794577272598aef91fec3a81c53339a5720099214cde8963a5`）去查中转上游日志。
-  **实现边界：** 判定基于文本形状，模型换一种写法就绕过了；剪裁只作用于 `session_search` 的回放内容，不改变磁盘上的会话记录。关闭开关见 `agent.handoff_summary_guard`。
+- **F18（已移除 2026-11-20）：** 原工作流在每次 dev push 后用 DeepSeek 审查差异并直接提交 `FORK_FEATURES.md`；因专用 Runner/Secret/模型依赖、连续失败与两份清单漂移，工作流、脚本和 5 个专用测试已删除。功能清单改为人工维护交付目录 `FEATURES-DECISION.md`。
 
 ## 追溯证据
 
@@ -307,7 +302,7 @@ Cron 作业的 fallback 解析改为调用 `fallback_entry_runtime_kwargs`／`ef
 - F07（已删除 2026-11-21）曾保留只读并行批次的预算、取消和独立调用 ID，同时把上游显式 `session_id`、`turn_id`、`conversation_id` 传到嵌套工具；复用 kernel 的下一 cell 重新绑定身份。
 - F13 保留无人值守审批继承开关；上游的扫描不完整规则同时生效，已有 session／永久授权不能预先批准未完成扫描的命令。
 - F15 保留受保护 patch 的票据和提交绑定，并在 byte-exact 与 raw 读取路径执行上游大小上限。受保护路径先取得后端快照再判大小，不据此声称已限制后端快照的内存占用；普通本地／shell 读取沿用上游的有界传输。
-- 最终附件仍经过 fork 的持久化投递认领，采用上游重连后的当前适配器上传；新增组合测试核对重复调用不重传。Webhook 同时保留单次严格传输及上游共享签名／时间校验。F19 的交接文档剪裁与上游 discovery 严格脱敏按顺序处理，磁盘历史保持原样。
+- 最终附件仍经过 fork 的持久化投递认领，采用上游重连后的当前适配器上传；新增组合测试核对重复调用不重传。Webhook 同时保留单次严格传输及上游共享签名／时间校验。
 
 验证入口：`tests/tools/test_code_execution_merge_identity.py`、`tests/tools/test_file_operations_protected_cap.py`、`tests/gateway/test_attachment_reconnect_ledger.py` 及双方原有回归。执行数量、最终审查和远端状态随同步 PR 记录；本段不宣称全仓库测试、真实平台投递或运行安装已验收。本次同步不更新运行安装或重启 Gateway。
 
