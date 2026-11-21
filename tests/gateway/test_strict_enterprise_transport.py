@@ -241,10 +241,14 @@ async def test_wecom_human_keeps_passive_error_proactive_fallback():
 @asynccontextmanager
 async def google_chat(wire):
     from plugins.platforms.google_chat import adapter as module
+    pytest.importorskip("google.oauth2.credentials")
+    pytest.importorskip("googleapiclient.discovery")
+    pytest.importorskip("googleapiclient.discovery_cache")
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build_from_document
     from googleapiclient.discovery_cache import get_static_doc
-    assert module._load_google_modules()
+    if not module._load_google_modules():
+        pytest.skip("google chat SDK dependencies unavailable")
     document = json.loads(get_static_doc('chat', 'v1'))
     document['rootUrl'] = wire.base + '/'
     document['baseUrl'] = wire.base + '/'
@@ -274,7 +278,11 @@ async def test_google_strict_final_uses_create_without_typing_patch_or_retry(fau
 @asynccontextmanager
 async def teams(wire):
     from plugins.platforms.teams import adapter as module
-    assert module.check_teams_requirements()
+    if not module.check_teams_requirements():
+        pytest.skip("Teams SDK dependencies unavailable")
+    pytest.importorskip("microsoft_teams.api")
+    pytest.importorskip("microsoft_teams.common")
+    pytest.importorskip("microsoft_teams.apps")
     from microsoft_teams.api import ApiClient
     from microsoft_teams.common import ClientOptions
     from microsoft_teams.apps import App

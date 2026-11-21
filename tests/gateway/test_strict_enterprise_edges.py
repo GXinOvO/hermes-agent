@@ -97,6 +97,7 @@ async def test_wecom_seeded_native_stream_is_not_finalized_by_strict_plain_send(
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault', [None, 'lost'])
 async def test_teams_cached_conversation_reference_media_uses_sdk_final_once(fault, tmp_path):
+    pytest.importorskip("microsoft_teams.api")
     from microsoft_teams.api import ConversationReference, ConversationAccount, Account
     path = tmp_path / 'proof.txt'
     await asyncio.to_thread(path.write_text, 'proof')
