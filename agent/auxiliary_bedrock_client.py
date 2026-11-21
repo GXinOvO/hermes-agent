@@ -1,8 +1,7 @@
-"""Bedrock auxiliary client facade and physical Converse receipt boundary."""
+"""Bedrock auxiliary client facade for the AWS Converse API."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 
@@ -14,7 +13,7 @@ class BedrockAuxiliaryClient:
         self._model = model
         self.api_key = "aws-sdk"
         self.base_url = f"https://bedrock-runtime.{region}.amazonaws.com"
-        self.chat = _ChatShim(_BedrockCompletionsAdapter(region, model, receipt_client=self))
+        self.chat = _ChatShim(_BedrockCompletionsAdapter(region, model))
 
     def close(self):
         pass
@@ -28,14 +27,9 @@ class _ChatShim:
 class _BedrockCompletionsAdapter:
     """Translate chat completions calls into Bedrock Converse calls."""
 
-    def __init__(self, region: str, model: str, *, logical_context: dict[str, Any] | None = None,
-                 receipt_client: Any = None):
+    def __init__(self, region: str, model: str):
         self._region = region
         self._model = model
-        self._logical_context = logical_context
-        self._receipt_client = receipt_client or SimpleNamespace(
-            base_url=f"https://bedrock-runtime.{region}.amazonaws.com"
-        )
 
     def create(self, **kwargs) -> Any:
         from agent.auxiliary_client import _notify_aux_provider_response
