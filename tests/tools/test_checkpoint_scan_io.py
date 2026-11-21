@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import checkpoint_manager as checkpoints
+from agent.checkpoints import manager as checkpoints
 
 
 @pytest.mark.platforms("posix")  # Creating symlinks needs additional privileges on Windows.

@@ -16,14 +16,14 @@ from threading import Event
 import pytest
 
 from tests.waiting import wait_until
-from tools import checkpoint_manager as checkpoints
-from tools import checkpoint_maintenance
+from agent.checkpoints import manager as checkpoints
+from agent.checkpoints import maintenance as checkpoint_maintenance
 
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     base = tmp_path / "checkpoints"
-    monkeypatch.setattr(checkpoints, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(checkpoints, "_resolve_checkpoint_base", lambda: base)
     root = tmp_path / "project"
     root.mkdir()
     (root / "main.txt").write_bytes(b"original\x00bytes\n")

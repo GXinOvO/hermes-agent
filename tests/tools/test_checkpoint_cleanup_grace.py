@@ -23,7 +23,7 @@ import pytest
 
 from tests.tools import test_checkpoint_git_timeout as fixtures
 from tests.waiting import wait_until
-from tools import checkpoint_manager as checkpoints
+from agent.checkpoints import manager as checkpoints
 
 
 # Import fixture functions, not a TestCase (which pytest would collect twice).

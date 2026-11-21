@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from tools import checkpoint_manager as cm
+from agent.checkpoints import manager as cm
 
 
 @pytest.fixture
@@ -13,7 +13,7 @@ def project_store(tmp_path, monkeypatch):
     project.mkdir()
     (project / "data.bin").write_bytes(b"original\x00\xff")
     base = tmp_path / "checkpoints"
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(cm, "_resolve_checkpoint_base", lambda: base)
     manager = cm.CheckpointManager(enabled=True, max_total_size_mb=0)
     assert manager.ensure_checkpoint(str(project), "before")
     manager.new_turn()

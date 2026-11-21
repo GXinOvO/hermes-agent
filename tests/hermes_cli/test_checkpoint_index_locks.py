@@ -5,7 +5,7 @@ import json
 import pytest
 
 from hermes_cli import checkpoints
-from tools import checkpoint_manager as cm
+from agent.checkpoints import manager as cm
 
 
 def test_locks_entry_reports_exact_generation_without_project_scan(tmp_path, monkeypatch, capsys):
@@ -22,7 +22,7 @@ def test_locks_entry_reports_exact_generation_without_project_scan(tmp_path, mon
     lock = indexes / (key + ".lock")
     lock.write_bytes(b"retained writer data")
     identity = lock.stat()
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(cm, "_resolve_checkpoint_base", lambda: base)
 
     def no_scan(*args, **kwargs):
         raise AssertionError("lock diagnosis must not scan project contents or run Git")
@@ -69,7 +69,7 @@ def test_untrusted_metadata_does_not_invent_owner_or_follow_link(tmp_path, monke
         meta.write_text("invalid json")
     else:
         meta.write_text(foreign.read_text())
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(cm, "_resolve_checkpoint_base", lambda: base)
     parser = argparse.ArgumentParser()
     checkpoints.register_cli(parser)
     args = parser.parse_args(["locks", "--json"])
@@ -106,7 +106,7 @@ def test_deep_json_metadata_isolated_from_another_valid_lock(tmp_path, monkeypat
         metadata = "[" * 2000 + "0" + "]" * 2000 if name == "bad" else json.dumps({"workdir": str(project)})
         assert len(metadata.encode()) < 65536
         (store / "projects" / (key + ".json")).write_text(metadata)
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(cm, "_resolve_checkpoint_base", lambda: base)
     parser = argparse.ArgumentParser()
     checkpoints.register_cli(parser)
     args = parser.parse_args(["locks", "--json"])
@@ -123,7 +123,7 @@ def test_deep_json_metadata_isolated_from_another_valid_lock(tmp_path, monkeypat
 
 def test_locks_entry_missing_store_does_not_create_it(tmp_path, monkeypatch, capsys):
     base = tmp_path / "absent"
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", base)
+    monkeypatch.setattr(cm, "_resolve_checkpoint_base", lambda: base)
     parser = argparse.ArgumentParser()
     checkpoints.register_cli(parser)
     args = parser.parse_args(["locks", "--json"])
