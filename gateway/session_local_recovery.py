@@ -78,7 +78,9 @@ def _stored_receipt(authority, sid):
     binding = authority_persistence(authority).bindings.receipt(sid)
     receipt = {'profile_id': binding.profile_id, 'principal_id': binding.principal_id, 'request_id': binding.request_id,
                'session_id': binding.session_id, 'route': binding.route, 'entry': binding.entry,
-               'policy': binding.policy, 'lineage': list(binding.lineage)}
+               'policy': binding.policy}
+    if binding.lineage != (binding.session_id,):
+        receipt['lineage'] = list(binding.lineage)
     if binding.legacy_session_id is not None:
         receipt['legacy_session_id'] = binding.legacy_session_id
     return receipt
