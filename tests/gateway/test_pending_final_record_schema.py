@@ -12,6 +12,7 @@ from gateway.session_authorities import SessionAuthorities
 from gateway.strict_transport import single_attempt_transport
 from tests.gateway.test_pending_final import Adapter
 from tests.gateway.test_strict_bridges_recovery import sealed
+from tests.fixtures.storage_holder import raw_holder
 
 
 class CountingAdapter(Adapter):
@@ -62,11 +63,11 @@ async def test_complete_but_damaged_record_never_blocks_trusted_sibling(path, va
             conn.execute('DELETE FROM state_meta WHERE key=?', (pf.PREFIX + row['admission_id'],))
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (pf.PREFIX + '000-bad', raw))
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (pf.PREFIX + row['admission_id'], json.dumps(original)))
-        db._execute_write(arrange)
+        raw_holder(db)._execute_write(arrange)
         store = SessionStore(sessions_dir=tmp_path / 'sessions', config=GatewayConfig())
         entry = SimpleNamespace(session_id='sid', session_key=descriptor['binding']['route'], suspended=False)
         store.lookup_by_session_key = lambda route:entry if route == entry.session_key else None
-        authority = SimpleNamespace(db=db, profile_id=str(tmp_path), logical_owner=lambda sid:sid)
+        authority = SimpleNamespace(db=db, persistence=db, profile_id=str(tmp_path), logical_owner=lambda sid:sid)
         authorities = SessionAuthorities(tmp_path)
         authorities.add(tmp_path, authority)
         runner = SimpleNamespace(session_authorities=authorities, session_authority=authority, session_store=store,
@@ -79,7 +80,7 @@ async def test_complete_but_damaged_record_never_blocks_trusted_sibling(path, va
         assert adapter.sent == [('chat', response)]
         assert await pf.recover(runner) == 0
         assert adapter.sent == [('chat', response)]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (pf.PREFIX + '000-bad',)).fetchone()[0] == raw
             valid = pf._read(conn, row['admission_id'])
         assert (valid['parts']['text']['state'], valid['parts']['text']['attempts']) == ('delivered', 1)

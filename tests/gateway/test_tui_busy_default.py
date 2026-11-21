@@ -12,7 +12,7 @@ from gateway.session_contract import SessionRef
 
 def _connection(source, display):
     live = SimpleNamespace(source=SimpleNamespace(platform='local'), busy_input_mode=None)
-    authority = SimpleNamespace(sessions={'s': live}, authorize=lambda actor, ref, capability: None,
+    authority = SimpleNamespace(sessions={'s': live}, authorize=lambda actor, ref, capability, **kwargs: None,
                                 runner=SimpleNamespace(), profile_id='/nonexistent')
     policy = SimpleNamespace(source=source, config=lambda *a, **k: {'display': display} if display is not None else {})
     return SimpleNamespace(authority=authority, actor=None), policy
