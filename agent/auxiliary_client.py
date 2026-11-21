@@ -1529,12 +1529,9 @@ class _CodexCompletionsAdapter:
         issuer_model = str(resp_kwargs.get("model") or model)
         total_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else None
         guard = _CodexStreamGuard(self._client, total_timeout, no_progress_timeout=kwargs.get("no_progress_timeout"))
-        from agent.auxiliary_wire_receipt import finish_wire_receipt, start_wire_receipt
         from agent.sdk_transform_bypass import bypass_sdk_request_transform
         # Keep bulk wire payload out of the SDK's GIL-holding request transform.
         stream_kwargs = bypass_sdk_request_transform({**resp_kwargs, "stream": True})
-        logical_context = _RELAY_AUX_CALL_CONTEXT.get() or self._logical_context
-        receipt = start_wire_receipt(self._client, stream_kwargs, logical_context=logical_context)
         deadline_hit = False
         try:
             guard.start()
@@ -1568,7 +1565,6 @@ class _CodexCompletionsAdapter:
                 if tc.function.name in wire_aliases:
                     tc.function.name = wire_aliases[tc.function.name]
         except BaseException as exc:
-            finish_wire_receipt(receipt, error=exc)
             if not isinstance(exc, Exception) or not guard.timed_out.is_set():
                 logger.debug("Codex auxiliary Responses API call failed: %s", exc)
                 raise
@@ -1583,15 +1579,7 @@ class _CodexCompletionsAdapter:
             tool_calls=tool_calls_raw or None,
         )
         choice = SimpleNamespace(index=0, message=message, finish_reason=finish_reason)
-        result = SimpleNamespace(choices=[choice], model=model, usage=usage)
-        finish_wire_receipt(
-            receipt,
-            response=SimpleNamespace(
-                id=getattr(final, "id", None), model=issuer_model, usage=usage,
-                choices=[SimpleNamespace(message=message, finish_reason=finish_reason)],
-            ),
-        )
-        return result
+        return SimpleNamespace(choices=[choice], model=model, usage=usage)
 
 
 class _ChatShim:
@@ -1765,35 +1753,12 @@ class _AnthropicCompletionsAdapter:
                 anthropic_kwargs["extra_body"] = {**existing, **passthrough}
         if isinstance(kwargs.get("timeout"), (int, float)) and kwargs["timeout"] > 0:
             anthropic_kwargs["timeout"] = kwargs["timeout"]
-        from agent.auxiliary_wire_receipt import (
-            native_stream_with_wire_receipt, native_response_view, run_with_wire_receipt,
-        )
-        logical_context = _RELAY_AUX_CALL_CONTEXT.get() or self._logical_context
-        stream_response_holder: dict[str, Any] = {}
-
-        def _stream_wrapper(request, stream_fn):
-            return native_stream_with_wire_receipt(
-                self._client, {**request, "stream": True},
-                lambda: stream_fn(**request), logical_context=logical_context,
-                response_holder=stream_response_holder,
-            )
-
-        def _call_wrapper(request, create_fn):
-            return run_with_wire_receipt(
-                self._client, {**request, "stream": False},
-                lambda: create_fn(**request), logical_context=logical_context,
-                response_view=native_response_view,
-            )
-
         response = create_anthropic_message(
             self._client, anthropic_kwargs,
             # Record provider-response timing every event, but tick forward progress only for
             # substantive payloads so keepalives can't hold a stalled summary open. None keeps
             # the fast get_final_message path.
             on_stream_event=(_anthropic_aux_stream_event_hook() if _aux_progress_active() else None),
-            stream_wrapper=_stream_wrapper,
-            call_wrapper=_call_wrapper,
-            stream_response_holder=stream_response_holder,
         )
         _nr = get_transport("anthropic_messages").normalize_response(response, strip_tool_prefix=self._is_oauth)
         usage = None
@@ -2502,22 +2467,15 @@ def _relay_aux_call_scope(args: tuple, kwargs: dict):
         "model": "",
         "response_model": None,
         "api_mode": "chat_completions",
-        "wire_receipt_ids": [],
         "route_info": kwargs.get("route_info") if isinstance(kwargs.get("route_info"), dict) else None,
     }
     token = _RELAY_AUX_CALL_CONTEXT.set(context)
-    if isinstance(context.get("route_info"), dict):
-        context["route_info"].pop("wire_receipt_ids", None)
     try:
         yield
     except BaseException as exc:
         _fail_relay_auxiliary_call(exc)
         raise
     finally:
-        route_info = context.get("route_info")
-        receipt_ids = context.get("wire_receipt_ids")
-        if isinstance(route_info, dict) and isinstance(receipt_ids, list) and receipt_ids:
-            route_info["wire_receipt_ids"] = ",".join(str(value) for value in receipt_ids if value)
         _RELAY_AUX_CALL_CONTEXT.reset(token)
 
 
@@ -2683,17 +2641,11 @@ def _relay_sync_stream(
     from agent.auxiliary_wire import prepare_chat_messages, relay_chat_metadata
 
     kwargs = prepare_chat_messages(client, kwargs)
-    # The bypass and receipt run inside the provider callback, AFTER Relay has seen (and possibly
-    # rewritten) the real conversation; applying either to `kwargs` would observe the wrong payload.
-    from agent.auxiliary_wire_receipt import observe_stream_with_wire_receipt
-    logical_context = _RELAY_AUX_CALL_CONTEXT.get()
+    # The bypass runs inside the provider callback, AFTER Relay has seen (and possibly rewritten)
+    # the real conversation; applying it to `kwargs` would observe the wrong payload.
     def create(request):
         request = bypass_chat_sdk_request_transform(request, client)
-        if _client_streams_internally(client):
-            return client.chat.completions.create(**request)
-        return observe_stream_with_wire_receipt(
-            client, request, lambda: client.chat.completions.create(**request), logical_context=logical_context,
-        )
+        return client.chat.completions.create(**request)
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
         return create(kwargs)
@@ -6899,9 +6851,45 @@ def _stream_request_plan(kwargs: dict[str, Any], client: Any = None) -> tuple[di
 def _create_with_progress_once(
     client: Any, kwargs: dict[str, Any], task: Optional[str] = None, *, force_stream: bool = False, provider: str = ""
 ) -> Any:
-    from agent.auxiliary_progress_receipt import create_with_progress_once
-
-    return create_with_progress_once(client, kwargs, task, force_stream=force_stream, provider=provider)
+    """create() that streams (and re-aggregates, ticking the hook per substantive chunk) when a
+    progress hook is active or the provider is stream-only; plain ``create(**kwargs)`` otherwise
+    or when the adapter streams internally. Streaming rejections fall back to a plain call —
+    except under ``force_stream``.
+    """
+    kwargs = bypass_chat_sdk_request_transform(kwargs, client)
+    _notify_aux_dispatch()
+    # Dispatch alone is not forward progress: a 401/retry/fallback dispatch must not
+    # reset the compression inactivity fence, or a zero-output attempt runs to the
+    # total ceiling instead of idling out (#114938). Progress ticks only for
+    # substantive stream payloads or a completed usable response.
+    if (not _aux_progress_active() and not force_stream) or _client_streams_internally(client):
+        response = client.chat.completions.create(**kwargs)
+        if not _client_streams_internally(client):
+            _notify_aux_provider_response()
+        return response
+    stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
+    try:
+        chunks = client.chat.completions.create(**stream_kwargs)
+    except Exception as exc:
+        if force_stream:
+            raise
+        failure = _classify_failure(exc, provider, client, kwargs.get("model"))
+        if aux_errors.stream_negotiation_reraises(failure.verdict):
+            raise _ClassifiedAttempt(failure)
+        logger.debug("Auxiliary %s: streamed request failed (%s); retrying non-streaming",
+                     task or "call", exc)
+        chunks = _STREAM_REJECTED
+    if chunks is _STREAM_REJECTED:
+        _notify_aux_dispatch()
+        response = client.chat.completions.create(**kwargs)
+        _notify_aux_provider_response()
+        return response
+    if hasattr(chunks, "choices"):
+        _notify_aux_provider_response()
+        return chunks
+    from agent.auxiliary_stream_watchdog import chat_stream_windows
+    return _aggregate_chat_stream(
+        chunks, model=model, total_ceiling=total_ceiling, no_progress=chat_stream_windows(client, kwargs, task))
 
 
 def _aggregate_chat_stream(
@@ -7084,24 +7072,10 @@ async def _aggregate_chat_stream_async(
 async def _acreate_with_stream(client: Any, kwargs: dict[str, Any], task: Optional[str] = None) -> Any:
     """Async create() for stream-only providers: ``stream=True`` + aggregate the async chunks."""
     stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
-    from agent.auxiliary_wire_receipt import (
-        finish_wire_receipt, start_wire_receipt,
-    )
-    receipt = start_wire_receipt(client, stream_kwargs, logical_context=_RELAY_AUX_CALL_CONTEXT.get())
-    try:
-        chunks = await client.chat.completions.create(**stream_kwargs)
-    except BaseException as exc:
-        finish_wire_receipt(receipt, error=exc)
-        raise
-    if hasattr(chunks, "choices"):  # shims may hand back a complete response despite stream=True
-        finish_wire_receipt(receipt, response=chunks)
+    chunks = await client.chat.completions.create(**stream_kwargs)
+    if hasattr(chunks, "choices"):
         return chunks
-    try:
-        response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
-    except BaseException as exc:
-        finish_wire_receipt(receipt, error=exc)
-        raise
-    finish_wire_receipt(receipt, response=response)
+    response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
     return response
 
 
@@ -7122,26 +7096,16 @@ async def _acreate_with_progress(
         if _async_client_streams_internally(client):
             response = await client.chat.completions.create(**kwargs)
         else:
-            from agent.auxiliary_wire_receipt import run_async_with_wire_receipt
-            response = await run_async_with_wire_receipt(
-                client, kwargs, lambda: client.chat.completions.create(**kwargs),
-                logical_context=_RELAY_AUX_CALL_CONTEXT.get(),
-            )
+            response = await client.chat.completions.create(**kwargs)
         if not _async_client_streams_internally(client):
             _notify_aux_provider_response()
         return response
     stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs, client)
-    from agent.auxiliary_wire_receipt import finish_wire_receipt, start_wire_receipt
-    receipt = start_wire_receipt(client, stream_kwargs, logical_context=_RELAY_AUX_CALL_CONTEXT.get())
     try:
         chunks = await client.chat.completions.create(**stream_kwargs)
     except BaseException as exc:
-        finish_wire_receipt(receipt, error=exc)
         if not isinstance(exc, Exception):
             raise
-        # Only a rejected stream NEGOTIATION falls back to a plain call (mirrors the sync wrapper); a
-        # failure mid-consumption below reaches the classified recovery ladder instead of silently
-        # re-sending the whole prompt non-streaming.
         if force_stream:
             raise
         failure = _classify_failure(exc, provider, client, kwargs.get("model"))
@@ -7152,23 +7116,13 @@ async def _acreate_with_progress(
         chunks = _STREAM_REJECTED
     if chunks is _STREAM_REJECTED:
         _notify_aux_dispatch()
-        from agent.auxiliary_wire_receipt import run_async_with_wire_receipt
-        response = await run_async_with_wire_receipt(
-            client, kwargs, lambda: client.chat.completions.create(**kwargs),
-            logical_context=_RELAY_AUX_CALL_CONTEXT.get(),
-        )
+        response = await client.chat.completions.create(**kwargs)
         _notify_aux_provider_response()
         return response
-    if hasattr(chunks, "choices"):  # shims may hand back a complete response despite stream=True
+    if hasattr(chunks, "choices"):
         _notify_aux_provider_response()
-        finish_wire_receipt(receipt, response=chunks)
         return chunks
-    try:
-        response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
-    except BaseException as exc:
-        finish_wire_receipt(receipt, error=exc)
-        raise
-    finish_wire_receipt(receipt, response=response)
+    response = await _aggregate_chat_stream_async(chunks, model=model, total_ceiling=total_ceiling)
     return response
 
 
@@ -8124,8 +8078,6 @@ def extract_content_or_reasoning(response, *, max_reasoning_chars: int | None = 
         return ""
     text = "\n\n".join(reasoning_parts)
     if max_reasoning_chars is not None and len(text) > max_reasoning_chars:
-        from agent.auxiliary_wire_receipt import mark_local_reasoning_clipped
-        mark_local_reasoning_clipped()
         logger.warning("fell back to reasoning fields (%d chars); truncating to %d",
                        len(text), max_reasoning_chars)
         return text[:max_reasoning_chars]

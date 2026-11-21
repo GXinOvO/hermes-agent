@@ -6,7 +6,6 @@ the acting model's output can stream to the user. stream=False is the original
 complete-response path and must stay byte-identical.
 """
 from types import SimpleNamespace
-import json
 
 import pytest
 
@@ -226,12 +225,5 @@ def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch, ca
         assert [part.choices[0].delta.content for part in out] == ["RAW_", "STREAM"]
     assert captured.get("stream") is True
     assert captured.get("stream_options") == {"include_usage": True}
-    prefix = "auxiliary wire receipt: "
-    receipts = [json.loads(record.getMessage()[len(prefix):]) for record in caplog.records
-                if record.getMessage().startswith(prefix)]
-    [receipt] = receipts
-    assert receipt["status"] == "returned"
-    assert receipt["response"]["visible_content_chars"] == len("RAW_STREAM")
-    assert receipt["response"]["finish_reason"] == "stop"
 
 

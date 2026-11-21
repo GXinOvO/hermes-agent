@@ -44,7 +44,7 @@ class CompressionTelemetryMixin:
             "effective_threshold": _safe_int(self.threshold_tokens), "protected_head_tokens": None,
             "protected_tail_tokens": None, "middle_window_tokens": None, "prellm_skip_count": 0,
             "aux_prompt_tokens": None, "aux_output_reservation": None,
-            "aux_provider": "", "aux_model": "", "aux_wire_receipt_ids": [],
+            "aux_provider": "", "aux_model": "",
             "effective_aux_context": None, "fit_margin": None, "chunking": False, "chunk_count": 0,
             "total_duration_ms": None, "aux_call_duration_ms": None, "queue_wait_ms": None, "prompt_build_ms": None,
             "time_to_first_progress_ms": None, "summary_generation_ms": None, "commit_ms": None,
@@ -76,14 +76,10 @@ class CompressionTelemetryMixin:
     def _record_aux_compression_call(
         self, *, prompt_messages: list[dict[str, Any]], max_tokens: int | None, duration_ms: int,
         aux_provider: str | None = None, aux_model: str | None = None,
-        wire_receipt_ids: list[str] | None = None,
-        attempt_id: str | None = None, telemetry: dict[str, Any] | None = None,
         effective_aux_context: int | None = None, phase_timings: dict[str, Any] | None = None,
     ) -> None:
-        target = telemetry if isinstance(telemetry, dict) else getattr(self, "_active_compression_telemetry", None)
+        target = getattr(self, "_active_compression_telemetry", None)
         if not isinstance(target, dict):
-            return
-        if attempt_id is not None and target.get("attempt_id") != attempt_id:
             return
         target["aux_prompt_tokens"] = estimate_messages_tokens_rough(prompt_messages)
         # The summary prompt is built fresh per attempt and never estimated again; don't let the memo pin it.
@@ -93,14 +89,6 @@ class CompressionTelemetryMixin:
             target["aux_provider"] = aux_provider
         if aux_model:
             target["aux_model"] = aux_model
-        if wire_receipt_ids is not None:
-            existing = target.get("aux_wire_receipt_ids")
-            existing = existing if isinstance(existing, list) else []
-            for value in wire_receipt_ids:
-                value = str(value)
-                if value and value not in existing:
-                    existing.append(value)
-            target["aux_wire_receipt_ids"] = existing
         if effective_aux_context is not None:
             target["effective_aux_context"] = _safe_int(effective_aux_context)
         if target["effective_aux_context"] is not None and target["aux_prompt_tokens"] is not None:

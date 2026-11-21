@@ -61,9 +61,9 @@ def test_interrupted_boundary_is_distinct_and_durable(tmp_path, tool_ran):
         assert "verify" in notice.lower() and "actions" in notice.lower(), notice
     assert rows[-1]["display_kind"] == FAILED_TURN_DISPLAY_KIND
     assert untyped_failed_turn_display_kind("assistant", notice) == FAILED_TURN_DISPLAY_KIND
-    before = db.message_count()
+    before = len(db.get_messages(sid))
     _close_durable_failed_turn(agent, result)
-    assert db.message_count() == before
+    assert len(db.get_messages(sid)) == before
     db.close()
 
     # Reload is where the original interruption's live status was lost.

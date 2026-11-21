@@ -38,34 +38,18 @@ class _BedrockCompletionsAdapter:
         )
 
     def create(self, **kwargs) -> Any:
-        from agent.auxiliary_client import _RELAY_AUX_CALL_CONTEXT, _notify_aux_provider_response
-        from agent.auxiliary_wire_receipt import (
-            bedrock_response_view, finish_wire_receipt, start_wire_receipt,
-        )
-        from agent.bedrock_adapter import _get_bedrock_runtime_client, call_converse
+        from agent.auxiliary_client import _notify_aux_provider_response
+        from agent.bedrock_adapter import call_converse
 
         model = kwargs.get("model", self._model)
         max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
         stop = kwargs.get("stop")
         if isinstance(stop, str):
             stop = [stop]
-        logical_context = _RELAY_AUX_CALL_CONTEXT.get() or self._logical_context
-        runtime_client = _get_bedrock_runtime_client(self._region)
-
-        def physical_call(request: dict[str, Any]) -> Any:
-            receipt = start_wire_receipt(self._receipt_client, request, logical_context=logical_context)
-            try:
-                raw = runtime_client.converse(**request)
-            except BaseException as exc:  # health: allow BLE001 -- physical SDK boundary must preserve cancellation and fail-open receipt
-                finish_wire_receipt(receipt, error=exc)
-                raise
-            finish_wire_receipt(receipt, response=bedrock_response_view(raw))
-            return raw
-
         response = call_converse(
             region=self._region, model=model, messages=kwargs.get("messages", []), tools=kwargs.get("tools"),
             max_tokens=int(max_tokens) if max_tokens else None, temperature=kwargs.get("temperature"),
-            top_p=kwargs.get("top_p"), stop_sequences=stop, physical_call=physical_call,
+            top_p=kwargs.get("top_p"), stop_sequences=stop,
         )
         _notify_aux_provider_response()
         return response

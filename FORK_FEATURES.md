@@ -19,7 +19,7 @@
 | F07 | ~~`execute_code` 显式只读并行批次~~ | 已移除（2026-11-21）：本地读取并行比顺序更慢，上下文优势来自 `execute_code` 本身；仅网页批量有约 4× 速度收益，但可由原生并行工具调用覆盖 | 1,228 行（含 33 个测试）删除；代价是失去网页批量并发 |
 | F08 | ~~每个子 Agent 的精确工具白名单~~ | 已移除（2026-11-20）：委派 schema、Agent 构造参数、执行期校验与恢复路径全部删除；子 Agent 回到上游语义（继承父级 toolsets + 固定角色黑名单）。删除前实测 381 个 task 用过该参数，但收益从未测量，且带 `terminal`/`execute_code` 的“只读”名单并不提供只读保证 | 删除依据见交付目录 `FEATURES-DECISION.md`（未入库） |
 | F09 | 后台完成结果持久化与恢复 | 进程、委派结果可找回，减少因结果丢失而重跑；`/bg`、`/btw` 的会话侧结果账本已于 2026-11-21 删除，命令回退到上游内存路径 | 进程、委派及受支持的后台交付路径；部分移除，恢复结果不等于恢复执行 |
-| F10 | 压缩、重试、中断与工具结果可靠性 | 压缩与辅助请求留下可核回执，中断可见，等待可取消，恢复提示不污染正常历史 | 相关运行自动路径；已合入；部分能力依赖已有配置 |
+| F10 | 压缩、重试与中断可靠性 | 中断可见、等待可取消、恢复提示不污染正常历史；辅助请求 wire/进度回执层已移除 | 相关运行自动路径；部分保留，回执层不再提供 |
 | F11 | 共享中转账号组恢复与切模型记录 | 同一 URL 多组凭据时按已存模型恢复正确分组；新建聊天切模型也能保存提示 | 会话恢复、切模型自动路径；已合入 |
 | F12 | Skill 查找与检查点维护优化 | 减少重复元数据读取和目录扫描；回滚遇已有索引锁或准备失败时停止 | Skill 查找、检查点创建／恢复自动路径；已合入，未在此量化提速 |
 | F13 | 长会话读保护、Cron 失败记账及审批继承开关 | 读保护状态跨回合保持一致；中止任务如实记失败；可让无人值守任务重新判定审批 | 读保护与 Cron 自动路径；审批继承默认兼容开启，需配置关闭；已合入 |
@@ -44,7 +44,7 @@
 - **F05 交付检查：** [检查脚本](skills/autonomous-ai-agents/hermes-agent/scripts/check-delegated-result.py)核对生命周期、结构化结果、声明文件和检查回执；任务本身是否正确仍由父 Agent 验收。`action="result"` 只读本会话／压缩谱系拥有的持久化委派记录，不重跑工作、不改变交付状态。证据复用属于执行指导，不能保证模型每次遵守。
 - **F07 并行（已删除）：** 2026-11-21 移除 `hermes_tools.parallel`、`__parallel__` RPC、线程池与 33 个专用测试。基准：本地 12×7.8KB 顺序 0.066s、并行 0.166s；NFS 0.137s vs 0.117s；4 个网页 35.1s vs 8.1s。上下文优势来自 `execute_code` 本身，顺序调用同样只回摘要；F07 仅剩高延迟 I/O 并发价值，原生并行工具调用已覆盖。
 - **F09 结果恢复（部分移除）：** `/bg`、`/btw` 的会话侧结果账本与 TUI 侧结果持久化已于 2026-11-21 删除，两条命令回退到上游内存结果路径；Agent 不直接使用这部分。进程与委派结果恢复保留：静默进程读取现有句柄，最终输出保留截断和总量信息，不保证完整日志永久可用；终端结果受七天保留期约束，64 条历史上限只作用于已消费结果。恢复仍绑定原任务身份和目标，不能把旧结果转送到改过的作业。平台投递的接受、发出与对端确认分别判断，状态不明不能宣称已送达。
-- **F10 可靠性修复：** 本分支增加辅助请求路由／wire／进度回执、压缩输入与摘要诊断、中断说明、主动工具结果裁剪的本地无正文日志，以及恢复脚手架的历史过滤。账号策略拒绝不会因切非流式向同一服务商重发；已有分类器允许的其他 provider fallback 保留。安全提示插件兼容批量 Skill 操作，启用后默认仍仅警告；委派上下文拒绝 `skill_manage` 变更，保留技能读取。浏览器与网页提取的 URL 密钥检查改为引用现有 `agent.redact`，保留原凭据匹配和拒绝规则；导入修复已隔离验证，运行进程采用仍待核验。这些不代表该插件是本分支新创，也不构成终端文件系统沙箱。
+- **F10 可靠性修复（收窄）：** 辅助请求 wire/进度回执、压缩回执 ID 与本地 prune 回执已于 2026-11-21 移除；保留中断说明、等待可取消、恢复脚手架过滤和 Bedrock 适配器的 per-model timeout 修复。账号策略拒绝不会因切非流式向同一服务商重发；已有分类器允许的其他 provider fallback 保留。安全提示插件兼容批量 Skill 操作，启用后默认仍仅警告；委派上下文拒绝 `skill_manage` 变更，保留技能读取。浏览器与网页提取的 URL 密钥检查改为引用现有 `agent.redact`，保留原凭据匹配和拒绝规则；导入修复已隔离验证，运行进程采用仍待核验。这些不代表该插件是本分支新创，也不构成终端文件系统沙箱。
 - **F11 身份恢复：** 显式请求的分组仍优先；旧会话才按端点和模型恢复身份。旧／新 home 写法只有能证明指向同一现有 home 和绑定数据库时才兼容，不能泛化成任意跨机器迁移。
 - **F12 检查点：** 元数据缓存保留可见性和隔离检查；目录计数改为流式。已有索引锁不会被擅自清理，Git 超时先留清理窗口；这不构成自动修复所有锁问题。
 - **F13 无人值守审批：** `approvals.unattended_inherit_approvals` 的兼容默认是 `true`；设置为 `false` 后，Cron、单次查询及 webhook/API 不消费交互会话已有授权，而按各自原生策略重新判断。不能把“增加开关”写成“所有无人值守任务默认隔离”。
@@ -69,7 +69,7 @@
 | F07 | 已删除（2026-11-21） | 原实现与测试已移除；历史 PR #26/#27/#31 |
 | F08 | 已移除（2026-11-20） | 运行时与存储侧全部删除，见上表 F08 行 |
 | F09 | [PR #30](https://github.com/GXinOvO/hermes-agent/pull/30)；结果恢复等直接提交见索引 | [进程结果恢复](tools/process_registry_result_recovery.py) · [后台记录测试](tests/hermes_state/test_background_results.py) · [静默结果测试](tests/tools/test_process_result_retention.py) |
-| F10 | [PR #1](https://github.com/GXinOvO/hermes-agent/pull/1)、[#16](https://github.com/GXinOvO/hermes-agent/pull/16)；后续直接提交见索引 | [压缩回执](agent/compaction_events.py) · [恢复等待测试](tests/agent/test_primary_recovery_interrupt.py) · [历史过滤测试](tests/hermes_state/test_empty_recovery_history_views.py) |
+| F10 | [PR #1](https://github.com/GXinOvO/hermes-agent/pull/1)、[#16](https://github.com/GXinOvO/hermes-agent/pull/16)；后续直接提交见索引 | [恢复等待测试](tests/agent/test_primary_recovery_interrupt.py) · [历史过滤测试](tests/hermes_state/test_empty_recovery_history_views.py) · [中断说明测试](tests/agent/test_interrupted_turn_notice.py) |
 | F11 | [PR #5](https://github.com/GXinOvO/hermes-agent/pull/5)、[#33](https://github.com/GXinOvO/hermes-agent/pull/33)；home 兼容直接提交见索引 | [账号组恢复](hermes_cli/runtime_provider_custom.py) · [测试](tests/hermes_cli/test_shared_relay_resume_identity.py) · [切模型记录测试](tests/tui_gateway/test_model_switch_marker_durability.py) |
 | F12 | [PR #13](https://github.com/GXinOvO/hermes-agent/pull/13)、[#17](https://github.com/GXinOvO/hermes-agent/pull/17)、[#18](https://github.com/GXinOvO/hermes-agent/pull/18) | [检查点维护说明](website/docs/developer-guide/checkpoint-git-lifecycle.md) · [缓存测试](tests/tools/test_skill_lookup_cache_contracts.py) · [扫描测试](tests/tools/test_checkpoint_scan_io.py) |
 | F13 | [PR #21](https://github.com/GXinOvO/hermes-agent/pull/21)；审批继承直接提交见索引 | [读保护上下文](agent/read_context.py) · [Cron 测试](tests/cron/test_guardrail_session_finalization.py) · [审批测试](tests/tools/test_unattended_consent_isolation.py) |
@@ -127,7 +127,7 @@
 
 ### 2026-11-10 上游同步兼容
 
-本轮协调 F05/F08/F09/F10/F15：保留子 Agent 结果找回、工具白名单、辅助请求回执和 owned 进程结果恢复，同时接入官方 [Anthropic timeout 修复](https://github.com/NousResearch/hermes-agent/commit/710b62c59a2c5a1c29d2448826e5071ef8c6b7a1)、[路由客户端共用解析](https://github.com/NousResearch/hermes-agent/commit/42be36381f3115225b8130ea2d278b0bb69279b9)、子任务结果分组和环境回收／退出竞争修复。上游覆盖这些基础能力，不据此认定已吸收本表增强；各条历史和默认值保留。
+本轮协调 F05/F08/F09/F10/F15：保留子 Agent 结果找回、工具白名单、中断等待和历史过滤，同时接入官方 [Anthropic timeout 修复](https://github.com/NousResearch/hermes-agent/commit/710b62c59a2c5a1c29d2448826e5071ef8c6b7a1)、[路由客户端共用解析](https://github.com/NousResearch/hermes-agent/commit/42be36381f3115225b8130ea2d278b0bb69279b9)、子任务结果分组和环境回收／退出竞争修复。上游覆盖这些基础能力，不据此认定已吸收本表增强；各条历史和默认值保留。
 
 原 F15 owned 进程环境关闭回归已随 2026-11-20 的 F15 删除；其历史覆盖包括自然退出、清理取消、输出待排空时的保活与结果发布，以及后端失联后坏环境回收和新命令重建；未验证的旧进程结果仍不伪造完成。接口快照由合并后的代码重新生成。该测试入口不代表整分支或实际安装通过验收，执行结果随同步 PR 记录；本次 Git 同步不更新运行安装。
 

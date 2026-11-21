@@ -3529,15 +3529,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             self.summary_model or self.model, f"{sum(len(m.get('content') or '') for m in messages):,}",
             _latency_info["prompt_build_ms"],
         )
-        attempt_telemetry = getattr(self, "_active_compression_telemetry", None)
-        compression_attempt_id = attempt_telemetry.get("attempt_id") if isinstance(attempt_telemetry, dict) else None
-        from agent.auxiliary_wire_receipt import compression_attempt_scope, compression_receipt_ids
         try:
             # Compression is atomic: shield the summary call from gateway interrupts. Re-entrant.
-            with aux_interrupt_protection(), compression_attempt_scope(compression_attempt_id):
+            with aux_interrupt_protection():
                 response = call_llm(**call_kwargs)
         finally:
-            wire_receipt_ids = compression_receipt_ids(_aux_route, None)
             route_known = bool(_aux_route.get("provider") and _aux_route.get("model"))
             _aux_model = _aux_route.get("model") or self.summary_model or self.model or ""
             # Remember the resolved model for the failure path: an ``auto`` route picks one per call
@@ -3552,8 +3548,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 duration_ms=int((time.monotonic() - _aux_call_start) * 1000),
                 aux_provider=_aux_route.get("provider") or self.provider or "",
                 aux_model=_aux_model,
-                wire_receipt_ids=wire_receipt_ids, attempt_id=compression_attempt_id,
-                telemetry=attempt_telemetry if isinstance(attempt_telemetry, dict) else None,
                 effective_aux_context=self.context_length if route_known and _aux_model == self.model else None,
                 phase_timings=_latency_info,
             )
@@ -3566,8 +3560,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 f"Context compression summary was truncated ({_TRUNCATED_SUMMARY_MARKER}): generation hit the output "
                 f"token cap and the summary is incomplete {where}"
             )
-        with compression_attempt_scope(compression_attempt_id):
-            content = self._extract_summary_content(response)
+        content = self._extract_summary_content(response)
         # Some proxies return HTTP 200 with empty content instead of an error or empty ``choices``. That
         # payload passes ``_validate_llm_response`` (a ``message`` exists), so it reaches here and would
         # otherwise be stored as a prefix-only summary with no body — silently wiping the compacted turns

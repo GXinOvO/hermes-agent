@@ -30,7 +30,7 @@ V1_FIELDS = {
     "token_count_method", "messages_before", "messages_after", "items_dropped", "context_limit", "threshold_tokens",
     "protected_head_tokens", "middle_window_tokens", "protected_tail_tokens", "duration_ms",
     "summary_generation_ms", "aux_call_duration_ms", "queue_wait_ms", "commit_ms", "summarizer_provider",
-    "summarizer_model", "aux_wire_receipt_ids", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
+    "summarizer_model", "tool_results_pruned", "reasoning_items_pruned", "summary_input_omitted_chars",
     "compression_count", "in_place", "session_rotated", "split_status", "cache_break", "has_focus_topic",
 }
 
@@ -368,28 +368,6 @@ def test_committed_proactive_prune_publishes_one_record(published):
     assert payload["token_count_method"] == "estimate_rough"
     assert payload["messages_before"] == payload["messages_after"] == len(msgs)
     assert SECRET not in json.dumps(payload)
-
-
-def test_committed_proactive_prune_writes_local_content_free_observation(caplog, published):
-    with caplog.at_level(logging.INFO, logger="agent.compaction_events"):
-        msgs, pruned = _prune_after_tool_results(persist_disabled=False)
-
-    records = [
-        record for record in caplog.records
-        if record.name == "agent.compaction_events"
-        and record.getMessage().startswith("proactive tool-result prune committed: ")
-    ]
-    assert len(records) == 1
-    payload = json.loads(records[0].getMessage().split(": ", 1)[1])
-    assert payload == {
-        "event": "prune_tool_results",
-        "messages_after": len(pruned),
-        "messages_before": len(msgs),
-        "session_id": "prune-session",
-        "tool_results_pruned": payload["tool_results_pruned"],
-    }
-    assert payload["tool_results_pruned"] > 0
-    assert SECRET not in records[0].getMessage()
 
 
 def test_a_persistence_detached_fork_publishes_nothing(published):

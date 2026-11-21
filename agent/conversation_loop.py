@@ -1818,6 +1818,13 @@ def run_conversation(
 
     # Steer / redirect / interrupt set this mid-turn; the result reports whether the turn ran untouched.
     agent._turn_user_intervened = False
+    if conversation_history:
+        conversation_history = [
+            message for message in conversation_history
+            if not (isinstance(message, dict) and (
+                message.get("_empty_recovery_synthetic") or message.get("_empty_terminal_sentinel")
+            ))
+        ]
     # Images attached natively to this user turn stay visible to vision_analyze for the turn, so
     # it does not embed the same pixels a second time into the same request (#76411).
     with native_turn_images(user_message):
@@ -1938,16 +1945,18 @@ def _close_durable_failed_turn(agent, result: Any) -> None:
             return
         from agent.agent_init_session import agent_interface
         store = agent_interface(agent)
-        if getattr(agent, "_persist_disabled", False) or (
-            (store.messages if store is not None else db).latest_conversation_role(session_id) not in OPEN_TURN_TAIL_ROLES
-        ):
+        tail_role = (
+            store.messages.latest_conversation_role(session_id)
+            if store is not None else messages[-1].get("role")
+        )
+        if getattr(agent, "_persist_disabled", False) or tail_role not in OPEN_TURN_TAIL_ROLES:
             return
         # Scope the "did a tool run" scan to this turn when its boundary is proven; otherwise
         # hedge over the whole list rather than under-report a possible side effect.
         start = result.get("current_turn_user_idx")
         turn_messages = messages[start:] if isinstance(start, int) and 0 <= start < len(messages) else messages
         boundary = {
-            "role": "assistant", "content": failed_turn_notice(turn_messages), "display_kind": FAILED_TURN_DISPLAY_KIND,
+            "role": "assistant", "content": failed_turn_notice(turn_messages, interrupted=bool(result.get("interrupted"))), "display_kind": FAILED_TURN_DISPLAY_KIND,
         }
         if failure := _failed_turn_display_metadata(agent, result):
             boundary["display_metadata"] = failure
