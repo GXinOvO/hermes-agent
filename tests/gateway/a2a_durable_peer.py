@@ -16,6 +16,7 @@ from gateway.session_delivery_policy import automation_delivery_scope
 from gateway.session_results import finish_result
 from hermes_state import SessionDB
 from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+from persistence_assembly import open_persistence, profile_scope
 from plugins.platforms.a2a.adapter import A2AAdapter
 
 
@@ -34,6 +35,7 @@ async def main():
             counter = home / 'executions'
             counter.write_text(str(int(counter.read_text()) + 1) if counter.exists() else '1')
             db = SessionDB(home / 'state.db')
+            persistence = open_persistence(profile_scope(home=home), eager=True)
             db.create_session('sid', source='a2a')
             epoch = begin_runtime_epoch(db, instance_id='producer')
             route = 'agent:main:a2a:dm:' + event.source.chat_id
@@ -45,10 +47,10 @@ async def main():
             admit_session_input(db, epoch=epoch, principal_id='automation:' + route, session_id='sid',
                                 request_id=event.message_id, payload={'text': event.text, 'native_text_v1': envelope})
             row = claim_session_input(db, epoch=epoch, session_id='sid')
-            authority = SimpleNamespace(db=db, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
+            authority = SimpleNamespace(db=db, persistence=persistence, runner=SimpleNamespace(_adapter_for_source=lambda source: adapter))
             async with automation_delivery_scope(authority, row, event):
                 prepared = await pf.prepare(authority, row, event, route, 'sealed native answer')
-            finish_result(db, epoch=epoch, row=row, response='sealed native answer', outcome='completed',
+            finish_result(persistence, epoch=epoch, row=row, response='sealed native answer', outcome='completed',
                           result={'result': {'final_response': 'sealed native answer', 'messages': [], '_pending_final_v1': prepared}, 'usage': {}})
             (home / 'producer.json').write_text(json.dumps({'task': event.message_id, 'context': event.source.chat_id}))
             db.close()
@@ -60,11 +62,12 @@ async def main():
         return
     db = SessionDB(home / 'state.db')
     value = pf.pending(db)[0]
+    persistence = open_persistence(profile_scope(home=home), eager=True)
     route = value['binding']['route']
     entry = SimpleNamespace(session_id='sid', suspended=False, session_key=route)
     store = SessionStore(sessions_dir=home / 'sessions', config=GatewayConfig())
     store.lookup_by_session_key = lambda key: entry if key == route else None
-    authority = SimpleNamespace(db=db, profile_id=str(home), logical_owner=lambda sid: sid)
+    authority = SimpleNamespace(db=db, persistence=persistence, profile_id=str(home), logical_owner=lambda sid: sid)
     registry = SessionAuthorities(home)
     registry.add(home, authority)
     runner = SimpleNamespace(session_authorities=registry, session_authority=authority, session_store=store,

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from tests.gateway.test_a2a_durable_public import seed, recover
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope
 from plugins.platforms.a2a.durable_tasks import _key
 
 
@@ -14,7 +14,7 @@ def test_authentic_task_identity_drift_refuses_before_claim(tmp_path, monkeypatc
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path / 'user'))
     identity = seed(tmp_path)
-    db = SessionDB(tmp_path / 'state.db')
+    db = open_persistence(profile_scope(home=tmp_path), eager=True)
     def mutate(conn):
         key = _key(identity['task'])
         record = json.loads(conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0])

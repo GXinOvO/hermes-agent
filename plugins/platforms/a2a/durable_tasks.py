@@ -105,7 +105,7 @@ def _validate_result(conn, home, record):
         return  # Legacy/forwarded completions have no native final identity to infer.
     from gateway import pending_final as pf
     from hermes_state_runtime import _target
-    from hermes_state_common import _RESET_END_REASONS
+    from persistence.sqlite._state.common import _RESET_END_REASONS
     from persistence.sqlite.conversation._store.retirement import retired_in
     binding = value['binding']
     pf._check_descriptor(pf.PREFIX + binding['admission_id'], value)
