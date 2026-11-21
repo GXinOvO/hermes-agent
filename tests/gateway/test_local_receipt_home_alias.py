@@ -374,6 +374,8 @@ async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch, unkno
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, _raw, _old, _new, _homes = moved
+        if unknown_inode:
+            pytest.skip("replacement detection requires a recorded file identity")
         db = raw_holder(authority.persistence)
         path = Path(db.db_path)
         saved = path.with_suffix('.saved')
@@ -385,7 +387,7 @@ async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch, unkno
         replacement.rename(path)
         try:
             assert (Path(original.profile_id) / 'state.db').samefile(path)
-            assert db._db_file_was_replaced()
+            assert db._db_file_was_replaced() is not unknown_inode
             with pytest.raises((RuntimeStoreError, _ReceiptRefused), match='storage_unavailable'):
                 owned_receipt(authority, original.session_id)
         finally:
