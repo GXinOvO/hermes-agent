@@ -51,14 +51,33 @@ def waiting(row, plan):
     from types import SimpleNamespace
     job, content, failure = json.loads(row['job_json']), row['content'], bool(row['for_failure'])
     home = canonical_target_home(get_profile_dir(target['chat_id']) if target['chat_id'] else get_hermes_home())
-    key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home)
+    key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home,
+                            for_failure=failure)
+    legacy_key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home)
     receipt = read_delivery_result(home, key)
+    effective_key = key
+    if receipt is None and legacy_key != key:
+        legacy = read_delivery_result(home, legacy_key)
+        if legacy is not None and legacy.get('notification_category', 'result') == (
+                'diagnostic' if failure else 'result'):
+            receipt, effective_key = legacy, legacy_key
     if receipt is None:
-        return pending_status(key, job, content, home, for_failure=failure) in {'queued', 'claimed'}
+        from cron.bot_chat_legacy import pending_status
+        def pending(key):
+            try:
+                return pending_status(key, job, content, home, for_failure=failure)
+            except ValueError as exc:
+                if 'identity mismatch' in str(exc):
+                    return None
+                raise
+        status = pending(key)
+        if status is None and legacy_key != key:
+            status = pending(legacy_key)
+        return status in {'queued', 'claimed'}
     if receipt.get('status') not in {'queued', 'claimed'}:
         return False
     verify_receipt(job, receipt)
-    if _canonical_record_error(Path(key + '.json'), receipt) or receipt.get('profile_home') != str(home):
+    if _canonical_record_error(Path(effective_key + '.json'), receipt) or receipt.get('profile_home') != str(home):
         raise ValueError('strict Bot pending receipt identity mismatch')
     _require_same_delivery(receipt, SimpleNamespace(subject=host_owner_subject()), bot_chat_message(job, content),
                            None, 'diagnostic' if failure else 'result')
@@ -74,10 +93,21 @@ def suppressed(target, job, content):
     from hermes_constants import get_hermes_home
     from tools.bot_live_delivery import read_delivery_result
     home = canonical_target_home(get_profile_dir(target['chat_id']) if target['chat_id'] else get_hermes_home())
-    key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home)
+    key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home,
+                            for_failure=True)
+    legacy_key = delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home)
+    def legacy_pending():
+        if legacy_key == key:
+            return False
+        try:
+            return pending_status(legacy_key, job, content, home, for_failure=True) is not None
+        except ValueError:
+            return False
     return (not warning_notifications_enabled('tui', load_user_config_effective(home / 'config.yaml'))
             and read_delivery_result(home, key) is None
-            and pending_status(key, job, content, home, for_failure=True) is None)
+            and read_delivery_result(home, legacy_key) is None
+            and pending_status(key, job, content, home, for_failure=True) is None
+            and not legacy_pending())
 
 
 def freeze(target, job, content, failure):
@@ -103,7 +133,8 @@ def freeze(target, job, content, failure):
         ref = producer_reference(job, content, home, owner)
         if ref is None:
             raise RuntimeError('strict Bot result provenance unavailable')
-        params = {'id': delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home),
+        params = {'id': delivery_identity(get_hermes_home().resolve(), job['id'], job['execution_id'], home,
+                                          for_failure=failure),
                   'profile': ref['target_profile'],
                   'session_id': owner['session_id'], 'message': bot_chat_message(job, content),
                   'notification_category': 'diagnostic' if failure else 'result', 'sealed_cron_result_v1': ref}

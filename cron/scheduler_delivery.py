@@ -777,16 +777,27 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
         run_id = job.get("execution_id")
         if not run_id:
             run_id = job.setdefault("_bot_chat_run_id", uuid.uuid4().hex)
-        key = hashlib.sha256(json.dumps(
-            [str(source_home), job_id, str(run_id), str(home)],
-            ensure_ascii=False, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        from cron.sealed_bot_result import delivery_identity
+        key = delivery_identity(source_home, job_id, run_id, home, for_failure=for_failure)
         # Read BEFORE discovery: the previous owner may have exited after accepting.
+        legacy_key = delivery_identity(source_home, job_id, run_id, home)
         receipt = read_delivery_result(home, key)
+        if receipt is None and legacy_key != key:
+            legacy_path = home / "runtime" / "bot_live_delivery" / f"{legacy_key}.json"
+            if legacy_path.is_file():
+                legacy = read_delivery_result(home, legacy_key)
+                if legacy is not None and legacy.get("notification_category", "result") == (
+                        "diagnostic" if for_failure else "result"):
+                    receipt = legacy
         target = f"bot-chat:{profile_label}"
         if receipt is None:
             from cron.bot_chat_legacy import pending_status
             pending = pending_status(key, job, content, home, for_failure=for_failure)
+            if pending is None and legacy_key != key:
+                try:
+                    pending = pending_status(legacy_key, job, content, home, for_failure=for_failure)
+                except ValueError:
+                    pending = None
             if pending is not None:
                 # A parked consumer owns the handoff, including its uncertain final outcome.
                 # It can publish a receipt between the first read and this status read.

@@ -55,7 +55,11 @@ def legacy_dependencies(home):
             job_id = _legacy_job(job, execution_id, home)
             if (job_id and record.get('status') in {'queued', 'claimed'}
                     and outcomes.get(execution_id) in {'pending','delivering','delivered','unknown'}
-                    and record.get('id') == entry.stem == delivery_identity(home, job_id, execution_id, record['home'])):
+                    and record.get('id') == entry.stem
+                    and record.get('id') in {
+                        delivery_identity(home, job_id, execution_id, record['home']),
+                        delivery_identity(home, job_id, execution_id, record['home'],
+                                          for_failure=record.get('for_failure'))}):
                 keep[execution_id] = job_id
         except (KeyError, TypeError, ValueError, OSError):
             logger.warning('Cron deferred record %s has invalid legacy seal evidence', entry.name)

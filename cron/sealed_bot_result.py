@@ -100,9 +100,11 @@ def _valid_frozen(job, home, execution_id):
     return value
 
 
-def delivery_identity(home, job_id, execution_id, target):
-    return hashlib.sha256(json.dumps([str(home), job_id, str(execution_id), str(target)],
-                                   ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+def delivery_identity(home, job_id, execution_id, target, for_failure=None):
+    parts = [str(home), job_id, str(execution_id), str(target)]
+    if for_failure is not None:
+        parts.append(bool(for_failure))
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
 def _row(home, execution_id, key=None):
@@ -143,7 +145,9 @@ def _deferred_row(root, key, execution_id, *, strict):
             or job.get('execution_id') != execution_id):
         raise ValueError('sealed Cron deferred result unknown')
     if strict and (record['status'] == 'transferred'
-            or key != delivery_identity(root.parent, job.get('id'), execution_id, record.get('home'))
+            or key not in {delivery_identity(root.parent, job.get('id'), execution_id, record.get('home')),
+                           delivery_identity(root.parent, job.get('id'), execution_id, record.get('home'),
+                                             for_failure=record.get('for_failure'))}
             or type(record.get('for_failure')) is not bool or not isinstance(record.get('content'), str)):
         raise ValueError('sealed Cron deferred result unknown')
     return record
@@ -226,9 +230,22 @@ def producer_reference(job, content, target_home, owner):
     target_home = canonical_target_home(target_home)
     execution_id = job.get('execution_id')
     _valid_frozen(job, home, execution_id)
-    key = delivery_identity(home, job['id'], execution_id, Path(target_home).resolve())
-    row = _row(home, execution_id, key)
-    target = _target_name(Path(target_home).resolve())
+    target = Path(target_home).resolve()
+    try:
+        row = _row(home, execution_id)
+    except ValueError:
+        row = None
+        for candidate in (delivery_identity(home, job['id'], execution_id, target),
+                          delivery_identity(home, job['id'], execution_id, target, for_failure=True),
+                          delivery_identity(home, job['id'], execution_id, target, for_failure=False)):
+            try:
+                row = _row(home, execution_id, candidate)
+                break
+            except (ValueError, FileNotFoundError):
+                continue
+        if row is None:
+            raise
+    target = _target_name(target)
     saved, value = _check_row(home, row, target, content)
     if saved.get(_FIELD) != job[_FIELD] or saved.get('id') != job.get('id'):
         raise ValueError('sealed Cron input drift')
@@ -312,7 +329,10 @@ def _verify_reference(connection, params, session_id, live_session_id, *, create
                 or params.get('session_id', '') != expected['target_session_id']
                 or params.get('author') is not None
                 or params.get('notification_category', 'result') != ('diagnostic' if row['for_failure'] else 'result')
-                or params.get('id') != delivery_identity(source, job['id'], row['execution_id'], home)):
+                or params.get('id') not in {
+                    delivery_identity(source, job['id'], row['execution_id'], home,
+                                      for_failure=bool(row['for_failure'])),
+                    delivery_identity(source, job['id'], row['execution_id'], home)}):
             raise ValueError('sealed Cron reference conflict')
         return _Verified(deepcopy(expected), _EVENT_SEAL)
     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, CronExecutionUnknown) as exc:
@@ -448,7 +468,8 @@ def validate_defer(key, job, content, home, for_failure):
         return  # old-format evidence is parked, then quarantined without a replay
     source = _home()
     home = canonical_target_home(home)
-    if key != delivery_identity(source, job['id'], job['execution_id'], home):
+    if key not in {delivery_identity(source, job['id'], job['execution_id'], home),
+                   delivery_identity(source, job['id'], job['execution_id'], home, for_failure=for_failure)}:
         raise ValueError('sealed Cron deferred identity conflict')
     row = _row(source, job['execution_id'])
     native, _ = _check_row(source, row, _target_name(home), content)

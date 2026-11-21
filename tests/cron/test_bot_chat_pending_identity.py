@@ -37,6 +37,22 @@ def test_differently_composed_payload_returns_the_record_status(tmp_path, monkey
                           for_failure=True) == "ambiguous"
 
 
+def test_failure_lane_has_a_separate_delivery_identity(tmp_path, monkeypatch):
+    home = Path(os.path.realpath(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    job = {"id": "job-1", "execution_id": "exec-1"}
+    failure_key = delivery_identity(home, job["id"], job["execution_id"], home, for_failure=True)
+    result_key = delivery_identity(home, job["id"], job["execution_id"], home, for_failure=False)
+    assert failure_key != result_key
+    directory = home / "cron" / "bot_chat_pending"
+    directory.mkdir(parents=True)
+    (directory / f"{failure_key}.json").write_text(json.dumps({
+        "id": failure_key, "status": "ambiguous", "job": job, "content": "failure text",
+        "home": str(home), "for_failure": True, "sequence": 1}), encoding="utf-8")
+    assert pending_status(result_key, job, "result text", home, for_failure=False) is None
+    assert pending_status(failure_key, job, "failure text", home, for_failure=True) == "ambiguous"
+
+
 @pytest.mark.parametrize("drift", ["execution", "job", "failure", "home"])
 def test_a_different_delivery_stays_a_conflict(tmp_path, monkeypatch, drift):
     key, record, payload = _record(tmp_path, monkeypatch)
