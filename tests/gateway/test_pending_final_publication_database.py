@@ -1,4 +1,5 @@
 """Follow-up probes limited to newly unresolved API03 trust boundaries."""
+from tests.fixtures.storage_holder import raw_holder
 import hashlib
 import json
 import sqlite3
@@ -18,7 +19,7 @@ async def test_ack_capability_must_not_cross_actual_database_with_same_home(tmp_
     try:
         cap, _ = publication(db, row)
         other_path = tmp_path / 'other.db'
-        with db._read_ctx() as source, sqlite3.connect(other_path) as target:
+        with raw_holder(db)._read_ctx() as source, sqlite3.connect(other_path) as target:
             source.backup(target)
         with SessionDB(other_path) as other:
             accepted = pf.finish(other, row['admission_id'], 'text', SendResult(success=True, message_id='task',
@@ -44,14 +45,14 @@ async def test_expiry_keeps_independent_original_hash_despite_current_public_row
                          raw_response={'publication_receipt_v1': cap}))
         original = pf.pending(db)[0]['parts']['text']['publication_receipt']
         changed = dict(original, public_reply_sha256=hashlib.sha256(b'changed public').hexdigest())
-        db._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?',
+        raw_holder(db)._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?',
             (json.dumps(changed), 'test.publication:' + row['admission_id'])))
         monkeypatch.setattr(pf.time, 'time', lambda: value['created_at'] + pf.RETENTION_SECONDS + 10)
         monkeypatch.setattr('gateway.delivery_ledger._owner_alive', lambda *args: False)
         pf.reconcile_orphans(db)
         current = pf.pending(db)[0]
         assert current['expired'] and 'content' not in current['parts']['text']
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             read = pub.read(conn, tmp_path, current['binding'])
             assert read == original and read['public_reply_sha256'] != changed['public_reply_sha256']
@@ -78,7 +79,7 @@ async def test_current_row_only_callback_cannot_prove_original_content_relations
                 (key, json.dumps({'reply': arbitrary_public, 'hash': digest})))
             return pub.capture(conn, tmp_path, row['admission_id'], 'text', task_id='task', context_id='context',
                                public_reply=arbitrary_public, verify=weak_verify)
-        cap = db._execute_write(publish)
+        cap = raw_holder(db)._execute_write(publish)
         assert pf.finish(db, row['admission_id'], 'text', SendResult(success=True, message_id='task',
                          raw_response={'publication_receipt_v1': cap}))
         proof = pf.pending(db)[0]['parts']['text']['publication_receipt']

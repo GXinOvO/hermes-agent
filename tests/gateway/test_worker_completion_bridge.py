@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from contextlib import closing
 import asyncio
 import json
@@ -31,7 +32,7 @@ def test_authenticated_bridge_uses_actual_completion_and_refusal_receipts(capaci
         with SessionDB(tmp_path / 'state.db') as db:
             db.create_session('parent', source='cli')
             epoch = begin_runtime_epoch(db, instance_id='owner')
-            db._execute_write(ad._initialize_schema)
+            raw_holder(db)._execute_write(ad._initialize_schema)
             authority = SimpleNamespace(db=db, epoch=epoch, profile_id='profile',
                 _require_admission_open=lambda:None, wake_after_worker=lambda sid:None)
             actor = SimpleNamespace(profile_id='profile', subject='alice', capabilities={'worker:adopt'})
@@ -49,7 +50,7 @@ def test_authenticated_bridge_uses_actual_completion_and_refusal_receipts(capaci
                 requests.append(json.loads(json.dumps(params)))
                 return asyncio.run(worker_request(connection, ref, params, operation='persist'))
             if capacity:
-                db._execute_write(lambda conn:conn.execute("INSERT INTO async_delegations "
+                raw_holder(db)._execute_write(lambda conn:conn.execute("INSERT INTO async_delegations "
                     "(delegation_id,origin_session,state,dispatched_at,updated_at,delivery_state) "
                     "VALUES('old','','completed',1,1,?)", ('pending' if capacity == 'pending' else 'delivered',)))
                 monkeypatch.setattr(ad, '_MAX_DURABLE_PENDING' if capacity == 'pending' else '_MAX_DURABLE_IDENTITIES', 1)
@@ -60,7 +61,7 @@ def test_authenticated_bridge_uses_actual_completion_and_refusal_receipts(capaci
                     response = ad.dispatch_async_delegation(goal='refuse', context=None, toolsets=None, role='leaf',
                         model=None, session_key='', parent_session_id='parent', runner=lambda:pytest.fail('runner started'))
                     assert response == {'status':'rejected', 'error':'delegation_result_capacity'}
-                    db._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('old',)))
+                    raw_holder(db)._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('old',)))
                     replay = rpc('worker.persist', **requests[0])
                     assert replay['value'] == response
                     assert events.empty()
@@ -77,7 +78,7 @@ def test_authenticated_bridge_uses_actual_completion_and_refusal_receipts(capaci
                 assert store.append_messages_batch('parent', [{'role':'assistant','content':'still usable'}]) == 1
                 store.queue_token_counts('parent', input_tokens=2, output_tokens=1)
                 assert store.finish() == {'status':'terminal'}
-                with db._read_ctx() as conn:
+                with raw_holder(db)._read_ctx() as conn:
                     assert conn.execute('SELECT status FROM worker_executions WHERE execution_id=?', ('worker',)).fetchone()[0] == 'terminal'
     finally:
         worker.terminate()

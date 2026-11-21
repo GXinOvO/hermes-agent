@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import io
@@ -23,7 +24,7 @@ def isolated(tmp_path, monkeypatch):
 def snapshot(home):
     db = SessionDB(home / 'state.db', read_only=True)
     try:
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             return list(conn.execute('SELECT key,value FROM state_meta ORDER BY key'))
     finally:
         db.close()
@@ -94,7 +95,7 @@ def test_capacity_counts_bad_raw_and_keeps_stream_replay_available(tmp_path, mon
     adapter.tasks.create('existing', 'ctx', 'peer')
     db = SessionDB(tmp_path / 'state.db')
     try:
-        db._execute_write(lambda conn: conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
                                                    (dt._key('bad-raw'), '{broken')))
     finally:
         db.close()
@@ -162,7 +163,7 @@ def test_bad_ack_and_corrupt_sibling_survive_retention(tmp_path, monkeypatch):
             conn.execute('UPDATE state_meta SET value=? WHERE key=?',
                          (json.dumps(value), pf.PREFIX + value['binding']['admission_id']))
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (dt._key('dirty'), '{broken'))
-        db._execute_write(damage)
+        raw_holder(db)._execute_write(damage)
     finally:
         db.close()
     adapter = A2AAdapter(PlatformConfig(enabled=True, extra={'port': 0}))

@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from copy import deepcopy
 import json
 
@@ -27,9 +28,9 @@ async def test_bad_admission_shape_refuses_before_claim_and_preserves_native_raw
         if shape == 'local_automation':
             payload['local_automation_v1'] = []
         raw = json.dumps(payload)
-        db._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE session_admissions SET payload_json=? WHERE admission_id=?',
                                                     (raw, row['admission_id'])))
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             with pytest.raises(ValueError, match='identity witness'):
                 pf.read_identity_witness(conn, tmp_path, value['binding'])
@@ -50,7 +51,7 @@ async def test_valid_admission_shape_keeps_normal_reader_and_claim(tmp_path):
     try:
         settle(db, epoch, row, descriptor)
         value = pf.pending(db)[0]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert pf.read_identity_witness(conn, tmp_path, value['binding'])['binding'] == value['binding']
             assert pf._valid(conn, value, tmp_path)
         assert pf.claim(db, row['admission_id'], 'text', 'sealed final')[1]

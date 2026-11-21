@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
@@ -42,7 +43,7 @@ async def test_strict_publication_returns_exact_original_receipt(tmp_path, monke
         receipt = pf.pending(db)[0]['parts']['text']['publication_receipt']
         assert receipt == expected
         from gateway.pending_final_publication import read
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             assert read(conn, tmp_path, value['binding']) == expected
             assert conn.total_changes == before
@@ -74,17 +75,17 @@ async def test_publication_verifier_binds_task_to_original_claimed_content(tmp_p
                    'payload_hash': value['parts']['text']['payload_hash'],
                    'public_reply_sha256': hashlib.sha256(security.redact_outbound(text).encode()).hexdigest()}
         key = dt._key(identity['task'])
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             original = conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0]
             assert dt.verify_publication(conn, tmp_path, receipt, claimed) is True
         changed = json.loads(original)
         changed['reply'] = 'not original sealed text'
         changed['public_reply_sha256'] = hashlib.sha256(changed['reply'].encode()).hexdigest()
-        db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
                                                    (json.dumps(changed), key)))
         forged = deepcopy(receipt)
         forged['public_reply_sha256'] = changed['public_reply_sha256']
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             assert dt.verify_publication(conn, tmp_path, receipt, claimed) is False
             assert dt.verify_publication(conn, tmp_path, forged, claimed) is False
@@ -122,7 +123,7 @@ async def test_ack_refuses_publication_drift_or_forged_proof_without_redelivery(
                 if fault == 'result_shape':
                     task['durable_result_v1'] = [task['durable_result_v1']]
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(task), key))
-            db._execute_write(damage)
+            raw_holder(db)._execute_write(damage)
         if fault == 'plain_dict':
             capability = result.raw_response['publication_receipt_v1']
             result.raw_response['publication_receipt_v1'] = json.loads(capability.encoded)

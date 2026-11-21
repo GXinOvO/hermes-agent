@@ -1,4 +1,5 @@
 """Independent review probes. Expected assertions remain red on defects."""
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -94,7 +95,7 @@ def mutate(db, admission, fault):
         if fault == 'generation':
             conn.execute('UPDATE sessions SET runtime_generation=runtime_generation+1 WHERE id=?', ('sid',))
         pf._put(conn, admission, value)
-    db._execute_write(write)
+    raw_holder(db)._execute_write(write)
 
 
 @pytest.mark.asyncio
@@ -129,7 +130,7 @@ async def test_pending_rechecks_sealed_payload_after_claim(fault, tmp_path, monk
         monkeypatch.setattr(pf, 'claim', claim)
         try:
             result = await sd.publish_pending(adapter, db, admission)
-            with db._read_ctx() as conn:
+            with raw_holder(db)._read_ctx() as conn:
                 value = pf._read(conn, admission)
             print(json.dumps({'phase': 'after_claim', 'fault': fault, 'sent': len(wire.events),
                               'success': result.success, 'state': value['parts']['text']['state']}))
@@ -145,7 +146,7 @@ async def test_pending_real_concurrent_cas_allows_one_post(tmp_path, monkeypatch
         adapter, db, admission = await settled(tmp_path, monkeypatch, wire.url)
         try:
             results = await asyncio.gather(sd.publish_pending(adapter, db, admission), sd.publish_pending(adapter, db, admission))
-            with db._read_ctx() as conn:
+            with raw_holder(db)._read_ctx() as conn:
                 value = pf._read(conn, admission)
             assert len(wire.events) == 1
             assert value['parts']['text']['state'] == 'delivered'
@@ -173,7 +174,7 @@ async def test_generic_probe_stays_planless_but_recovery_mints_claim_bound_plan(
             result = await prepare_strict_transport(adapter, 'send', chat_id='#loopback',
                 content='sealed-raft-loopback-result', execution_id=admission, claim_id=admission + ':text')
             assert result is None
-            with db._read_ctx() as conn:
+            with raw_holder(db)._read_ctx() as conn:
                 value = pf._read(conn, admission)
             plans = await pf.prepare_delivery(adapter, value, SessionSource.from_dict(value['binding']['source']))
             assert len(plans) == 1

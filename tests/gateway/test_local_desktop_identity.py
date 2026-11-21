@@ -353,7 +353,7 @@ async def test_a_desktop_chat_saved_before_the_mark_moved_still_resumes_and_runs
             policy["request_json"] = json.dumps({**json.loads(policy["request_json"]), "desktop_local": True},
                                                 sort_keys=True)
             c.execute("UPDATE state_meta SET value=? WHERE key=?", (json.dumps(receipt), key))
-        db._execute_write(saved_the_old_way)
+        raw_holder(db)._execute_write(saved_the_old_way)
         publish_local_policy(conn.authority, stored, evict=False)  # the chat as an owner restores it
         conn.transport.desktop_local = False
 

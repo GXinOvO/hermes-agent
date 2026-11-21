@@ -1,4 +1,5 @@
 """Corruption controls using authentic producer records and native fresh recovery."""
+from tests.fixtures.storage_holder import raw_holder
 import json
 
 import pytest
@@ -24,7 +25,7 @@ def test_authentic_task_identity_drift_refuses_before_claim(tmp_path, monkeypatc
         else:
             record['input_id'] = 'unrelated-input'
         conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(record), key))
-    db._execute_write(mutate)
+    raw_holder(db)._execute_write(mutate)
     db.close()
     observed = recover(tmp_path, 'recover')
     print('REVIEW_IDENTITY_DRIFT', json.dumps({'mutation': mutation, 'task': identity, 'result': observed}))

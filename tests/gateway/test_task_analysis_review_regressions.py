@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 import json
 import sqlite3
@@ -220,7 +221,7 @@ def test_busy_timeout_restore_failure_rolls_back_new_transaction(tmp_path):
     db._conn = RestoreFailure(real)
     try:
         with pytest.raises(sqlite3.OperationalError, match='restoration failure'):
-            db._execute_write(lambda conn: calls.append('executed'), patience_s=0)
+            raw_holder(db)._execute_write(lambda conn: calls.append('executed'), patience_s=0)
         assert calls == []
         assert not real.in_transaction
         assert real.execute('PRAGMA busy_timeout').fetchone()[0] == prior

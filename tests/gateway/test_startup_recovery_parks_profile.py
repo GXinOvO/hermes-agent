@@ -154,7 +154,7 @@ def test_a_secondary_whose_retirement_times_out_keeps_its_lock_but_is_never_star
                 yield conn
 
         for authority in all_authorities(runner):
-            authority.db._read_ctx = unreadable if authority is beta else no_admissions
+            raw_holder(authority.db)._read_ctx = unreadable if authority is beta else no_admissions
             authority.db._read_one = unreadable if authority is beta else (lambda *_a: None)
             authority.persistence = storage_handle(authority.profile_id)
         for read in ("_read_ctx", "_read_all"):  # the retained store's own reads fail the same way

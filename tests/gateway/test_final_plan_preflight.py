@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -130,7 +131,7 @@ async def test_human_attachment_claim_and_recovery_plan_ignore_strict_order_gate
                 value = pf._read(conn, descriptor['binding']['admission_id'])
                 value['parts']['text']['state'] = 'unknown'
                 pf._put(conn, descriptor['binding']['admission_id'], value)
-            db._execute_write(uncertain)
+            raw_holder(db)._execute_write(uncertain)
             value = pf.pending(db)[0]
             plans = await pf.prepare_delivery(adapter, value, event.source)
             assert [kind for kind, _part, _calls in plans] == ['attachments']

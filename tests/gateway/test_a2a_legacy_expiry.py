@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import json
 from types import SimpleNamespace
 
@@ -24,7 +25,7 @@ def test_legacy_ack_can_expire_after_core_body_without_replaying(tmp_path, monke
             if not ack_time:
                 part.pop('delivered_at')
             pf._put(conn, value['binding']['admission_id'], value)
-        db._execute_write(old_ack)
+        raw_holder(db)._execute_write(old_ack)
         clock = [dt.time.time() + 8 * 24 * 3600]
         monkeypatch.setattr(dt, 'time', SimpleNamespace(time=lambda: clock[0]))
         monkeypatch.setattr(pf, 'time', SimpleNamespace(time=lambda: clock[0]))
@@ -38,7 +39,7 @@ def test_legacy_ack_can_expire_after_core_body_without_replaying(tmp_path, monke
             assert expired == []
             clock[0] += 8 * 24 * 3600
             assert dt.maintain(tmp_path) == [identity['task']]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             saved = conn.execute('SELECT value FROM state_meta WHERE key=?', (dt._key(identity['task']),)).fetchone()[0]
         assert json.loads(saved)['expired'] and 'reply' not in json.loads(saved)
         for _ in range(2):

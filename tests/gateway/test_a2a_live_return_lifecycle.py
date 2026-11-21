@@ -1,4 +1,5 @@
 """Native first-response retirement, accounting and lawful-history controls."""
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 import json
 import threading
@@ -130,7 +131,7 @@ async def test_first_reply_preserves_native_target_and_accounting(tmp_path, monk
                           result={'result': {'final_response': 'FOLLOWING_REPLY', 'messages': []}, 'usage': {}})
         visible = operation in {'unchanged', 'next-turn', 'input-required'}
         # Snapshot after lawful mutation, before the first-response/fallback boundary.
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.execute('SELECT value FROM state_meta WHERE key=?', (durable_tasks._key(identities['task']),)).fetchone()[0]
             messages_before = [tuple(row) for row in conn.execute('SELECT id,session_id,role,content FROM messages ORDER BY id')]
         metrics_before = protocol.metrics.snapshot()
@@ -140,7 +141,7 @@ async def test_first_reply_preserves_native_target_and_accounting(tmp_path, monk
         conversation_before = conversation.read_bytes()
         release.set()
         wire = await asyncio.wait_for(reader, 20)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             after = conn.execute('SELECT value FROM state_meta WHERE key=?', (durable_tasks._key(identities['task']),)).fetchone()[0]
             messages_after = [tuple(row) for row in conn.execute('SELECT id,session_id,role,content FROM messages ORDER BY id')]
         state = next(v for v in pf.pending(db) if v['reply_to'] == identities['task'])['parts']['text']

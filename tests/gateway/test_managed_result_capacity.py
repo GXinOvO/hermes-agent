@@ -1,4 +1,5 @@
 """Managed ingress refuses exhausted retention before starting an inert runner."""
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 import json
 import os
@@ -63,7 +64,7 @@ def legal_seal(db, authority, name, *, text='held', finished=False):
                         request_id=name, payload={'text': 'held input'})
     row = claim_session_input(db, epoch=authority.epoch, session_id=name)
     execution = 'admission-worker:' + row['admission_id']
-    db._execute_write(lambda conn: conn.execute(
+    raw_holder(db)._execute_write(lambda conn: conn.execute(
         "INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "
         "VALUES(?,?,'compute',?,?,'running','fixture')", (execution, name, authority.epoch, row['generation'])))
     scope = dict(epoch=authority.epoch, profile_id=authority.profile_id, session_id=name,
@@ -95,7 +96,7 @@ def fill_byte_capacity(db, authority):
         text = 'x' * min(room, remaining - overhead)
         assert len(encode_frame({'type': 'result', 'result': {'final_response': text}})) < MAX_FRAME
         # Rebuild through the real producer, rather than writing synthetic metadata.
-        db._execute_write(lambda conn: conn.execute('DELETE FROM state_meta WHERE key=?',
+        raw_holder(db)._execute_write(lambda conn: conn.execute('DELETE FROM state_meta WHERE key=?',
                                                     (results.PREFIX + row['admission_id'],)))
         raw = {'final_response': text}
         accepted, usage = accept_result(raw)
@@ -309,7 +310,7 @@ def test_legacy_unreserved_worker_counts_until_normal_settlement(tmp_path, monke
         owner = SimpleNamespace(db=db, epoch=begin_runtime_epoch(db, instance_id='old-version'), profile_id='owned',
                                 _require_admission_open=lambda: None)
         row = claimed(db, owner, 'legacy')
-        db._execute_write(lambda conn: conn.execute(
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             "INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "
             "VALUES(?,'legacy','compute',?,?,'running','legacy')",
             ('admission-worker:' + row['admission_id'], owner.epoch, row['generation'])))

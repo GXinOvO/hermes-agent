@@ -1,4 +1,5 @@
 """Additional controls at public RPC and the existing native recovery boundary."""
+from tests.fixtures.storage_holder import raw_holder
 from copy import deepcopy
 import io
 import json
@@ -65,7 +66,7 @@ def test_corrupt_task_preserved_and_legal_recovery_still_works(tmp_path, mutatio
     identity = seed(tmp_path)
     db = SessionDB(tmp_path / 'state.db')
     key = dt._key(identity['task'])
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         original = conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0]
     damaged = json.loads(original)
     if mutation == 'agent_scope':
@@ -75,13 +76,13 @@ def test_corrupt_task_preserved_and_legal_recovery_still_works(tmp_path, mutatio
     else:
         damaged[mutation] = 'changed'
     raw = json.dumps(damaged)
-    db._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (raw, key)))
+    raw_holder(db)._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (raw, key)))
     first = recover(tmp_path, 'recover')
     assert first['delivered'] == 0
     assert (first['part']['state'], first['part']['attempts']) == ('pending', 0)
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         assert conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()[0] == raw
-    db._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (original, key)))
+    raw_holder(db)._execute_write(lambda c: c.execute('UPDATE state_meta SET value=? WHERE key=?', (original, key)))
     db.close()
     second = recover(tmp_path, 'recover')
     assert second['delivered'] == 1

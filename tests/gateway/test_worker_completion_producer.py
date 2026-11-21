@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 from contextlib import contextmanager
 import json
 import os
@@ -21,7 +22,7 @@ def worker_store(home):
     with SessionDB(home / 'state.db') as db:
         db.create_session('parent', source='cli')
         epoch = begin_runtime_epoch(db, instance_id='owner')
-        db._execute_write(ad._initialize_schema)
+        raw_holder(db)._execute_write(ad._initialize_schema)
         register_worker_execution(db, epoch=epoch, execution_id='worker', session_id='parent',
             generation=0, kind='compute', adoption_secret='inert')
         scope = dict(epoch=epoch, execution_id='worker', session_id='parent', generation=0,
@@ -64,7 +65,7 @@ def test_real_completion_producer_commits_through_worker_outbox(tmp_path, monkey
         event = events.get_nowait()
         assert event['result_durability'] == 'persisted'
         assert store.failure is None and store.journal['pending'] == []
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             row = conn.execute('SELECT state,event_json,result_json FROM async_delegations WHERE delegation_id=?', ('deleg_saved',)).fetchone()
             assert row[0] == 'completed'
             assert json.loads(row[1])['result_durability'] == 'persisted'
@@ -78,12 +79,12 @@ def test_capacity_refusal_survives_lost_ack_and_outbox_reopen(tmp_path, monkeypa
     db = SessionDB(path)
     db.create_session('parent', source='cli')
     epoch = begin_runtime_epoch(db, instance_id='owner')
-    db._execute_write(ad._initialize_schema)
+    raw_holder(db)._execute_write(ad._initialize_schema)
     register_worker_execution(db, epoch=epoch, execution_id='worker', session_id='parent',
         generation=0, kind='compute', adoption_secret='inert')
     scope = dict(epoch=epoch, execution_id='worker', session_id='parent', generation=0,
         pid=os.getpid(), birth=worker_birth(psutil.Process()))
-    db._execute_write(lambda conn:conn.execute("INSERT INTO async_delegations "
+    raw_holder(db)._execute_write(lambda conn:conn.execute("INSERT INTO async_delegations "
         "(delegation_id,origin_session,state,dispatched_at,updated_at,delivery_state) "
         "VALUES('saved','','completed',1,1,'pending')"))
     monkeypatch.setattr(ad, '_MAX_DURABLE_PENDING', 1)
@@ -103,18 +104,18 @@ def test_capacity_refusal_survives_lost_ack_and_outbox_reopen(tmp_path, monkeypa
             ad.dispatch_async_delegation(goal='never run', context=None, toolsets=None, role='leaf', model=None,
                 session_key='', parent_session_id='parent', runner=lambda:pytest.fail('runner started'))
         assert not ad.active_count() and len(store.journal['pending']) == 1
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             receipt = json.loads(conn.execute('SELECT result_json FROM worker_receipts').fetchone()[0])
         assert receipt == {'value':{'status':'rejected','error':'delegation_result_capacity'}}
         store._outbox_owner.close()
         db.close()
         db = SessionDB(path)
-        db._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('saved',)))
+        raw_holder(db)._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('saved',)))
         store = RuntimeSessionStore(rpc, scope, tmp_path / 'outbox')
         assert store.failure is None and store.journal['pending'] == []
         assert store.append_messages_batch('parent', [{'role':'assistant','content':'after durable refusal'}]) == 1
         assert store.finish() == {'status':'terminal'}
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT COUNT(*) FROM async_delegations').fetchone()[0] == 0
     finally:
         if not store._outbox_owner.closed:
@@ -125,7 +126,7 @@ def test_capacity_refusal_survives_lost_ack_and_outbox_reopen(tmp_path, monkeypa
 @pytest.mark.parametrize('capacity', ['pending', 'identity'])
 def test_capacity_refusal_consumes_receipt_and_allows_later_worker_persistence(tmp_path, monkeypatch, capacity):
     with worker_store(tmp_path) as (db, store, requests):
-        db._execute_write(lambda conn:conn.execute(
+        raw_holder(db)._execute_write(lambda conn:conn.execute(
             "INSERT INTO async_delegations(delegation_id,origin_session,state,dispatched_at,updated_at,delivery_state,result_json) "
             "VALUES('saved','', 'completed',1,1,?,?)", ('pending' if capacity == 'pending' else 'delivered', '{"summary":"old"}')))
         monkeypatch.setattr(ad, '_MAX_DURABLE_PENDING' if capacity == 'pending' else '_MAX_DURABLE_IDENTITIES', 1)
@@ -136,12 +137,12 @@ def test_capacity_refusal_consumes_receipt_and_allows_later_worker_persistence(t
         assert response['status'] == 'rejected' and 'capacity' in response['error']
         assert ran == [] and not ad.active_count()
         assert store.failure is None and store.journal['pending'] == []
-        db._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('saved',)))
+        raw_holder(db)._execute_write(lambda conn:conn.execute('DELETE FROM async_delegations WHERE delegation_id=?', ('saved',)))
         request = requests[0]
         pid, birth = request.pop('pid'), request.pop('birth')
         replay = persist_worker_delegation(db, **request, worker_pid=pid, worker_birth=birth)
         assert replay['value'] == response
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT COUNT(*) FROM async_delegations').fetchone()[0] == 0
         assert store.append_messages_batch('parent', [{'role':'assistant','content':'capacity refused without poison'}]) == 1
         store.queue_token_counts('parent', input_tokens=1, output_tokens=1)

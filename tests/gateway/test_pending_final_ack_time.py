@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import math
 
 import pytest
@@ -45,9 +46,9 @@ async def test_invalid_ack_time_preserves_raw_without_exposing_valid_result(tmp_
             value['parts']['text']['delivered_at'] = stamp
             pf._put(conn, row['admission_id'], value)
             return conn.execute('SELECT value FROM state_meta WHERE key=?', (pf.PREFIX + row['admission_id'],)).fetchone()[0]
-        raw = db._execute_write(corrupt)
+        raw = raw_holder(db)._execute_write(corrupt)
         assert pf.pending(db) == []
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (pf.PREFIX + row['admission_id'],)).fetchone()[0] == raw
     finally:
         db.close()
@@ -65,7 +66,7 @@ async def test_legacy_delivered_without_ack_time_remains_readable_but_is_not_bac
             value = pf._read(conn, row['admission_id'])
             value['parts']['text'].pop('delivered_at', None)
             pf._put(conn, row['admission_id'], value)
-        db._execute_write(strip)
+        raw_holder(db)._execute_write(strip)
         value = pf.pending(db)[0]
         assert value['parts']['text']['state'] == 'delivered'
         assert 'delivered_at' not in value['parts']['text']

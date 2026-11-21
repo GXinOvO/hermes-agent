@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 import json
 from types import SimpleNamespace
@@ -86,7 +87,7 @@ async def test_authenticated_rewind_cannot_turn_invalidated_final_into_delivered
                     'expected_generation': before['runtime_generation'], 'operation': 'rewind',
                     'payload': {'target_message_id': message_id}}})
                 assert 'result' in mutation, mutation
-            with db._read_ctx() as conn:
+            with raw_holder(db)._read_ctx() as conn:
                 valid = pf._valid(conn, pf._read(conn, row['admission_id']), str(tmp_path))
             assert valid is (not rewind)
             adapter.release.set()

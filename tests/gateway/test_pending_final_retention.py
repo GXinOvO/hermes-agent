@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import time
 
 import pytest
@@ -15,10 +16,10 @@ async def test_corrupt_final_is_preserved_without_blocking_valid_sibling(tmp_pat
     try:
         finish_result(db, epoch=epoch, row=row, response='sealed final', outcome='completed',
             result={'result':{'final_response':'sealed final', 'messages':[], '_pending_final_v1':descriptor}, 'usage':{}})
-        db._execute_write(lambda conn:conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (pf.PREFIX + 'corrupt', corrupt)))
+        raw_holder(db)._execute_write(lambda conn:conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (pf.PREFIX + 'corrupt', corrupt)))
         pf.reconcile_orphans(db)
         assert [v['binding']['admission_id'] for v in pf.pending(db)] == [row['admission_id']]
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert conn.execute('SELECT value FROM state_meta WHERE key=?', (pf.PREFIX + 'corrupt',)).fetchone()[0] == corrupt
     finally:
         db.close()
@@ -39,7 +40,7 @@ async def test_payload_expiry_preserves_delivery_fact_and_live_owner(state, tmp_
             value = pf._read(conn, row['admission_id'])
             value['created_at'] = time.time() - pf.RETENTION_SECONDS - 1
             pf._put(conn, row['admission_id'], value)
-        db._execute_write(old)
+        raw_holder(db)._execute_write(old)
         with monkeypatch.context() as live:
             live.setattr('gateway.delivery_ledger._owner_alive', lambda pid, birth:True)
             pf.reconcile_orphans(db)

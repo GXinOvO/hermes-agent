@@ -2,6 +2,7 @@
 
 These tests state the required safe behavior. Failures are retained as review evidence.
 """
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 import io
 import json
@@ -115,9 +116,9 @@ def test_corrupt_sibling_is_retained_without_hiding_valid_completion(tmp_path):
     identity = seed(tmp_path)
     damaged = PREFIX + 'corrupt-review-row'
     db = SessionDB(tmp_path / 'state.db')
-    db._execute_write(lambda conn: conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (damaged, '{broken')))
+    raw_holder(db)._execute_write(lambda conn: conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (damaged, '{broken')))
     result = recover(tmp_path, 'recover')
-    with db._read_ctx() as conn:
+    with raw_holder(db)._read_ctx() as conn:
         raw = conn.execute('SELECT value FROM state_meta WHERE key=?', (damaged,)).fetchone()[0]
     db.close()
     assert result['delivered'] == 1

@@ -1,4 +1,5 @@
 """One unresolved reader-side counterpart of the actual-main-DB boundary."""
+from tests.fixtures.storage_holder import raw_holder
 import json
 import sqlite3
 
@@ -19,7 +20,7 @@ async def test_publication_reader_rejects_other_database_even_when_logical_rows_
         assert pf.finish(db, row['admission_id'], 'text', SendResult(success=True, message_id='task',
                          raw_response={'publication_receipt_v1': cap}))
         other_path = tmp_path / 'other.db'
-        with db._read_ctx() as source, sqlite3.connect(other_path) as target:
+        with raw_holder(db)._read_ctx() as source, sqlite3.connect(other_path) as target:
             source.backup(target)
         with SessionDB(other_path) as other:
             with other._read_ctx() as conn:

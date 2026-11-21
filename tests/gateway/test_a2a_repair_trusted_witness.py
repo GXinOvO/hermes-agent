@@ -1,3 +1,4 @@
+from tests.fixtures.storage_holder import raw_holder
 import json
 
 import pytest
@@ -20,12 +21,12 @@ def test_legacy_without_original_ingress_is_preserved_before_claim(tmp_path):
     identity = public.seed(tmp_path, 'seal-legacy')
     db = SessionDB(tmp_path / 'state.db')
     try:
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             raw = list(conn.execute('SELECT key,value FROM state_meta ORDER BY key'))
         result = public.recover(tmp_path, 'recover')
         assert result['delivered'] == 0
         assert (result['part']['state'], result['part']['attempts']) == ('pending', 0)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert list(conn.execute('SELECT key,value FROM state_meta ORDER BY key')) == raw
         assert (tmp_path / 'executions').read_text() == '1'
         assert 'sealed native answer' not in result['public']['GetTask']
@@ -40,12 +41,12 @@ def test_prepare_uses_trusted_result_witness_without_minting_plugin_pin(tmp_path
     try:
         value = pf.pending(db)[0]
         adapter = A2AAdapter(PlatformConfig(enabled=True, extra={'port': 0}))
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             raw = list(conn.execute('SELECT key,value FROM state_meta ORDER BY key'))
             assert pf.read_identity_witness(conn, tmp_path, value['binding']) is not None
         dt.prepare(tmp_path, value['binding']['source']['chat_id'], value['parts']['text']['content'],
                    identity['task'], value['metadata'], adapter._agents)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert list(conn.execute('SELECT key,value FROM state_meta ORDER BY key')) == raw
         assert public.recover(tmp_path, 'recover')['delivered'] == 1
     finally:
@@ -99,13 +100,13 @@ def test_original_witness_rejects_complete_drift_before_claim(tmp_path, mutation
                 task['input_hash'] = anchor['input_hash']
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (tb.encode(task), key))
             conn.execute('UPDATE state_meta SET value=? WHERE key=?', (tb.encode(value), pf.PREFIX + admission))
-        db._execute_write(damage)
-        with db._read_ctx() as conn:
+        raw_holder(db)._execute_write(damage)
+        with raw_holder(db)._read_ctx() as conn:
             before = list(conn.execute('SELECT key,value FROM state_meta ORDER BY key'))
         result = public.recover(tmp_path, 'recover')
         assert result['delivered'] == 0
         assert (result['part']['state'], result['part']['attempts']) == ('pending', 0)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert list(conn.execute('SELECT key,value FROM state_meta ORDER BY key')) == before
         assert (tmp_path / 'executions').read_text() == '1'
     finally:

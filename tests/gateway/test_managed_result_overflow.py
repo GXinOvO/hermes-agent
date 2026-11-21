@@ -1,4 +1,5 @@
 """Lossless accepted inline seals under new-execution admission pressure."""
+from tests.fixtures.storage_holder import raw_holder
 import asyncio
 from contextlib import closing
 import hashlib
@@ -214,7 +215,7 @@ def owner(db):
 def executing(db, authority, name):
     row = fixtures.claimed(db, authority, name)
     execution = 'admission-worker:' + row['admission_id']
-    db._execute_write(lambda conn: conn.execute(
+    raw_holder(db)._execute_write(lambda conn: conn.execute(
         "INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "
         "VALUES(?,?,'compute',?,?,'running','fixture')", (execution, name, authority.epoch, row['generation'])))
     return row, dict(epoch=authority.epoch, profile_id='owned', session_id=name,
@@ -250,7 +251,7 @@ def test_sqlite_save_failure_remains_explicit_and_preserves_slot(tmp_path, monke
         row, scope = executing(db, authority, 'full-device')
         capacity.reserve_capacity(authority, row['admission_id'])
         monkeypatch.setattr(results, 'MAX_BYTES', 1)
-        db._execute_write(lambda conn: conn.execute(
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             "CREATE TRIGGER injected_save_failure BEFORE INSERT ON state_meta "
             "WHEN NEW.key LIKE 'managed.result.v1:%' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END"))
         raw = {'final_response': 'ACCEPTED'}
@@ -275,7 +276,7 @@ def test_already_executing_workers_seal_finish_and_reopen_over_full_pressure(tmp
         if slot:
             capacity.reserve_capacity(authority, row['admission_id'])
         execution = 'admission-worker:' + row['admission_id']
-        db._execute_write(lambda conn: conn.execute(
+        raw_holder(db)._execute_write(lambda conn: conn.execute(
             "INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "
             "VALUES(?,'accepted','compute',?,?,'running','fixture')", (execution, authority.epoch, row['generation'])))
         monkeypatch.setattr(results, 'MAX_BYTES', seal_bytes(db))
@@ -315,7 +316,7 @@ def test_overflow_proof_owner_ttl_and_good_sibling_recovery(tmp_path, monkeypatc
         raw = db._read_one('SELECT value FROM state_meta WHERE key=?', (key,))[0]
         value = json.loads(raw)
         if damage == 'missing':
-            db._execute_write(lambda conn: conn.execute('DELETE FROM state_meta WHERE key=?', (key,)))
+            raw_holder(db)._execute_write(lambda conn: conn.execute('DELETE FROM state_meta WHERE key=?', (key,)))
         else:
             from hermes_cli.process_identity import worker_birth
             import psutil
@@ -330,7 +331,7 @@ def test_overflow_proof_owner_ttl_and_good_sibling_recovery(tmp_path, monkeypatc
             if damage != 'proof':
                 value['proof'] = results._proof(value['body'])
             raw = json.dumps(value)
-            db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?', (raw, key)))
+            raw_holder(db)._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?', (raw, key)))
         epoch = begin_runtime_epoch(db, instance_id='fresh')
         assert recover_completed_managed_results(db, profile_id='owned', epoch=epoch) == 1
         assert admission_result(db, good['admission_id'])['result']['final_response'] == 'EXACT_GOOD'

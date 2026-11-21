@@ -110,7 +110,7 @@ async def test_publication_receipt_requires_real_claim_and_runtime_capability(tm
                 'task_id': 'task', 'context_id': 'context', 'payload_hash': value['parts']['text']['payload_hash'],
                 'public_reply_sha256': hashlib.sha256(b'public final').hexdigest()}
             assert part['publication_receipt'] == expected
-            with db._read_ctx() as conn:
+            with raw_holder(db)._read_ctx() as conn:
                 assert pub.read(conn, tmp_path, current['binding']) == expected
         else:
             assert part['state'] == 'unknown' and 'publication_receipt' not in part
@@ -134,13 +134,13 @@ async def test_publication_receipt_survives_content_expiry_without_reconstructio
         current = pf.pending(db)[0]
         assert current['expired'] and 'content' not in current['parts']['text']
         assert current['parts']['text']['publication_receipt'] == original
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             assert pub.read(conn, tmp_path, current['binding']) == original
         def strip(conn):
             current['parts']['text'].pop('publication_receipt')
             pf._put(conn, row['admission_id'], current)
         raw_holder(db)._execute_write(strip)
-        with db._read_ctx() as conn:
+        with raw_holder(db)._read_ctx() as conn:
             before = conn.total_changes
             assert pub.read(conn, tmp_path, current['binding']) is None
             assert conn.total_changes == before
