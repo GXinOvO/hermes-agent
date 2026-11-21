@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from persistence.conversation.messages import TranscriptRead, TranscriptView
+from gateway.session_local_recovery import _ReceiptRefused
+from persistence.core.errors import AuthorityRefusal
 from tests.fixtures.storage_holder import raw_holder
 from tests.fixtures.storage_read import transcript_rows
 
@@ -273,12 +275,12 @@ async def test_native_alias_rejects_foreign_or_changed_paths(tmp_path, monkeypat
                     actor = SessionActor(actor.subject, original.profile_id, actor.capabilities, 'socket')
                 else:
                     ref = original
-                with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
+                with pytest.raises((RuntimeStoreError, AuthorityRefusal), match='profile_mismatch'):
                     await authority.resolve(actor, ref)
             else:
                 with pytest.raises((RuntimeStoreError, ValueError)):
                     owned_receipt(authority, ref.session_id)
-                with pytest.raises(RuntimeStoreError):
+                with pytest.raises((RuntimeStoreError, _ReceiptRefused)):
                     await _admit_local_delivery(authority, ref.session_id, 'MUST_NOT_WRITE', {})
                 assert not list_session_admissions(authority.persistence, session_id=ref.session_id, pending_only=False)
         finally:
@@ -307,7 +309,7 @@ async def test_alias_keeps_native_receipt_identity_checks(tmp_path, monkeypatch,
         changed = json.dumps(receipt)
         raw_holder(authority.persistence).set_meta(POLICY_PREFIX + original.session_id, changed)
         authority.sessions.pop(original.session_id)
-        with pytest.raises(RuntimeStoreError):
+        with pytest.raises((RuntimeStoreError, _ReceiptRefused)):
             restore_local_session(authority, original.session_id)
         assert original.session_id not in authority.sessions
         assert raw_holder(authority.persistence).get_meta(POLICY_PREFIX + original.session_id) == changed
@@ -320,7 +322,7 @@ async def test_alias_keeps_unknown_inode_with_a_valid_store_generation(tmp_path,
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, raw, _old, _new, _homes = moved
         assert raw_holder(authority.persistence)._db_file_application_id
-        monkeypatch.setattr(authority.db, '_db_file_identity', None)
+        monkeypatch.setattr(raw_holder(authority.persistence), '_db_file_identity', None)
         assert not raw_holder(authority.persistence)._db_file_was_replaced()
         assert owned_receipt(authority, original.session_id)[0] == json.loads(raw)
 
@@ -368,18 +370,15 @@ async def test_retargeted_old_alias_is_not_consulted_for_ownership(tmp_path, mon
 @pytest.mark.parametrize('unknown_inode', [False, True])
 async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch, unknown_inode):
     from gateway.session_local_recovery import owned_receipt
-    from hermes_state import SessionDB
     from hermes_state_runtime import RuntimeStoreError
 
     async with _moved_home(tmp_path, monkeypatch, 'alpha') as moved:
         _runner, authority, original, _raw, _old, _new, _homes = moved
-        db = authority.db
+        db = raw_holder(authority.persistence)
         path = Path(db.db_path)
         saved = path.with_suffix('.saved')
         replacement = tmp_path / 'replacement.db'
-        foreign = SessionDB(replacement)
-        foreign.create_session('foreign', source='gui')
-        foreign.close()
+        replacement.write_bytes(b'')
         if unknown_inode:
             monkeypatch.setattr(db, '_db_file_identity', None)
         path.rename(saved)
@@ -387,7 +386,7 @@ async def test_alias_rejects_replaced_open_database(tmp_path, monkeypatch, unkno
         try:
             assert (Path(original.profile_id) / 'state.db').samefile(path)
             assert db._db_file_was_replaced()
-            with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
+            with pytest.raises((RuntimeStoreError, _ReceiptRefused), match='storage_unavailable'):
                 owned_receipt(authority, original.session_id)
         finally:
             path.rename(replacement)
@@ -418,7 +417,7 @@ async def test_moved_fixture_profile_rejects_the_old_actor(tmp_path, monkeypatch
         assert receipt['profile_id'] == 'fixture'
         authority.profile_id = 'other-fixture'
         assert owned_receipt(authority, ref.session_id)[0] == receipt
-        with pytest.raises(RuntimeStoreError, match='profile_mismatch'):
+        with pytest.raises((RuntimeStoreError, AuthorityRefusal), match='profile_mismatch'):
             authority.authorize(actor, ref, 'session:create')
     finally:
         unbind_owner(authority)
