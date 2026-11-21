@@ -82,6 +82,8 @@ async def peer(faults=None):
 
 @asynccontextmanager
 async def dingtalk(wire):
+    pytest.importorskip("alibabacloud_dingtalk.card_1_0.client")
+    pytest.importorskip("alibabacloud_tea_openapi.models")
     from plugins.platforms.dingtalk.adapter import DingTalkAdapter
     adapter = DingTalkAdapter(PlatformConfig(extra={'card_template_id': 'template'}))
     async with httpx.AsyncClient(trust_env=False) as client:
